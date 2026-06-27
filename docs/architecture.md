@@ -38,6 +38,7 @@ Flat `src/` (mirrors `mthds-js`'s `runners/api` flatness — the SDK has one cli
 
 - `client.ts` — `PipelexApiClient`: the `request()` pipeline (auth, base URL, timeouts/abort, problem-details parsing) and every route. `implements MTHDSProtocol<DictPipeOutput>` so the protocol-execution methods stay shaped like the standard.
 - `models.ts` — Dict-serialized concretes (`DictStuff` / `DictWorkingMemory` / `DictPipeOutput` / `DictRunResultExecute`), the `/v1/validate` surface (`PipelexValidationResult` and `ValidationErrorItem`), and the `/v1/build/*` request/response models.
+- `product-models.ts` — the snake_case wire shapes for the hosted-product management routes (profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update). Each interface models only the fields the product actually consumes — no speculative mirrors.
 - `runs.ts` — the run-lifecycle types (`RunStatus`, `RunRead`, `RunResults`, `RunResultState`) and the single poll loop (`pollUntilResult`).
 - `errors.ts` — typed errors; all derive from the protocol-base `PipelineRequestError` (re-exported from `mthds/protocol`) except `ClientAuthenticationError`.
 - `index.ts` — the public barrel: `export * from "mthds/protocol"` (single import source for the standard surface) plus the client, models, run types, and errors.
@@ -49,4 +50,16 @@ Flat `src/` (mirrors `mthds-js`'s `runners/api` flatness — the SDK has one cli
 - **Durable run lifecycle (hosted extension — NOT protocol):** `getRunStatus`, `getRunResult`, `waitForResult`, `startAndWaitForResult` (handshakes `/v1/version`, takes the durable start+poll path on a hosted deployment, and self-heals to the blocking `execute` against a bare runner).
 - **Health:** `health` (origin-level `/health`).
 
-The Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update) land next.
+### Product routes (hosted management surface)
+
+The hosted catalog/account routes the webapp drives. All ride the same `{base}/v1/*` + `Authorization: Bearer` + org-from-JWT contract as the protocol routes, go through the shared `requestProduct<T>` helper (30s management timeout, empty-body tolerant), and map a non-2xx RFC 9457 `problem+json` to a typed `ApiResponseError`. Consumers branch on the **structured `code`** (`conflict`, `not_found`, `pipelex_api_key_limit_reached`, …), never the HTTP status.
+
+- **User profile:** `getMe` (`GET /v1/me`).
+- **Methods catalog:** `listMethods`, `getMethod`, `createMethod`, `updateMethod` (rename = changed `name`), `deleteMethod`.
+- **Organizations:** `listMemberships`, `createOrganization`, `renameOrganization` (`PATCH`). The org "switch" is a WorkOS-session op (`/api/active-org`), not a `/v1` route — out of SDK scope.
+- **Billing:** `getSubscription`, `listPlans`, `listInvoices`, `createCheckout`, `changePlan` (409 `conflict` ⇒ no subscription), `getBillingPortal` (409 `conflict` ⇒ no subscription).
+- **Pipelex API keys (`plx_sk_…`):** `listPipelexApiKeys`, `createPipelexApiKey` (409 `pipelex_api_key_limit_reached`), `revokePipelexApiKey`, `rotatePipelexApiKey`. The plaintext `api_key` is returned once, on create/rotate.
+- **Gateway API key (LLM inference key):** `createGatewayApiKey` (the JSON body is always sent, even with `promo_code: null`), `getGatewayApiKey`.
+- **Onboarding:** `submitOnboarding`.
+- **Storage:** `resolveStorageUrl`, `upload` (JSON base64 — the multipart hop is browser→BFF only).
+- **Runs list/update:** `listRuns` (by `method_id`), `updateRun` (admin/manual status patch). The status/results/start lifecycle routes live in the run-lifecycle section above.

@@ -31,6 +31,29 @@ import {
   type RunStatus,
   type WaitForResultOptions,
 } from "./runs.js";
+import type {
+  BillingPortalResponse,
+  ChangePlanResponse,
+  CheckoutResponse,
+  GatewayApiKey,
+  GatewayApiKeyStatus,
+  InvoiceView,
+  Membership,
+  MembershipsResponse,
+  MethodData,
+  MethodWriteInput,
+  OnboardingSubmission,
+  PipelexApiKeyCreated,
+  PipelexApiKeyList,
+  PipelineRun,
+  PlanView,
+  ResolvedStorageUrl,
+  SubscriptionResponse,
+  UpdateRunInput,
+  UploadInput,
+  UploadedFile,
+  UserProfile,
+} from "./product-models.js";
 import {
   ApiResponseError,
   ApiUnreachableError,
@@ -73,6 +96,9 @@ interface RawResponse {
   headers: Headers;
   body: string;
 }
+
+/** HTTP methods the client issues — the product routes add PUT/PATCH/DELETE. */
+type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /** Hosted default — the client composes every endpoint as `{base}/v1/{endpoint}`. */
 export const DEFAULT_API_BASE_URL = "https://api.pipelex.com";
@@ -162,7 +188,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * resolved absolute URL.
    */
   private async requestRaw(
-    method: "GET" | "POST",
+    method: HttpMethod,
     url: string,
     options: {
       body?: unknown;
@@ -234,7 +260,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * non-2xx response. Used by the build extensions and `health` — surfaces
    * that don't need the protocol's structured error taxonomy.
    */
-  private async requestJson<T>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
+  private async requestJson<T>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
     if (this.apiToken) {
       headers["Authorization"] = `Bearer ${this.apiToken}`;
@@ -258,8 +284,33 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestJson("POST", this.url(path), body);
   }
 
-  private throwApiResponseError(method: "GET" | "POST", endpoint: string, res: RawResponse): never {
-    const { errorType, serverMessage, validationErrors } = parseErrorBody(res.body);
+  /**
+   * Issue a Pipelex-product request (`/v1/me`, `/v1/methods`, `/v1/billing/*`,
+   * …) and parse its JSON body, mapping a non-2xx response to the typed
+   * `ApiResponseError` so callers branch on the structured `code` discriminant,
+   * not the HTTP status. Empty-body tolerant — DELETE / onboarding / updateRun
+   * answer 2xx with no body, returned as `undefined`. Uses the management-call
+   * timeout, not the blocking-execute ceiling.
+   */
+  private async requestProduct<T>(
+    method: HttpMethod,
+    endpoint: string,
+    body?: unknown,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<T> {
+    const res = await this.requestRaw(method, this.url(endpoint), {
+      body,
+      timeoutMs: POLL_REQUEST_TIMEOUT_MS,
+      signal: options.signal,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      this.throwApiResponseError(method, endpoint, res);
+    }
+    return (res.body ? JSON.parse(res.body) : undefined) as T;
+  }
+
+  private throwApiResponseError(method: HttpMethod, endpoint: string, res: RawResponse): never {
+    const { errorType, serverMessage, validationErrors, code } = parseErrorBody(res.body);
     throw new ApiResponseError(
       `API ${method} /${API_PREFIX}/${endpoint} failed (${res.status}): ${serverMessage ?? (res.body || res.statusText)}`,
       this.baseUrl,
@@ -269,6 +320,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       errorType,
       serverMessage,
       validationErrors,
+      code,
     );
   }
 
@@ -683,6 +735,161 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.executeBlocking(options);
   }
 
+  // ── Pipelex product surface (hosted management routes) ─────────────────
+  //
+  // The hosted catalog/account routes the webapp drives. Every one rides the
+  // same `{base}/v1/*` surface, `Authorization: Bearer`, org-from-JWT contract
+  // as the protocol routes, and maps a non-2xx `problem+json` to a typed
+  // `ApiResponseError` (branch on `.code`, not the status).
+
+  /** The authenticated user's profile — `GET /v1/me`. */
+  async getMe(): Promise<UserProfile> {
+    return this.requestProduct("GET", "me");
+  }
+
+  /** List the caller's saved methods — `GET /v1/methods`. */
+  async listMethods(): Promise<MethodData[]> {
+    return this.requestProduct("GET", "methods");
+  }
+
+  /** Fetch one method by id — `GET /v1/methods/{id}`. */
+  async getMethod(methodId: string): Promise<MethodData> {
+    return this.requestProduct("GET", `methods/${encodeURIComponent(methodId)}`);
+  }
+
+  /** Create a method — `POST /v1/methods`. */
+  async createMethod(input: MethodWriteInput): Promise<MethodData> {
+    return this.requestProduct("POST", "methods", input);
+  }
+
+  /** Replace a method (rename = changed `name`) — `PUT /v1/methods/{id}`. */
+  async updateMethod(methodId: string, input: MethodWriteInput): Promise<MethodData> {
+    return this.requestProduct("PUT", `methods/${encodeURIComponent(methodId)}`, input);
+  }
+
+  /** Delete a method — `DELETE /v1/methods/{id}`. */
+  async deleteMethod(methodId: string): Promise<void> {
+    await this.requestProduct("DELETE", `methods/${encodeURIComponent(methodId)}`);
+  }
+
+  /** The caller's org memberships + active-org feature flags — `GET /v1/organizations/memberships`. */
+  async listMemberships(): Promise<MembershipsResponse> {
+    return this.requestProduct("GET", "organizations/memberships");
+  }
+
+  /** Create an organization — `POST /v1/organizations`. */
+  async createOrganization(input: { name: string }): Promise<Membership> {
+    return this.requestProduct("POST", "organizations", input);
+  }
+
+  /** Rename an organization — `PATCH /v1/organizations/{org_id}`. */
+  async renameOrganization(orgId: string, input: { name: string }): Promise<Membership> {
+    return this.requestProduct("PATCH", `organizations/${encodeURIComponent(orgId)}`, input);
+  }
+
+  /** The active org's subscription state — `GET /v1/billing/subscription`. */
+  async getSubscription(): Promise<SubscriptionResponse> {
+    return this.requestProduct("GET", "billing/subscription");
+  }
+
+  /** Available plans (with `is_current`) — `GET /v1/billing/plans`. */
+  async listPlans(): Promise<PlanView[]> {
+    return this.requestProduct("GET", "billing/plans");
+  }
+
+  /** Past invoices — `GET /v1/billing/invoices`. */
+  async listInvoices(): Promise<InvoiceView[]> {
+    return this.requestProduct("GET", "billing/invoices");
+  }
+
+  /** Open a Stripe checkout for a plan — `POST /v1/billing/checkout`. */
+  async createCheckout(input: { plan: string }): Promise<CheckoutResponse> {
+    return this.requestProduct("POST", "billing/checkout", input);
+  }
+
+  /**
+   * Switch the existing subscription's plan — `POST /v1/billing/change-plan`.
+   * A 409 `conflict` (`ApiResponseError.code`) means there is no subscription
+   * to change — start one via `createCheckout` first.
+   */
+  async changePlan(input: { plan: string }): Promise<ChangePlanResponse> {
+    return this.requestProduct("POST", "billing/change-plan", input);
+  }
+
+  /**
+   * A Stripe billing-portal session URL — `GET /v1/billing/portal`. A 409
+   * `conflict` (`ApiResponseError.code`) means there is no subscription yet.
+   */
+  async getBillingPortal(): Promise<BillingPortalResponse> {
+    return this.requestProduct("GET", "billing/portal");
+  }
+
+  /** List the caller's Pipelex API keys — `GET /v1/pipelex-api-keys`. */
+  async listPipelexApiKeys(): Promise<PipelexApiKeyList> {
+    return this.requestProduct("GET", "pipelex-api-keys");
+  }
+
+  /**
+   * Mint a Pipelex API key — `POST /v1/pipelex-api-keys`. The plaintext
+   * `api_key` is returned ONCE. A 409 `pipelex_api_key_limit_reached`
+   * (`ApiResponseError.code`) means the per-account key limit is hit.
+   */
+  async createPipelexApiKey(input: { label: string }): Promise<PipelexApiKeyCreated> {
+    return this.requestProduct("POST", "pipelex-api-keys", input);
+  }
+
+  /** Revoke a Pipelex API key — `DELETE /v1/pipelex-api-keys/{id}`. */
+  async revokePipelexApiKey(id: string): Promise<void> {
+    await this.requestProduct("DELETE", `pipelex-api-keys/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * Rotate a Pipelex API key — `POST /v1/pipelex-api-keys/{id}/rotate` (no
+   * body). Returns the new plaintext `api_key` once; the old key stops working.
+   */
+  async rotatePipelexApiKey(id: string): Promise<PipelexApiKeyCreated> {
+    return this.requestProduct("POST", `pipelex-api-keys/${encodeURIComponent(id)}/rotate`);
+  }
+
+  /**
+   * Provision the gateway (LLM inference) API key — `POST /v1/gateway-api-key`.
+   * The JSON body is ALWAYS sent (even with `promo_code: null`) — the server
+   * 422s an empty body.
+   */
+  async createGatewayApiKey(input: { promo_code: string | null }): Promise<GatewayApiKey> {
+    return this.requestProduct("POST", "gateway-api-key", input);
+  }
+
+  /** The gateway key status (`null` until provisioned) — `GET /v1/gateway-api-key`. */
+  async getGatewayApiKey(): Promise<GatewayApiKeyStatus> {
+    return this.requestProduct("GET", "gateway-api-key");
+  }
+
+  /** Submit the onboarding questionnaire — `POST /v1/onboarding/submit`. */
+  async submitOnboarding(input: OnboardingSubmission): Promise<void> {
+    await this.requestProduct("POST", "onboarding/submit", input);
+  }
+
+  /** Resolve a storage URI to a presigned URL — `POST /v1/resolve-storage-url`. */
+  async resolveStorageUrl(input: { uri: string }): Promise<ResolvedStorageUrl> {
+    return this.requestProduct("POST", "resolve-storage-url", input);
+  }
+
+  /** Upload a base64 file — `POST /v1/upload`. */
+  async upload(input: UploadInput): Promise<UploadedFile> {
+    return this.requestProduct("POST", "upload", input);
+  }
+
+  /** List a method's runs — `GET /v1/runs?method_id={methodId}`. */
+  async listRuns(methodId: string): Promise<PipelineRun[]> {
+    return this.requestProduct("GET", `runs?method_id=${encodeURIComponent(methodId)}`);
+  }
+
+  /** Patch a run's status (admin/manual) — `PUT /v1/runs/{id}`. */
+  async updateRun(runId: string, input: UpdateRunInput): Promise<void> {
+    await this.requestProduct("PUT", `runs/${encodeURIComponent(runId)}`, input);
+  }
+
   /**
    * Blocking `POST /v1/execute` adapted onto `RunResults` — the bare-runner
    * path. Forwards every protocol field PLUS the `extra` extension passthrough:
@@ -866,8 +1073,14 @@ function parseErrorBody(body: string): {
   errorType: string | undefined;
   serverMessage: string | undefined;
   validationErrors: ValidationErrorItem[] | undefined;
+  code: string | undefined;
 } {
-  const empty = { errorType: undefined, serverMessage: undefined, validationErrors: undefined };
+  const empty = {
+    errorType: undefined,
+    serverMessage: undefined,
+    validationErrors: undefined,
+    code: undefined,
+  };
   if (!body) return empty;
   let parsed: unknown;
   try {
@@ -898,5 +1111,9 @@ function parseErrorBody(body: string): {
   const validationErrors = Array.isArray(root.validation_errors)
     ? (root.validation_errors as ValidationErrorItem[])
     : undefined;
-  return { errorType, serverMessage, validationErrors };
+  // The product routes' RFC 9457 `problem+json` carries a stable top-level
+  // `code` discriminant (`conflict`, `not_found`, …) — the field consumers
+  // branch on, decoupled from the HTTP status.
+  const code = typeof root.code === "string" ? root.code : undefined;
+  return { errorType, serverMessage, validationErrors, code };
 }

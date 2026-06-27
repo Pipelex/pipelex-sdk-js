@@ -152,6 +152,12 @@ export class RunLifecycleUnavailableError extends PipelineRequestError {
  * A non-2xx response that DID come back from the API. Carries the parsed
  * RFC 7807 problem-details (`errorType`, `serverMessage`) and, for the build
  * routes' 422s, the structured `validation_errors[]` list.
+ *
+ * `code` is the product routes' stable RFC 9457 `problem+json` discriminant
+ * (`conflict`, `not_found`, `pipelex_api_key_limit_reached`,
+ * `promo_code_invalid`, …) — the field a consumer branches on, decoupled from
+ * the HTTP status. `undefined` for any error body that carries no `code`
+ * (the protocol/build routes' `detail`-shaped problems, auth, transport).
  */
 export class ApiResponseError extends PipelineRequestError {
   public readonly apiUrl: string;
@@ -160,6 +166,7 @@ export class ApiResponseError extends PipelineRequestError {
   public readonly responseBody: string;
   public readonly errorType: string | undefined;
   public readonly serverMessage: string | undefined;
+  public readonly code: string | undefined;
   /**
    * Structured per-error diagnostics on a problem body that carries a top-level
    * `validation_errors[]` — the **build routes** (`POST /v1/build/*`), which still
@@ -184,6 +191,7 @@ export class ApiResponseError extends PipelineRequestError {
     errorType: string | undefined,
     serverMessage: string | undefined,
     validationErrors: ValidationErrorItem[] | undefined,
+    code: string | undefined,
     options?: { cause?: unknown },
   ) {
     super(message, options);
@@ -195,5 +203,6 @@ export class ApiResponseError extends PipelineRequestError {
     this.errorType = errorType;
     this.serverMessage = serverMessage;
     this.validationErrors = validationErrors;
+    this.code = code;
   }
 }

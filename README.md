@@ -6,7 +6,7 @@ TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage 
 
 ## Status
 
-Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), and the durable run lifecycle (`start` → poll → result). The Pipelex product routes (methods catalog, organizations, billing, API keys, storage, onboarding) land next.
+Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update).
 
 ## Install
 
@@ -31,6 +31,29 @@ if (report.is_valid) {
   // Run it and wait for the result (durable start + poll on the hosted API).
   const result = await client.startAndWaitForResult({ pipe_code: "demo.greet" });
   console.log(result.main_stuff ?? result.pipe_output);
+}
+```
+
+### Product routes
+
+The hosted management surface (catalog, account, billing) hangs off the same client. Every product route maps a non-2xx `problem+json` to a typed `ApiResponseError` — branch on the structured `code`, not the HTTP status:
+
+```ts
+import { PipelexApiClient, ApiResponseError } from "@pipelex/sdk";
+
+const client = new PipelexApiClient({ apiToken: process.env.PIPELEX_API_KEY });
+
+const me = await client.getMe(); // GET /v1/me
+const methods = await client.listMethods(); // GET /v1/methods
+const created = await client.createMethod({ name: "Greeter", mthds: "domain = 'demo'" });
+
+try {
+  const { portal_url } = await client.getBillingPortal();
+  // open portal_url ...
+} catch (err) {
+  if (err instanceof ApiResponseError && err.code === "conflict") {
+    // no subscription yet — start one via createCheckout(...)
+  }
 }
 ```
 
