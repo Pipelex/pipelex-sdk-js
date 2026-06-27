@@ -29,10 +29,16 @@ Always run `make check` before committing.
 
 ## Structure
 
+Flat `src/` — the SDK has one client, so there is no runner/registry abstraction.
+
 ```
 src/
-└── index.ts        # Public barrel (currently: SDK_VERSION). Client surface lands later.
-tests/              # Vitest suites
+├── index.ts        # Public barrel: re-exports mthds/protocol + the client/models/runs/errors
+├── client.ts       # PipelexApiClient — request pipeline + all routes (implements MTHDSProtocol)
+├── models.ts       # Dict concretes, /v1/validate surface, /v1/build/* req/resp models
+├── runs.ts         # Run-lifecycle types + the single poll loop (pollUntilResult)
+└── errors.ts       # Typed errors (derive from PipelineRequestError from mthds/protocol)
+tests/              # Vitest suites (mock the fetch boundary)
 docs/               # Architecture and surface documentation
 ```
 

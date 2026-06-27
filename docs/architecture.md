@@ -32,6 +32,21 @@
 - Auth: `Authorization: Bearer <token>`; organization resolved from the JWT `org_id` claim, not a header.
 - A diagnostic verdict (e.g. `/v1/validate`) is a `200` discriminated on a body field (`is_valid`); non-2xx is reserved for "no verdict could be produced" (request-shape `422`, auth `401`/`403`, server `5xx`), carried as RFC 7807 `problem+json` and mapped to typed product errors.
 
-## Current state
+## Module layout
 
-Scaffold only — the package exposes `SDK_VERSION`. This document grows as the client surface lands.
+Flat `src/` (mirrors `mthds-js`'s `runners/api` flatness — the SDK has one client, so no runner/registry abstraction):
+
+- `client.ts` — `PipelexApiClient`: the `request()` pipeline (auth, base URL, timeouts/abort, problem-details parsing) and every route. `implements MTHDSProtocol<DictPipeOutput>` so the protocol-execution methods stay shaped like the standard.
+- `models.ts` — Dict-serialized concretes (`DictStuff` / `DictWorkingMemory` / `DictPipeOutput` / `DictRunResultExecute`), the `/v1/validate` surface (`PipelexValidationResult` and `ValidationErrorItem`), and the `/v1/build/*` request/response models.
+- `runs.ts` — the run-lifecycle types (`RunStatus`, `RunRead`, `RunResults`, `RunResultState`) and the single poll loop (`pollUntilResult`).
+- `errors.ts` — typed errors; all derive from the protocol-base `PipelineRequestError` (re-exported from `mthds/protocol`) except `ClientAuthenticationError`.
+- `index.ts` — the public barrel: `export * from "mthds/protocol"` (single import source for the standard surface) plus the client, models, run types, and errors.
+
+## Client surface (current)
+
+- **Protocol execution:** `execute`, `start`, `validate` (returns `PipelexValidationResult`), `validateFiles`, `models`, `version`.
+- **Build helpers (`/v1/build/*`):** `buildInputs`, `buildOutput`, `buildRunner`, `concept`, `pipeSpec`.
+- **Durable run lifecycle (hosted extension — NOT protocol):** `getRunStatus`, `getRunResult`, `waitForResult`, `startAndWaitForResult` (handshakes `/v1/version`, takes the durable start+poll path on a hosted deployment, and self-heals to the blocking `execute` against a bare runner).
+- **Health:** `health` (origin-level `/health`).
+
+The Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update) land next.

@@ -49,5 +49,8 @@
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.62.0",
     "vitest": "^4.0.18"
+  },
+  "dependencies": {
+    "mthds": "github:mthds-ai/mthds-js#refactor/Sdk-mthds-vs-pipelex"
   }
 }

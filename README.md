@@ -6,7 +6,7 @@ TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage 
 
 ## Status
 
-Early scaffold. The `PipelexApiClient` and its routes are added in subsequent phases; today the package exposes only `SDK_VERSION`.
+Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), and the durable run lifecycle (`start` → poll → result). The Pipelex product routes (methods catalog, organizations, billing, API keys, storage, onboarding) land next.
 
 ## Install
 
@@ -17,12 +17,24 @@ npm install @pipelex/sdk
 ## Usage
 
 ```ts
-import { SDK_VERSION } from "@pipelex/sdk";
+import { PipelexApiClient } from "@pipelex/sdk";
 
-console.log(SDK_VERSION);
+// Base URL + token from PIPELEX_API_URL / PIPELEX_API_KEY, or pass them explicitly.
+const client = new PipelexApiClient({
+  baseUrl: "https://api.pipelex.com",
+  apiToken: process.env.PIPELEX_API_KEY,
+});
+
+// Validate an MTHDS bundle (a 200-diagnostic verdict, discriminated on `is_valid`).
+const report = await client.validate(["domain = 'demo'"]);
+if (report.is_valid) {
+  // Run it and wait for the result (durable start + poll on the hosted API).
+  const result = await client.startAndWaitForResult({ pipe_code: "demo.greet" });
+  console.log(result.main_stuff ?? result.pipe_output);
+}
 ```
 
-The client API (construction, `execute` / `start` / `validate`, run lifecycle, product routes) is documented in [`docs/architecture.md`](./docs/architecture.md) as it lands.
+The full client surface is documented in [`docs/architecture.md`](./docs/architecture.md).
 
 ## Develop
 
