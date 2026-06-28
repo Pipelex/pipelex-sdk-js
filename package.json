@@ -51,6 +51,6 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "mthds": "github:mthds-ai/mthds-js#refactor/Sdk-mthds-vs-pipelex"
+    "mthds": "^0.13.0"
   }
 }
