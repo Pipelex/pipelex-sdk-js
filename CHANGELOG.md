@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.1.2] - 2026-06-28
+
+### Changed
+
+- CI: bumped `actions/checkout` and `actions/setup-node` from v4 to v5 across all workflows. The v4 releases bundle the deprecated Node.js 20 runtime (force-run on Node.js 24 with a deprecation warning); v5 targets Node.js 24 natively. The SHA-pinned release checkout now points to the v5.0.1 commit.
+
 ## [v0.1.1] - 2026-06-28
 
 ### Changed
