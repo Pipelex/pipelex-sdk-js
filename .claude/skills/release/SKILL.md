@@ -47,6 +47,17 @@ Edit the `"version": "..."` line in `package.json` to `"version": "{TARGET_VERSI
 
 The version in package.json must **not** have a `v` prefix (e.g. `0.1.3`, not `v0.1.3`).
 
+## Step 4b — Sync the runtime version constant
+
+The SDK exports a runtime version constant `SDK_VERSION` from `src/index.ts`. It is a hand-maintained literal (kept as a literal so it ships bundler-safe, with no runtime file reads in consumer code), so it must be bumped in lockstep with `package.json`.
+
+Edit the `export const SDK_VERSION = "..."` line in `src/index.ts` to `"{TARGET_VERSION}"` (no `v` prefix).
+
+- If it already matches: inform the user and skip.
+- Otherwise: use the Edit tool to make the change.
+
+`tests/index.test.ts` asserts `SDK_VERSION === package.json.version`, so Step 7's `make test` will fail if this step is skipped — do not bypass it.
+
 ## Step 5 — Sync package-lock.json
 
 After updating `package.json`, regenerate the lock file so it reflects `TARGET_VERSION`:
@@ -113,12 +124,12 @@ Present a full summary:
 
 - Target version: `v{TARGET_VERSION}`
 - Branch: `release/v{TARGET_VERSION}`
-- Files changed: `package.json`, `package-lock.json`, `CHANGELOG.md`
+- Files changed: `package.json`, `package-lock.json`, `CHANGELOG.md`, `src/index.ts`
 - Changelog entry preview
 
 Ask the user to confirm. On confirmation:
 
-1. Stage **only** `package.json`, `package-lock.json`, and `CHANGELOG.md` — never use `git add .` or `git add -A`.
+1. Stage **only** `package.json`, `package-lock.json`, `CHANGELOG.md`, and `src/index.ts` — never use `git add .` or `git add -A`.
 2. Commit with message: `Bump version to {TARGET_VERSION} and update changelog`
 3. Show the commit result.
 
@@ -131,7 +142,7 @@ Wait for explicit user approval before pushing or creating a PR.
 
 ## Rules
 
-- Never use `git add .` or `git add -A` — only stage `package.json`, `package-lock.json`, and `CHANGELOG.md`.
+- Never use `git add .` or `git add -A` — only stage `package.json`, `package-lock.json`, `CHANGELOG.md`, and `src/index.ts`.
 - Never push or create PRs without explicit user approval.
 - The `v` prefix appears in branch names and changelog headers, but **not** in `package.json`.
 - Always use today's date for new changelog entries (format: `YYYY-MM-DD`).
