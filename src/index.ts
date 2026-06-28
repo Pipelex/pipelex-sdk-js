@@ -7,8 +7,8 @@
  * errors. Consumers should import everything they need from `@pipelex/sdk`.
  */
 
-/** Package version. */
-export const SDK_VERSION = "0.1.0";
+/** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
+export const SDK_VERSION = "0.1.2";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
