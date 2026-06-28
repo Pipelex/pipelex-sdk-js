@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.1.2] - 2026-06-28
+
+### Changed
+
+- CI: bumped `actions/checkout` and `actions/setup-node` from v4 to v5 across all workflows. The v4 releases bundle the deprecated Node.js 20 runtime (force-run on Node.js 24 with a deprecation warning); v5 targets Node.js 24 natively. The SHA-pinned release checkout now points to the v5.0.1 commit.
+
+### Fixed
+
+- The exported `SDK_VERSION` constant was stale (`0.1.0`) because the release flow never bumped it — consumers reading it for diagnostics or compatibility checks saw a version that disagreed with the published npm version. It is now bumped in lockstep with `package.json` and guarded by a test that asserts the two stay equal.
+
 ## [v0.1.1] - 2026-06-28
 
 ### Changed
