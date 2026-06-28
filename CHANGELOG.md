@@ -1,6 +1,12 @@
 # Changelog
 
-## [v0.1.0] - 2026-06-28
+## [v0.1.1] - 2026-06-28
+
+### Changed
+
+- The `mthds` dependency is now consumed from npm as a published version (`^0.13.0`) instead of a GitHub branch ref. This pins the upstream MTHDS protocol types to a released package rather than a moving branch.
+
+## [v0.1.0] - 2026-06-27
 
 ### Added
 
