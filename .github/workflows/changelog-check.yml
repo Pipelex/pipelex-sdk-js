@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.head_ref, 'release/v')  # Only run on release branches
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Check Changelog Version
         run: |
