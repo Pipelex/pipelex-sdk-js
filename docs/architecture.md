@@ -24,7 +24,7 @@
 
 - **MTHDS-branded (lives in `mthds`):** protocol wire models, the standard `ValidationReport` / `ValidationResult` shapes, `.mthds` utilities, the `MthdsProtocolClient`.
 - **Pipelex-branded (lives here):** `PipelexApiClient`, run store / durable lifecycle, build helpers, `PipelexValidationResult`, hosted-product typed errors, API keys / orgs / billing / methods catalog / storage / onboarding.
-- Inside a Pipelex envelope, field names stay neutral (`bundle_blueprint`, `pipe_structures`, `graph_spec`) — Pipelex branding is reserved for genuinely runtime-specific envelopes.
+- Inside a Pipelex envelope, field names stay neutral (`bundle_blueprint`, `pipe_io_contracts`, `graph_spec`) — Pipelex branding is reserved for genuinely runtime-specific envelopes.
 
 ## Wire conventions
 
