@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.1.4] - 2026-06-30
+
+### Changed
+
+- Bumped the `mthds` dependency floor to `^0.14.0` (was `^0.13.1`), picking up the latest published MTHDS protocol wire types.
+
+### Added
+
+- `make use-local` / `make use-npm` (shorthands `make ul` / `make un`) to switch the `mthds` dependency between a file link to the sibling `../mthds-js` checkout for live development and the published npm package (latest by default, or a pinned `VERSION=x.y.z`).
+
 ## [v0.1.3] - 2026-06-28
 
 ### Changed
