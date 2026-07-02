@@ -26,6 +26,12 @@
 - **Pipelex-branded (lives here):** `PipelexApiClient`, run store / durable lifecycle, build helpers, `PipelexValidationResult`, hosted-product typed errors, API keys / orgs / billing / methods catalog / storage / onboarding.
 - Inside a Pipelex envelope, field names stay neutral (`bundle_blueprint`, `pipe_io_contracts`, `graph_spec`) — Pipelex branding is reserved for genuinely runtime-specific envelopes.
 
+## Module format & packaging
+
+The package is ESM-only (`"type": "module"`, `dist/index.js` built by `tsc` with `module: NodeNext`) — there is no separate CJS build. CJS consumers can still load it: the `exports` map declares a `default` condition alongside `import`, both pointing at the same ESM `dist/index.js`, so `require("@pipelex/sdk")` resolves through Node's `require(ESM)` support rather than a transpiled dual build. That support needs Node 20.19+ or 22.12+ (unflagged); `engines.node` is pinned to `>=22.12.0` to match the workspace's Node 22 floor. This only works because `dist/` has no top-level await — if that ever changes, `require()` of the module will throw and a real dual ESM+CJS build (or a `require`-only CJS entrypoint) would be needed instead.
+
+Condition order in `exports` matters: `types` is listed first (TS/Node resolution convention — the type-checker looks at the first matching condition), then `import`, then `default` as the CJS fallback.
+
 ## Wire conventions
 
 - Base URL from env (default `https://api.pipelex.com`); every route under `/v1/*`.
