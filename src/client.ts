@@ -78,12 +78,12 @@ export interface ValidateFilesOptions {
 }
 
 export interface PipelexApiClientOptions {
-  /** API token (Bearer). Falls back to `PIPELEX_API_KEY`. Optional for anonymous bare runners. */
-  apiToken?: string;
+  /** API key (Bearer). Falls back to `PIPELEX_API_KEY`. Optional for anonymous bare runners. */
+  apiKey?: string;
   /**
    * API base URL — host only, NO version prefix (e.g. `https://api.pipelex.com`
    * or `http://localhost:8081`). Every endpoint composes as
-   * `{baseUrl}/v1/{endpoint}`. Falls back to `PIPELEX_API_URL`, then the hosted
+   * `{baseUrl}/v1/{endpoint}`. Falls back to `PIPELEX_BASE_URL`, then the hosted
    * default.
    */
   baseUrl?: string;
@@ -103,7 +103,7 @@ type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 /** Hosted default — the client composes every endpoint as `{base}/v1/{endpoint}`. */
 export const DEFAULT_API_BASE_URL = "https://api.pipelex.com";
 
-// The client composes every endpoint from one origin (PIPELEX_API_URL): `{base}/v1/{endpoint}`.
+// The client composes every endpoint from one origin (PIPELEX_BASE_URL): `{base}/v1/{endpoint}`.
 // The same paths are served by the Pipelex Hosted API (api.pipelex.com) and by a bare
 // OSS pipelex-api runner (localhost:8081) — the protocol surface is identical; only
 // the hosted extensions (e.g. run polling) differ, detectable via GET /v1/version.
@@ -126,7 +126,7 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
 /**
  * Client for the Pipelex hosted API — and any MTHDS-compliant runner.
  *
- * One base URL (`PIPELEX_API_URL`); every endpoint is `<base>/v1/<endpoint>`:
+ * One base URL (`PIPELEX_BASE_URL`); every endpoint is `<base>/v1/<endpoint>`:
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
@@ -141,7 +141,7 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * extensions (build, run lifecycle) ride on top.
  */
 export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
-  private readonly apiToken: string | undefined;
+  private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
   /** Origin root derived from the base URL — `/health` lives here, not under `/v1`. */
   private readonly originUrl: string;
@@ -149,13 +149,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   private lifecycleAvailable: boolean | undefined;
 
   constructor(options: PipelexApiClientOptions = {}) {
-    this.apiToken = options.apiToken ?? process.env.PIPELEX_API_KEY;
+    this.apiKey = options.apiKey ?? process.env.PIPELEX_API_KEY;
     const normalizedBaseUrl = (
       options.baseUrl ??
-      process.env.PIPELEX_API_URL ??
+      process.env.PIPELEX_BASE_URL ??
       DEFAULT_API_BASE_URL
     ).replace(/\/+$/, "");
-    // The base URL must be host-only: direct SDK usage and PIPELEX_API_URL reach
+    // The base URL must be host-only: direct SDK usage and PIPELEX_BASE_URL reach
     // this constructor and must be held to that rule, or a path-prefixed value
     // (e.g. `.../v1`) composes as `/v1/v1/...` and fails with a misleading
     // endpoint error instead of a clear base-URL one. Trailing slashes are
@@ -197,8 +197,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     } = {},
   ): Promise<RawResponse> {
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.apiToken) {
-      headers["Authorization"] = `Bearer ${this.apiToken}`;
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
     }
     const hasBody = options.body !== undefined;
     if (hasBody) {
@@ -262,8 +262,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    */
   private async requestJson<T>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.apiToken) {
-      headers["Authorization"] = `Bearer ${this.apiToken}`;
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
     }
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
@@ -336,7 +336,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     throw new RunLifecycleUnavailableError(
       `The durable run lifecycle is not available: ${url} returned 404. Run polling is a ` +
         `hosted-API extension (/${API_PREFIX}/${RUNS}/*), not part of the MTHDS Protocol; ` +
-        "PIPELEX_API_URL points at a bare runner that does not serve it.",
+        "PIPELEX_BASE_URL points at a bare runner that does not serve it.",
       this.baseUrl,
     );
   }

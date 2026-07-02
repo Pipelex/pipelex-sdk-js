@@ -3,7 +3,7 @@ import { PipelexApiClient } from "../src/client.js";
 import { RunLifecycleUnavailableError } from "../src/errors.js";
 
 function makeClient(): PipelexApiClient {
-  return new PipelexApiClient({ baseUrl: "http://localhost:8081", apiToken: "test-token" });
+  return new PipelexApiClient({ baseUrl: "http://localhost:8081", apiKey: "test-token" });
 }
 
 const HOSTED_VERSION = {

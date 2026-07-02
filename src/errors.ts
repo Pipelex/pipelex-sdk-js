@@ -130,7 +130,7 @@ export class RunStillRunningError extends PipelineRequestError {
 
 /**
  * Thrown when the durable run lifecycle (`/v1/runs/*`) is not served by the
- * configured `PIPELEX_API_URL`.
+ * configured `PIPELEX_BASE_URL`.
  *
  * Run polling is a hosted-API extension, not part of the MTHDS Protocol: the
  * open-source `pipelex-api` runner executes methods but has no run store, so
