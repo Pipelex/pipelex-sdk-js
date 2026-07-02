@@ -19,10 +19,10 @@ npm install @pipelex/sdk
 ```ts
 import { PipelexApiClient } from "@pipelex/sdk";
 
-// Base URL + token from PIPELEX_API_URL / PIPELEX_API_KEY, or pass them explicitly.
+// Base URL + key from PIPELEX_BASE_URL / PIPELEX_API_KEY, or pass them explicitly.
 const client = new PipelexApiClient({
   baseUrl: "https://api.pipelex.com",
-  apiToken: process.env.PIPELEX_API_KEY,
+  apiKey: process.env.PIPELEX_API_KEY,
 });
 
 // Validate an MTHDS bundle (a 200-diagnostic verdict, discriminated on `is_valid`).
@@ -41,7 +41,7 @@ The hosted management surface (catalog, account, billing) hangs off the same cli
 ```ts
 import { PipelexApiClient, ApiResponseError } from "@pipelex/sdk";
 
-const client = new PipelexApiClient({ apiToken: process.env.PIPELEX_API_KEY });
+const client = new PipelexApiClient({ apiKey: process.env.PIPELEX_API_KEY });
 
 const me = await client.getMe(); // GET /v1/me
 const methods = await client.listMethods(); // GET /v1/methods

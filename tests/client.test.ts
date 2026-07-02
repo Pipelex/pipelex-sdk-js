@@ -13,7 +13,7 @@ const BASE_URL = "http://localhost:8081";
 function makeClient(): PipelexApiClient {
   return new PipelexApiClient({
     baseUrl: BASE_URL,
-    apiToken: "test-token",
+    apiKey: "test-token",
   });
 }
 
@@ -48,10 +48,10 @@ afterEach(() => {
 
 describe("PipelexApiClient constructor", () => {
   it("defaults to the hosted base URL when nothing is configured", async () => {
-    const originalUrl = process.env.PIPELEX_API_URL;
-    delete process.env.PIPELEX_API_URL;
+    const originalUrl = process.env.PIPELEX_BASE_URL;
+    delete process.env.PIPELEX_BASE_URL;
     try {
-      const client = new PipelexApiClient({ apiToken: "t" });
+      const client = new PipelexApiClient({ apiKey: "t" });
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "x" }));
@@ -61,7 +61,7 @@ describe("PipelexApiClient constructor", () => {
         expect.objectContaining({ method: "POST" }),
       );
     } finally {
-      if (originalUrl !== undefined) process.env.PIPELEX_API_URL = originalUrl;
+      if (originalUrl !== undefined) process.env.PIPELEX_BASE_URL = originalUrl;
     }
   });
 
@@ -91,11 +91,11 @@ describe("PipelexApiClient constructor", () => {
     );
   });
 
-  it("reads PIPELEX_API_URL from the environment", async () => {
-    const originalUrl = process.env.PIPELEX_API_URL;
-    process.env.PIPELEX_API_URL = "http://env-host:9999";
+  it("reads PIPELEX_BASE_URL from the environment", async () => {
+    const originalUrl = process.env.PIPELEX_BASE_URL;
+    process.env.PIPELEX_BASE_URL = "http://env-host:9999";
     try {
-      const client = new PipelexApiClient({ apiToken: "t" });
+      const client = new PipelexApiClient({ apiKey: "t" });
       const fetchSpy = vi
         .spyOn(globalThis, "fetch")
         .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "x" }));
@@ -105,8 +105,8 @@ describe("PipelexApiClient constructor", () => {
         expect.objectContaining({ method: "POST" }),
       );
     } finally {
-      if (originalUrl !== undefined) process.env.PIPELEX_API_URL = originalUrl;
-      else delete process.env.PIPELEX_API_URL;
+      if (originalUrl !== undefined) process.env.PIPELEX_BASE_URL = originalUrl;
+      else delete process.env.PIPELEX_BASE_URL;
     }
   });
 });

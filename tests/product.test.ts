@@ -5,7 +5,7 @@ import { ApiResponseError } from "../src/errors.js";
 const BASE_URL = "http://localhost:8081";
 
 function makeClient(): PipelexApiClient {
-  return new PipelexApiClient({ baseUrl: BASE_URL, apiToken: "test-token" });
+  return new PipelexApiClient({ baseUrl: BASE_URL, apiKey: "test-token" });
 }
 
 function jsonResponse(
