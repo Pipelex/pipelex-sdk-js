@@ -373,6 +373,53 @@ describe("PipelexApiClient.execute resolves main_stuff", () => {
     // The accessor throws lazily on read (the run completed; the response is otherwise fine).
     expect(() => result.main_stuff).toThrow(MissingMainStuffError);
   });
+
+  it("throws MissingMainStuffError when the located stuff has null content", async () => {
+    const client = makeClient();
+    // The named entry exists but its resolved `content` is null — the durable path rejects a
+    // null resolved main stuff, so the blocking accessor must too (one-accessor invariant).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Text", content: null } }),
+      ),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    expect(() => result.main_stuff).toThrow(MissingMainStuffError);
+  });
+
+  it("returns a falsy-but-present main stuff as-is (empty array, 0)", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse(200, executeBody("result", { result: { concept: "native.Text", content: [] } })),
+    );
+    const emptyArr = await client.execute({ pipe_code: "p" });
+    expect(emptyArr.main_stuff).toEqual([]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Number", content: 0 } }),
+      ),
+    );
+    const zero = await client.execute({ pipe_code: "p" });
+    expect(zero.main_stuff).toBe(0);
+  });
+
+  it("preserves extension fields whose names collide with Object.prototype members", async () => {
+    const client = makeClient();
+    // `toString` is a legitimate extension-open wire field; the constructor's copy loop must not
+    // drop it just because the name exists on the prototype chain.
+    const body: Record<string, unknown> = {
+      ...executeBody("result", { result: { concept: "native.Text", content: { text: "hi" } } }),
+      toString: "server-value",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, body));
+    const result = await client.execute({ pipe_code: "p" });
+    expect((result as Record<string, unknown>).toString).toBe("server-value");
+    // The main_stuff getter is still intact (not shadowed by the copy loop).
+    expect(result.main_stuff).toEqual({ text: "hi" });
+  });
 });
 
 describe("PipelexApiClient.start", () => {

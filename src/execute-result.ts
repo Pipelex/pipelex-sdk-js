@@ -41,10 +41,15 @@ export class PipelexExecuteResult implements DictRunResultExecute {
     // `main_stuff_name` rides the wire model's extension index signature (typed `unknown`); narrow it.
     const rawName = raw.main_stuff_name;
     this.main_stuff_name = typeof rawName === "string" ? rawName : null;
-    // Preserve any other server extension fields verbatim; the declared fields above are already
-    // own properties, and the `main_stuff` getter is on the prototype, so neither is overwritten.
+    // Preserve any other server extension fields verbatim. Skip the declared fields above (own
+    // properties, already set) via an own-property check — using `key in this` would also skip
+    // any wire field whose name collides with an `Object.prototype` member (e.g. `toString`),
+    // silently dropping it. The `main_stuff` getter lives on the prototype (not an own property),
+    // so guard it explicitly so a stray `main_stuff` wire field can't shadow the accessor.
     for (const [key, value] of Object.entries(raw)) {
-      if (!(key in this)) this[key] = value;
+      if (!Object.prototype.hasOwnProperty.call(this, key) && key !== "main_stuff") {
+        this[key] = value;
+      }
     }
   }
 
@@ -56,11 +61,15 @@ export class PipelexExecuteResult implements DictRunResultExecute {
   get main_stuff(): unknown {
     const name = this.main_stuff_name;
     const stuff = name != null ? this.pipe_output?.working_memory?.root?.[name] : undefined;
-    if (stuff == null) {
+    // Reject a missing entry AND a present entry with null/absent content — the durable path
+    // rejects `main_stuff == null`, so the blocking accessor matches it (one-accessor invariant).
+    // Loose `== null` catches only null/undefined; a falsy-but-present value (empty array, `0`,
+    // empty string) is a valid output and passes through.
+    if (stuff == null || stuff.content == null) {
       throw new MissingMainStuffError(
         `Blocking run '${this.pipeline_run_id}' delivered no locatable main stuff ` +
-          `(main_stuff_name=${JSON.stringify(name)} is absent from the working-memory root) — ` +
-          `a completed run always delivers a main stuff.`,
+          `(main_stuff_name=${JSON.stringify(name)} is absent from the working-memory root, ` +
+          `or its resolved content is null) — a completed run always delivers a main stuff.`,
         this.pipeline_run_id,
       );
     }
