@@ -9,6 +9,16 @@ import type { DictPipeOutput, DictRunResultExecute } from "./models.js";
 import { MissingMainStuffError } from "./errors.js";
 
 /**
+ * Keys the extension-copy loop must never assign from wire data:
+ * - `main_stuff` is the resolved-output getter on the prototype — a wire field of that name would
+ *   shadow the accessor.
+ * - `__proto__`, `constructor`, `prototype` are prototype-pollution vectors — assigning them from
+ *   untrusted server data can change the instance prototype (via the `__proto__` setter) or corrupt
+ *   property access. They are never legitimate extension fields, so skip them outright.
+ */
+const RESERVED_EXTENSION_KEYS = new Set(["main_stuff", "__proto__", "constructor", "prototype"]);
+
+/**
  * The SDK's blocking `execute()` result — a `DictRunResultExecute` that also exposes the
  * resolved main output as `.main_stuff`.
  *
@@ -44,10 +54,11 @@ export class PipelexExecuteResult implements DictRunResultExecute {
     // Preserve any other server extension fields verbatim. Skip the declared fields above (own
     // properties, already set) via an own-property check — using `key in this` would also skip
     // any wire field whose name collides with an `Object.prototype` member (e.g. `toString`),
-    // silently dropping it. The `main_stuff` getter lives on the prototype (not an own property),
-    // so guard it explicitly so a stray `main_stuff` wire field can't shadow the accessor.
+    // silently dropping it. RESERVED_EXTENSION_KEYS then excludes the prototype getter and the
+    // prototype-pollution meta-keys so untrusted wire data can't shadow the accessor or mutate
+    // the instance prototype.
     for (const [key, value] of Object.entries(raw)) {
-      if (!Object.prototype.hasOwnProperty.call(this, key) && key !== "main_stuff") {
+      if (!Object.prototype.hasOwnProperty.call(this, key) && !RESERVED_EXTENSION_KEYS.has(key)) {
         this[key] = value;
       }
     }

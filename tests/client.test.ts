@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
+import { PipelexExecuteResult } from "../src/execute-result.js";
 import {
   ApiResponseError,
   ApiUnreachableError,
@@ -418,6 +419,29 @@ describe("PipelexApiClient.execute resolves main_stuff", () => {
     const result = await client.execute({ pipe_code: "p" });
     expect((result as Record<string, unknown>).toString).toBe("server-value");
     // The main_stuff getter is still intact (not shadowed by the copy loop).
+    expect(result.main_stuff).toEqual({ text: "hi" });
+  });
+
+  it("does not let a __proto__ wire field pollute the instance prototype", async () => {
+    const client = makeClient();
+    // JSON.parse materializes a `"__proto__"` key as an OWN data property (not via the setter),
+    // so the server can smuggle one through the wire. The copy loop must not assign it — doing so
+    // would trip the Object.prototype `__proto__` setter and mutate the instance prototype.
+    const body: Record<string, unknown> = executeBody("result", {
+      result: { concept: "native.Text", content: { text: "hi" } },
+    });
+    Object.defineProperty(body, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, body));
+    const result = await client.execute({ pipe_code: "p" });
+    // Prototype unchanged and no pollution leaked onto the instance.
+    expect(Object.getPrototypeOf(result)).toBe(PipelexExecuteResult.prototype);
+    expect((result as Record<string, unknown>).polluted).toBeUndefined();
+    // The accessor still resolves normally.
     expect(result.main_stuff).toEqual({ text: "hi" });
   });
 });
