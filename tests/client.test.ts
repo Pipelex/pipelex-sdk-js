@@ -3,6 +3,7 @@ import { PipelexApiClient } from "../src/client.js";
 import {
   ApiResponseError,
   ApiUnreachableError,
+  MissingMainStuffError,
   PipelineExecuteTimeoutError,
   PipelineRequestError,
   RunStillRunningError,
@@ -332,6 +333,45 @@ describe("PipelexApiClient happy path", () => {
     const result = await client.execute({ pipe_code: "p" });
     expect(result.pipeline_run_id).toBe("ok");
     expect(result.state).toBe("COMPLETED"); // server extension field, preserved via the index signature
+  });
+});
+
+describe("PipelexApiClient.execute resolves main_stuff", () => {
+  // A completed execute response: `main_stuff_name` ("result") names the working-memory root key
+  // the `.main_stuff` accessor resolves to — the same accessor as the durable path.
+  function executeBody(
+    mainStuffName: string,
+    root: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      pipeline_run_id: "run-x",
+      main_stuff_name: mainStuffName,
+      pipe_output: { working_memory: { root, aliases: {} }, pipeline_run_id: "run-x" },
+    };
+  }
+
+  it("resolves .main_stuff out of the working memory", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Text", content: { text: "hi" } } }),
+      ),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    expect(result.pipeline_run_id).toBe("run-x");
+    expect(result.main_stuff).toEqual({ text: "hi" });
+  });
+
+  it("throws MissingMainStuffError when .main_stuff names no locatable stuff", async () => {
+    const client = makeClient();
+    // `main_stuff_name` names "missing", absent from the working-memory root.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, executeBody("missing", { other: { concept: "native.Text", content: {} } })),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    // The accessor throws lazily on read (the run completed; the response is otherwise fine).
+    expect(() => result.main_stuff).toThrow(MissingMainStuffError);
   });
 });
 

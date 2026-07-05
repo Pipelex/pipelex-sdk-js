@@ -20,6 +20,9 @@ export * from "mthds/protocol";
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from "./client.js";
 
+// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
+export { PipelexExecuteResult } from "./execute-result.js";
+
 // ── Wire models (Dict concretes, validate surface, build routes) ─────
 export type {
   DictStuff,
