@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
-import { RunLifecycleUnavailableError } from "../src/errors.js";
+import { MissingMainStuffError, RunLifecycleUnavailableError } from "../src/errors.js";
 
 function makeClient(): PipelexApiClient {
   return new PipelexApiClient({ baseUrl: "http://localhost:8081", apiKey: "test-token" });
@@ -40,6 +40,24 @@ function jsonResponse(
 
 function emptyResponse(status: number, headers: Record<string, string> = {}): Response {
   return new Response(null, { status, headers });
+}
+
+// A completed blocking-execute response with a resolvable main stuff: `main_stuff_name`
+// names the working-memory root key the SDK resolves into `RunResults.main_stuff`.
+function executeBody(runId: string): Record<string, unknown> {
+  return {
+    pipeline_run_id: runId,
+    created_at: "t0",
+    state: "COMPLETED",
+    main_stuff_name: "result",
+    pipe_output: {
+      working_memory: {
+        root: { result: { concept: "native.Text", content: { text: "hello" } } },
+        aliases: { main_stuff: "result" },
+      },
+      pipeline_run_id: runId,
+    },
+  };
 }
 
 beforeEach(() => {
@@ -103,23 +121,70 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     );
     expect(versionCalls).toHaveLength(1);
   });
+
+  it("throws MissingMainStuffError on a hosted 200 whose main_stuff is null", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, HOSTED_VERSION))
+      .mockResolvedValueOnce(
+        jsonResponse(202, { pipeline_run_id: "run-1", state: "STARTED", created_at: "t0" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: null, graph_spec: { n: 1 } }),
+      );
+
+    await expect(client.startAndWaitForResult({ pipe_code: "p" })).rejects.toBeInstanceOf(
+      MissingMainStuffError,
+    );
+  });
 });
 
 describe("PipelexApiClient against a bare runner (no run store)", () => {
-  it("startAndWaitForResult falls back to the blocking POST /v1/execute", async () => {
+  it("falls back to blocking POST /v1/execute and resolves the main stuff", async () => {
     const client = makeClient();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
-      .mockResolvedValueOnce(
-        jsonResponse(200, { pipeline_run_id: "run-x", created_at: "t0", state: "COMPLETED" }),
-      );
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-x")));
 
     const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
 
     expect(result.pipeline_run_id).toBe("run-x");
+    // The SDK resolves `main_stuff` out of the working memory via `main_stuff_name` ("result") —
+    // its content, the same shape the hosted path relays; the full working memory rides pipe_output.
+    expect(result.main_stuff).toEqual({ text: "hello" });
+    const pipeOutput = result.pipe_output as {
+      working_memory: { root: Record<string, { content: unknown }> };
+    };
+    expect(pipeOutput.working_memory.root.result!.content).toEqual({ text: "hello" });
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/version");
     expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
+  });
+
+  it("throws MissingMainStuffError when a blocking response names no locatable main stuff", async () => {
+    const client = makeClient();
+    // `main_stuff_name` points at "answer", but the working-memory root has no such stuff.
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-y",
+          created_at: "t0",
+          state: "COMPLETED",
+          main_stuff_name: "answer",
+          pipe_output: {
+            working_memory: {
+              root: { other: { concept: "native.Text", content: {} } },
+              aliases: {},
+            },
+            pipeline_run_id: "run-y",
+          },
+        }),
+      );
+
+    await expect(
+      client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] }),
+    ).rejects.toBeInstanceOf(MissingMainStuffError);
   });
 
   it("forwards `extra` extension args through the blocking execute fallback", async () => {
@@ -127,9 +192,7 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
-      .mockResolvedValueOnce(
-        jsonResponse(200, { pipeline_run_id: "run-x", created_at: "t0", state: "COMPLETED" }),
-      );
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-x")));
 
     await client.startAndWaitForResult({
       inputs: { a: 1 },
@@ -150,13 +213,9 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
       .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(200, BASE_ONLY_VERSION))
       .mockResolvedValueOnce(jsonResponse(404, { detail: "Not Found" }))
-      .mockResolvedValueOnce(
-        jsonResponse(200, { pipeline_run_id: "run-z", created_at: "t0", state: "COMPLETED" }),
-      )
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-z")))
       // A second call must skip the durable attempt entirely (negative cached).
-      .mockResolvedValueOnce(
-        jsonResponse(200, { pipeline_run_id: "run-z2", created_at: "t1", state: "COMPLETED" }),
-      );
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-z2")));
 
     const result = await client.startAndWaitForResult({ pipe_code: "p" });
     expect(result.pipeline_run_id).toBe("run-z");

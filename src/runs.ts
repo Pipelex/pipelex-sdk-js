@@ -90,20 +90,29 @@ export interface RunRead extends RunPublic {
 /**
  * Result artifacts for a completed run — `GET /v1/runs/{pipeline_run_id}/results`.
  *
- * Hosted: `main_stuff` + `graph_spec` (S3 artifacts relayed verbatim;
- * `main_stuff` is polymorphic — a list output renders to a top-level array —
- * so both are typed as opaque JSON). Bare-runner blocking fallback: the
- * runner's native execute response, so `pipe_output` carries the output.
- * Consumers read `main_stuff ?? pipe_output` (the documented output-shape
- * difference between the two tiers).
+ * `main_stuff` is the resolved main output content and is ALWAYS present for a
+ * completed run (the pipelex >= 0.37 main-stuff invariant): on the hosted path it
+ * is the `main_stuff.json` S3 artifact relayed verbatim; on the bare-runner blocking
+ * path the SDK resolves it from the returned working memory via the run's
+ * `main_stuff_name`, so both paths deliver the same content shape. Consumers read
+ * `main_stuff` directly — no shape-guessing. A completed run that cannot deliver a
+ * main stuff throws `MissingMainStuffError`.
  */
 export interface RunResults {
   pipeline_run_id: string;
-  /** Method graph spec (`graphspec.json`); null if missing mid-write. */
+  /**
+   * The resolved main output content — always present for a completed run. Typed `unknown`
+   * because the content is polymorphic (a list output renders to a top-level array, a structured
+   * output to an object) and may be a valid falsy value (empty array, `0`); it is never absent.
+   */
+  main_stuff: unknown;
+  /** Method graph spec (`graphspec.json`); null if missing mid-write or on the bare-runner path. */
   graph_spec?: unknown;
-  /** Main output stuff (`main_stuff.json`); null if missing mid-write. */
-  main_stuff?: unknown;
-  /** Bare runner's native pipe output (blocking-execute fallback only). */
+  /**
+   * Bare runner's native pipe output — the full working memory (`{ root, aliases }`),
+   * blocking-execute path only; null on the hosted path. Supplementary to `main_stuff`,
+   * which is already resolved out of it; kept for consumers that need the whole working memory.
+   */
   pipe_output?: Record<string, unknown> | null;
 }
 

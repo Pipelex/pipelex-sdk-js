@@ -57,6 +57,7 @@ import type {
 import {
   ApiResponseError,
   ApiUnreachableError,
+  MissingMainStuffError,
   PipelineExecuteTimeoutError,
   PipelineRequestError,
   RunLifecycleUnavailableError,
@@ -672,6 +673,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       this.throwApiResponseError("GET", endpoint, res);
     }
     const result = JSON.parse(res.body) as RunResults;
+    if (result.main_stuff == null) {
+      throw new MissingMainStuffError(
+        `Completed run '${runId}' returned no main stuff — a completed run always delivers a main stuff.`,
+        runId,
+      );
+    }
     return { state: "completed", pipeline_run_id: runId, result };
   }
 
@@ -933,16 +940,30 @@ function isValidBaseUrl(value: string): boolean {
 
 /**
  * Map the protocol's blocking `POST /v1/execute` response onto the lifecycle's
- * `RunResults`. The bare-runner path returns `pipe_output` (native runner
- * shape); `main_stuff` is a hosted-durable artifact and stays null here.
- * Consumers read `main_stuff ?? pipe_output` (the documented hosted/bare
- * output-shape difference).
+ * `RunResults`. Resolves the main stuff out of the returned working memory using
+ * the response's `main_stuff_name` (an always-present extension field, pipelex >=
+ * 0.37) and delivers its content as `main_stuff` — the same content shape the hosted
+ * path relays from S3, so consumers read `main_stuff` uniformly. The full working
+ * memory rides `pipe_output` (blocking only). A completed response that names no
+ * locatable main stuff is a contract violation → `MissingMainStuffError`.
  */
 function mapRunResultToRunResults(response: DictRunResultExecute): RunResults {
   const pipeOutput = response.pipe_output as DictPipeOutput | null | undefined;
+  const rawMainStuffName = (response as { main_stuff_name?: unknown }).main_stuff_name;
+  const mainStuffName = typeof rawMainStuffName === "string" ? rawMainStuffName : null;
+  const mainStuff =
+    mainStuffName != null ? pipeOutput?.working_memory?.root?.[mainStuffName] : undefined;
+  if (mainStuff == null) {
+    throw new MissingMainStuffError(
+      `Blocking run '${response.pipeline_run_id}' delivered no locatable main stuff ` +
+        `(main_stuff_name=${JSON.stringify(mainStuffName)} is absent from the working-memory root) — ` +
+        `a completed run always delivers a main stuff.`,
+      response.pipeline_run_id,
+    );
+  }
   return {
     pipeline_run_id: response.pipeline_run_id,
-    main_stuff: null,
+    main_stuff: mainStuff.content,
     // The bare-runner blocking `pipe_output` carries no graph artifact; the
     // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
     graph_spec: null,
