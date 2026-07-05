@@ -57,11 +57,13 @@ import type {
 import {
   ApiResponseError,
   ApiUnreachableError,
+  MissingMainStuffError,
   PipelineExecuteTimeoutError,
   PipelineRequestError,
   RunLifecycleUnavailableError,
   RunStillRunningError,
 } from "./errors.js";
+import { PipelexExecuteResult } from "./execute-result.js";
 
 export interface MthdsFile {
   /** File contents to validate. */
@@ -381,12 +383,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Execute a method synchronously and wait for its completion —
    * `POST /v1/execute`.
    *
+   * Returns a `PipelexExecuteResult` — the protocol's raw execute response enriched with a
+   * resolved `.main_stuff` accessor, so a blocking result reads its output the same way as a
+   * durable one (`result.main_stuff`) instead of digging through `pipe_output`.
+   *
    * Behind the hosted gateway, synchronous requests terminate at ~30s; a run
    * that exceeds that surfaces as `PipelineExecuteTimeoutError` pointing at the
    * durable start+poll path. Throws `RunStillRunningError` on the protocol's
    * optional 202 degrade.
    */
-  async execute(options: RunOptions): Promise<DictRunResultExecute> {
+  async execute(options: RunOptions): Promise<PipelexExecuteResult> {
     const extensions = buildExtensions(options.extra);
     if (
       !options.pipe_code &&
@@ -417,7 +423,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       if (res.status < 200 || res.status >= 300) {
         this.throwApiResponseError("POST", "execute", res);
       }
-      return JSON.parse(res.body) as DictRunResultExecute;
+      // Wrap the base result in the enriched subtype (adds the `.main_stuff` accessor; the
+      // `main_stuff_name` extension + working memory ride `pipe_output`).
+      return new PipelexExecuteResult(JSON.parse(res.body) as DictRunResultExecute);
     } catch (err) {
       if (err instanceof RunStillRunningError) throw err;
       // The hosted gateway terminates synchronous requests at ~30s. A run that
@@ -672,6 +680,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       this.throwApiResponseError("GET", endpoint, res);
     }
     const result = JSON.parse(res.body) as RunResults;
+    if (result.main_stuff == null) {
+      throw new MissingMainStuffError(
+        `Completed run '${runId}' returned no main stuff — a completed run always delivers a main stuff.`,
+        runId,
+      );
+    }
     return { state: "completed", pipeline_run_id: runId, result };
   }
 
@@ -933,20 +947,20 @@ function isValidBaseUrl(value: string): boolean {
 
 /**
  * Map the protocol's blocking `POST /v1/execute` response onto the lifecycle's
- * `RunResults`. The bare-runner path returns `pipe_output` (native runner
- * shape); `main_stuff` is a hosted-durable artifact and stays null here.
- * Consumers read `main_stuff ?? pipe_output` (the documented hosted/bare
- * output-shape difference).
+ * `RunResults`. `response.main_stuff` resolves the main output out of the returned
+ * working memory (and throws `MissingMainStuffError` if the run named no locatable
+ * main stuff), so the durable and blocking paths hand back the same `main_stuff`
+ * content shape — the same shape the hosted path relays from S3. The full working
+ * memory rides `pipe_output` (blocking only).
  */
-function mapRunResultToRunResults(response: DictRunResultExecute): RunResults {
-  const pipeOutput = response.pipe_output as DictPipeOutput | null | undefined;
+function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
   return {
     pipeline_run_id: response.pipeline_run_id,
-    main_stuff: null,
+    main_stuff: response.main_stuff,
     // The bare-runner blocking `pipe_output` carries no graph artifact; the
     // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
     graph_spec: null,
-    pipe_output: (pipeOutput as Record<string, unknown> | null | undefined) ?? null,
+    pipe_output: response.pipe_output as unknown as Record<string, unknown>,
   };
 }
 

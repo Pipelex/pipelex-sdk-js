@@ -83,6 +83,26 @@ export class RunFailedError extends PipelineRequestError {
 }
 
 /**
+ * Thrown when a completed run cannot deliver its main stuff.
+ *
+ * Every completed run delivers a main stuff (the pipelex >= 0.37 wire invariant), so the SDK
+ * hands consumers a non-null `RunResults.main_stuff`. This surfaces the contract violation when it
+ * cannot: the hosted results endpoint answered a `200` with a null `main_stuff`, or a blocking
+ * `execute` response named a `main_stuff_name` whose stuff is absent from the returned working
+ * memory. `runId` locates the run. (A falsy-but-present main stuff — an empty array, `0` — is a
+ * valid output and does NOT throw; only a genuinely absent one does.)
+ */
+export class MissingMainStuffError extends PipelineRequestError {
+  public readonly runId: string;
+
+  constructor(message: string, runId: string) {
+    super(message);
+    this.name = "MissingMainStuffError";
+    this.runId = runId;
+  }
+}
+
+/**
  * Thrown when `waitForResult` exceeds its `timeoutMs` before the run reaches a
  * terminal state. The run is NOT cancelled — it keeps executing server-side and
  * can be resumed later by `runId` (the poll loop just stopped waiting).

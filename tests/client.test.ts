@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
+import { PipelexExecuteResult } from "../src/execute-result.js";
 import {
   ApiResponseError,
   ApiUnreachableError,
+  MissingMainStuffError,
   PipelineExecuteTimeoutError,
   PipelineRequestError,
   RunStillRunningError,
@@ -332,6 +334,115 @@ describe("PipelexApiClient happy path", () => {
     const result = await client.execute({ pipe_code: "p" });
     expect(result.pipeline_run_id).toBe("ok");
     expect(result.state).toBe("COMPLETED"); // server extension field, preserved via the index signature
+  });
+});
+
+describe("PipelexApiClient.execute resolves main_stuff", () => {
+  // A completed execute response: `main_stuff_name` ("result") names the working-memory root key
+  // the `.main_stuff` accessor resolves to — the same accessor as the durable path.
+  function executeBody(
+    mainStuffName: string,
+    root: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      pipeline_run_id: "run-x",
+      main_stuff_name: mainStuffName,
+      pipe_output: { working_memory: { root, aliases: {} }, pipeline_run_id: "run-x" },
+    };
+  }
+
+  it("resolves .main_stuff out of the working memory", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Text", content: { text: "hi" } } }),
+      ),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    expect(result.pipeline_run_id).toBe("run-x");
+    expect(result.main_stuff).toEqual({ text: "hi" });
+  });
+
+  it("throws MissingMainStuffError when .main_stuff names no locatable stuff", async () => {
+    const client = makeClient();
+    // `main_stuff_name` names "missing", absent from the working-memory root.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, executeBody("missing", { other: { concept: "native.Text", content: {} } })),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    // The accessor throws lazily on read (the run completed; the response is otherwise fine).
+    expect(() => result.main_stuff).toThrow(MissingMainStuffError);
+  });
+
+  it("throws MissingMainStuffError when the located stuff has null content", async () => {
+    const client = makeClient();
+    // The named entry exists but its resolved `content` is null — the durable path rejects a
+    // null resolved main stuff, so the blocking accessor must too (one-accessor invariant).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Text", content: null } }),
+      ),
+    );
+    const result = await client.execute({ pipe_code: "p" });
+    expect(() => result.main_stuff).toThrow(MissingMainStuffError);
+  });
+
+  it("returns a falsy-but-present main stuff as-is (empty array, 0)", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse(200, executeBody("result", { result: { concept: "native.Text", content: [] } })),
+    );
+    const emptyArr = await client.execute({ pipe_code: "p" });
+    expect(emptyArr.main_stuff).toEqual([]);
+
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      jsonResponse(
+        200,
+        executeBody("result", { result: { concept: "native.Number", content: 0 } }),
+      ),
+    );
+    const zero = await client.execute({ pipe_code: "p" });
+    expect(zero.main_stuff).toBe(0);
+  });
+
+  it("preserves extension fields whose names collide with Object.prototype members", async () => {
+    const client = makeClient();
+    // `toString` is a legitimate extension-open wire field; the constructor's copy loop must not
+    // drop it just because the name exists on the prototype chain.
+    const body: Record<string, unknown> = {
+      ...executeBody("result", { result: { concept: "native.Text", content: { text: "hi" } } }),
+      toString: "server-value",
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, body));
+    const result = await client.execute({ pipe_code: "p" });
+    expect((result as Record<string, unknown>).toString).toBe("server-value");
+    // The main_stuff getter is still intact (not shadowed by the copy loop).
+    expect(result.main_stuff).toEqual({ text: "hi" });
+  });
+
+  it("does not let a __proto__ wire field pollute the instance prototype", async () => {
+    const client = makeClient();
+    // JSON.parse materializes a `"__proto__"` key as an OWN data property (not via the setter),
+    // so the server can smuggle one through the wire. The copy loop must not assign it — doing so
+    // would trip the Object.prototype `__proto__` setter and mutate the instance prototype.
+    const body: Record<string, unknown> = executeBody("result", {
+      result: { concept: "native.Text", content: { text: "hi" } },
+    });
+    Object.defineProperty(body, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, body));
+    const result = await client.execute({ pipe_code: "p" });
+    // Prototype unchanged and no pollution leaked onto the instance.
+    expect(Object.getPrototypeOf(result)).toBe(PipelexExecuteResult.prototype);
+    expect((result as Record<string, unknown>).polluted).toBeUndefined();
+    // The accessor still resolves normally.
+    expect(result.main_stuff).toEqual({ text: "hi" });
   });
 });
 

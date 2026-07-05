@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.2.1";
+export const SDK_VERSION = "0.3.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -19,6 +19,9 @@ export * from "mthds/protocol";
 // ── Pipelex product client ───────────────────────────────────────────
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from "./client.js";
+
+// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
+export { PipelexExecuteResult } from "./execute-result.js";
 
 // ── Wire models (Dict concretes, validate surface, build routes) ─────
 export type {
@@ -91,6 +94,7 @@ export {
   ApiResponseError,
   ApiUnreachableError,
   ClientAuthenticationError,
+  MissingMainStuffError,
   PipelineExecuteTimeoutError,
   RunFailedError,
   RunTimeoutError,
