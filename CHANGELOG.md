@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.3.1] - 2026-07-10
+
+### Changed
+
+- Bumped the `mthds` dependency floor to `^0.18.0` (was `^0.16.0`), keeping it current with the latest published `mthds`. The intervening `mthds` releases are CLI/tooling changes — `0.17.0` adds the `mthds-agent inputs upload` subcommand and an `MthdsApiClient.uploadFile()` method; `0.18.0` adds Codex version detection and turns hook-disabling config keys into hard errors — none of which touch the `mthds/protocol` wire types `@pipelex/sdk` imports. The SDK's own code is unchanged, so this is a coordination floor; the green `make check` / `make test` run confirms the route shapes still type-check against `mthds@0.18.0`.
+
 ## [v0.3.0] - 2026-07-05
 
 ### Changed
