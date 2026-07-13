@@ -73,7 +73,12 @@ prompt = "Say hi"
 
 // ── Suite ────────────────────────────────────────────────────────────────
 
-const client = new PipelexApiClient({ baseUrl: BASE_URL, apiKey: "e2e-test" });
+// See build.e2e.ts: the OSS default is AUTH_MODE=none, but an auth-enabled target
+// needs a real token or /health passes while every /v1 call 401s.
+const client = new PipelexApiClient({
+  baseUrl: BASE_URL,
+  apiKey: process.env.PIPELEX_API_KEY ?? "e2e-test",
+});
 
 beforeAll(async () => {
   try {

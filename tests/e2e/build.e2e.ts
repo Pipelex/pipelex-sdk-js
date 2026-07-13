@@ -89,7 +89,14 @@ description = "A customer"
 
 // ── Suite ────────────────────────────────────────────────────────────────
 
-const client = new PipelexApiClient({ baseUrl: BASE_URL, apiKey: "e2e-test" });
+// The default OSS runner serves `AUTH_MODE=none` and ignores the bearer entirely, so
+// the placeholder is enough locally. Point PIPELEX_E2E_BASE_URL at an auth-enabled
+// server and PIPELEX_API_KEY carries the real token — otherwise /health would pass
+// (it is mounted outside the auth dependency) while every /v1 call 401s.
+const client = new PipelexApiClient({
+  baseUrl: BASE_URL,
+  apiKey: process.env.PIPELEX_API_KEY ?? "e2e-test",
+});
 
 beforeAll(async () => {
   try {
@@ -151,7 +158,9 @@ describe("e2e buildInputs (/v1/build/inputs)", () => {
 
     const report = result as BuildInputsValidReport;
     expect(report.explicit).toBe(true);
-    expect(report.inputs!.text).toMatchObject({ concept: expect.any(String) });
+    // Narrowing on `format` is what makes `inputs` non-optional — no `!` needed.
+    if (report.format !== "json") throw new Error(`expected json, got ${report.format}`);
+    expect(report.inputs.text).toMatchObject({ concept: expect.any(String) });
   });
 });
 
@@ -175,9 +184,10 @@ describe("e2e buildOutput (/v1/build/output)", () => {
     });
 
     const report = result as BuildOutputValidReport;
-    expect(report.format).toBe("python");
+    // Same narrowing, mirror image: `python` makes `output_python` non-optional.
+    if (report.format !== "python") throw new Error(`expected python, got ${report.format}`);
     expect(typeof report.output_python).toBe("string");
-    expect(report.output_python!.length).toBeGreaterThan(0);
+    expect(report.output_python.length).toBeGreaterThan(0);
     expect(report.output).toBeUndefined();
   });
 });

@@ -15,7 +15,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
-import { ApiResponseError } from "../src/errors.js";
+import { ApiResponseError, ApiUnreachableError } from "../src/errors.js";
 import type {
   BuildInputsValidReport,
   BuildOutputValidReport,
@@ -282,5 +282,77 @@ describe("build routes — the no-verdict arms throw a typed ApiResponseError", 
     const failure = client.buildRunner({ method_ref: "acme/method@1" });
     await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
     await expect(failure).rejects.toMatchObject({ status: 501 });
+  });
+});
+
+describe("build routes — buildRunner gets its own timeout", () => {
+  // The migration onto `requestExtension` was right for the error taxonomy, but it
+  // silently swapped buildRunner from an unbounded fetch onto the 30s management
+  // timeout the STATIC routes use. buildRunner is the one build route that dry-run-
+  // sweeps the closure (the WHOLE closure when `pipe_ref` is omitted), so a large
+  // closure legitimately runs past 30s — and the abort surfaced as
+  // `ApiUnreachableError`, i.e. we blamed the user's network for a healthy server.
+
+  /** A fetch that never resolves; it only rejects when its abort signal fires. */
+  function hangingFetch(): typeof fetch {
+    return ((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+          once: true,
+        });
+      })) as typeof fetch;
+  }
+
+  /** Observe settlement without awaiting — we need to assert "still pending". */
+  function track<T>(promise: Promise<T>): { settled: boolean; error: unknown } {
+    const state: { settled: boolean; error: unknown } = { settled: false, error: undefined };
+    promise.then(
+      () => {
+        state.settled = true;
+      },
+      (error: unknown) => {
+        state.settled = true;
+        state.error = error;
+      },
+    );
+    return state;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("lets the static routes time out at 30s while buildRunner keeps sweeping", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const lint = track(client.lint("domain = 'smoke'\n"));
+    const runner = track(client.buildRunner({ files: [{ content: "domain = 'smoke'\n" }] }));
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(lint.settled).toBe(true);
+    expect(lint.error).toBeInstanceOf(ApiUnreachableError);
+    // The regression: this was `true` — a healthy server reported as unreachable.
+    expect(runner.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(runner.settled).toBe(true);
+    expect(runner.error).toBeInstanceOf(ApiUnreachableError);
+  });
+
+  it("honors a caller-supplied timeoutMs on buildRunner", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const runner = track(
+      client.buildRunner({ files: [{ content: "domain = 'smoke'\n" }] }, { timeoutMs: 1_000 }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(runner.settled).toBe(true);
+    expect(runner.error).toBeInstanceOf(ApiUnreachableError);
   });
 });

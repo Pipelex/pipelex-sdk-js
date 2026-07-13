@@ -118,6 +118,11 @@ const RUNS = "runs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 1_200_000; // 20 min — matches the runner's blocking execute ceiling.
 const POLL_REQUEST_TIMEOUT_MS = 30_000; // single status/result GETs; the hosted gateway caps responses at ~30s.
+// `build/runner` is the one extension route that dry-run-sweeps the closure, and it
+// sweeps the WHOLE closure when `pipe_ref` is omitted. The 30s management timeout is
+// sized for the static routes; a large closure legitimately exceeds it, and aborting
+// it would surface as `ApiUnreachableError` — blaming the network for a healthy server.
+const BUILD_RUNNER_TIMEOUT_MS = 300_000; // 5 min
 const DEFAULT_DEGRADED_RETRY_SECONDS = 5; // matches the platform's `_DEGRADE_RETRY_AFTER_SECONDS`.
 const VALIDATE_MARKDOWN_RENDER_FORMAT = "markdown";
 
@@ -611,19 +616,26 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /**
    * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`) and
-   * the build projections (`build/*`). They answer fast (no inference), so they use
-   * the management-call timeout, and their non-2xx bodies are RFC 7807 problems —
-   * mapped to the typed `ApiResponseError`, like the product routes.
+   * the build projections (`build/*`). Their non-2xx bodies are RFC 7807 problems,
+   * mapped to the typed `ApiResponseError` like the product routes.
    *
    * The mapping is what makes their no-verdict arms usable: a build route answers
    * `422` for an unresolvable pipe selector (unknown `pipe_ref`; or an omitted one
    * on a closure declaring no `main_pipe`, or several) and `501` for the reserved
    * `method_ref`. A caller branches on `ApiResponseError.status`, never on a message.
+   *
+   * All of these are inference-free, so they default to the management-call timeout.
+   * `build/runner` is the exception — it dry-run-sweeps the closure — and overrides it
+   * via `timeoutMs`.
    */
-  private async requestExtension<T>(endpoint: string, body: unknown): Promise<T> {
+  private async requestExtension<T>(
+    endpoint: string,
+    body: unknown,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
     const res = await this.requestRaw("POST", this.url(endpoint), {
       body,
-      timeoutMs: POLL_REQUEST_TIMEOUT_MS,
+      timeoutMs: options.timeoutMs ?? POLL_REQUEST_TIMEOUT_MS,
     });
     if (res.status < 200 || res.status >= 300) {
       this.throwApiResponseError("POST", endpoint, res);
@@ -695,9 +707,18 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * omitting `pipe_ref` sweeps the WHOLE closure rather than just the defaulted
    * pipe — the default can only be resolved after the sweep has run — so a broken
    * sibling pipe can sink the request. Pass `pipe_ref` to scope the sweep.
+   *
+   * Because of that sweep it is the one extension route that can legitimately run
+   * long, so it gets its own generous timeout (5 min) rather than the 30s the static
+   * routes use. Override it per call with `options.timeoutMs`.
    */
-  async buildRunner(request: BuildRunnerRequest): Promise<BuildRunnerResponse> {
-    return this.requestExtension("build/runner", request);
+  async buildRunner(
+    request: BuildRunnerRequest,
+    options: { timeoutMs?: number } = {},
+  ): Promise<BuildRunnerResponse> {
+    return this.requestExtension("build/runner", request, {
+      timeoutMs: options.timeoutMs ?? BUILD_RUNNER_TIMEOUT_MS,
+    });
   }
 
   async concept(request: ConceptRequest): Promise<ConceptResponse> {
