@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install check c test t clean build rebuild dev pack all depcruise use-local use-npm ul un
+.PHONY: help install check c test t test-e2e te clean build rebuild dev pack all depcruise use-local use-npm ul un
 
 # Sibling repo for live mthds development (see use-local / use-npm).
 MTHDS_JS_DIR := ../mthds-js
@@ -29,6 +29,7 @@ make install    - Install dependencies
 make all        - Clean, check, and test
 make check      - Run quality checks, excluding tests
 make test       - Run the test suite
+make test-e2e   - Run e2e tests against a live pipelex-api [PIPELEX_E2E_BASE_URL=...]
 make dev        - Watch mode: auto rebuild on changes
 
 make build      - Build the project
@@ -43,6 +44,7 @@ make use-npm    - Switch mthds back to npm [VERSION=x.y.z]
 
 make c          - Shorthand -> check
 make t          - Shorthand -> test
+make te         - Shorthand -> test-e2e
 make ul         - Shorthand -> use-local
 make un         - Shorthand -> use-npm
 
@@ -68,6 +70,15 @@ test:
 	@echo "$(GREEN)✓ All tests passed$(NC)"
 
 t: test
+
+# Needs a live pipelex-api server (default http://localhost:8081, override with
+# PIPELEX_E2E_BASE_URL). Not part of `make test` / `make all` — CI has no server.
+test-e2e:
+	$(call PRINT_TITLE,"Running E2E Tests against live pipelex-api")
+	@npm run test:e2e
+	@echo "$(GREEN)✓ All e2e tests passed$(NC)"
+
+te: test-e2e
 
 depcruise:
 	$(call PRINT_TITLE,"Checking Architectural Boundaries")

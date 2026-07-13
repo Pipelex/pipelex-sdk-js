@@ -18,6 +18,8 @@ import type {
   ConceptResponse,
   DictPipeOutput,
   DictRunResultExecute,
+  FormatResponse,
+  LintResponse,
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexValidationResult,
@@ -132,6 +134,8 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
+ * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
+ *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
  *   durable polling extension that survives long runs and lets a caller resume by
  *   id. Served only by a deployment that includes the platform block (the Pipelex
@@ -559,6 +563,66 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       mthdsSources,
       options.render,
     );
+  }
+
+  // ── Tools extensions (Pipelex API — `/v1/lint`, `/v1/format`) ─────────
+
+  /**
+   * Lint one `.mthds` file against the embedded MTHDS schema — `POST /v1/lint`.
+   *
+   * A diagnostic endpoint, like `validate`: malformed content is a produced verdict
+   * on a 200 carrying `diagnostics[]` (empty when the file is clean), never a thrown
+   * error. Only a no-verdict condition (a malformed request, auth, a server fault) is
+   * non-2xx and surfaces as `ApiResponseError`.
+   *
+   * `source` is an optional logical filename accepted for parity with the local
+   * tooling; today's diagnostics do not echo it back.
+   *
+   * Unlike `validate`, this is a static single-file check — no bundle load, no
+   * dry-run, no cross-file resolution. Use `validate` for the full verdict.
+   */
+  async lint(content: string, source?: string): Promise<LintResponse> {
+    const body: Record<string, unknown> = { content };
+    if (source !== undefined) {
+      body.source = source;
+    }
+    return this.requestTool("lint", body);
+  }
+
+  /**
+   * Format one `.mthds` file with the canonical MTHDS formatter — `POST /v1/format`.
+   *
+   * Returns the formatted content, a `changed` flag, and any `diagnostics[]`. A syntax
+   * error is a produced verdict on a 200: the content comes back unchanged
+   * (`changed: false`) with the diagnostics that explain why. Malformed formatter
+   * `options` (e.g. a non-numeric `column_width`) ARE caller input errors and surface as
+   * a 422 `ApiResponseError`.
+   *
+   * `options` passes formatter settings (e.g. `{ column_width: 100 }`) straight through
+   * to the server-side formatter.
+   */
+  async format(content: string, options?: Record<string, unknown>): Promise<FormatResponse> {
+    const body: Record<string, unknown> = { content };
+    if (options !== undefined) {
+      body.options = options;
+    }
+    return this.requestTool("format", body);
+  }
+
+  /**
+   * POST one of the diagnostic tools routes. They answer fast (no inference), so
+   * they use the management-call timeout, and their non-2xx bodies are RFC 7807
+   * problems — mapped to the typed `ApiResponseError`, like the product routes.
+   */
+  private async requestTool<T>(endpoint: string, body: Record<string, unknown>): Promise<T> {
+    const res = await this.requestRaw("POST", this.url(endpoint), {
+      body,
+      timeoutMs: POLL_REQUEST_TIMEOUT_MS,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      this.throwApiResponseError("POST", endpoint, res);
+    }
+    return JSON.parse(res.body) as T;
   }
 
   /** The model deck the runner can route to — `GET /v1/models[?type=]`. */

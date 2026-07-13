@@ -23,8 +23,13 @@ export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from ".
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
 
-// ── Wire models (Dict concretes, validate surface, build routes) ─────
+// ── Wire models (Dict concretes, validate surface, tools + build routes) ─────
 export type {
+  DiagnosticKind,
+  DiagnosticRange,
+  Diagnostic,
+  LintResponse,
+  FormatResponse,
   DictStuff,
   DictWorkingMemory,
   DictPipeOutput,

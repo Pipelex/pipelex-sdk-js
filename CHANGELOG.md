@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **E2E test suite against a live pipelex-api (`make test-e2e`).** New `tests/e2e/` suites (distinct `.e2e.ts` suffix, own `vitest.e2e.config.ts`) exercise `lint`, `format`, and `validate` end-to-end with correct and malformed MTHDS bundles — no fetch mocks. They verify the diagnostic-endpoint contract for real: clean bundles lint with zero diagnostics and format to themselves idempotently, malformed bundles come back as 200 verdicts (`diagnostics[]` / `is_valid: false` + `validation_errors[]`), and malformed formatter options surface as a 422 `ApiResponseError`. Excluded from `make test` so CI never needs a server; target a specific instance with `PIPELEX_E2E_BASE_URL` (default `http://localhost:8081`).
+- **`lint()` and `format()` — the pipelex-api tools routes.** `PipelexApiClient.lint(content, source?)` (`POST /v1/lint`) returns the static diagnostics of one `.mthds` file (syntax / schema / semantic), and `PipelexApiClient.format(content, options?)` (`POST /v1/format`) returns the canonically formatted content plus a `changed` flag and any diagnostics. Both are diagnostic endpoints like `validate`: malformed content is a produced verdict on a **200** carrying `diagnostics[]` — never a thrown error — while a no-verdict condition (a malformed body, malformed formatter `options` such as a non-numeric `column_width`, auth, a server fault) is non-2xx and surfaces as the typed `ApiResponseError`. New exported wire types: `Diagnostic`, `DiagnosticKind`, `DiagnosticRange`, `LintResponse`, `FormatResponse`. `lint` is the cheap single-file check and does not replace `validate`, which loads the bundle, resolves across files, and dry-runs the pipes.
+
 ## [v0.3.1] - 2026-07-10
 
 ### Changed

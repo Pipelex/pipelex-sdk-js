@@ -160,6 +160,55 @@ export interface ValidationErrorItem {
   declared_concepts?: string[];
 }
 
+// ── Tools routes (Pipelex API — `/v1/lint`, `/v1/format`) ───────────────
+//
+// Both are diagnostic endpoints over a SINGLE `.mthds` file: malformed content is
+// a produced verdict on a **200** (`diagnostics[]`), never a thrown error. Non-2xx
+// is reserved for no-verdict conditions (a malformed body, bad formatter options,
+// auth, a server fault), surfaced as `ApiResponseError`.
+
+/** Which analysis produced a `Diagnostic` — mirror of `pipelex-tools`' closed kind set. */
+export type DiagnosticKind = "syntax" | "semantic" | "schema";
+
+/** Source span of a `Diagnostic` — byte offsets plus 1-based line/column coordinates. */
+export interface DiagnosticRange {
+  start_offset: number;
+  end_offset: number;
+  start_line: number;
+  start_col: number;
+  end_line: number;
+  end_col: number;
+}
+
+/**
+ * One structured lint/format diagnostic — mirror of pipelex's `Diagnostic`.
+ * `severity` stays an open string (the server does not close the vocabulary);
+ * `location` and `range` are `null` when the analysis cannot attribute a span.
+ */
+export interface Diagnostic {
+  kind: DiagnosticKind;
+  severity: string;
+  message: string;
+  location: string | null;
+  range: DiagnosticRange | null;
+}
+
+/** `POST /v1/lint` 200 body — the diagnostics of one linted `.mthds` file. */
+export interface LintResponse {
+  diagnostics: Diagnostic[];
+}
+
+/**
+ * `POST /v1/format` 200 body — the canonically formatted content, whether it
+ * differs from the submitted one, and any diagnostics found on the way. A syntax
+ * error yields `changed: false` with the content echoed back unchanged.
+ */
+export interface FormatResponse {
+  formatted: string;
+  changed: boolean;
+  diagnostics: Diagnostic[];
+}
+
 // ── Build routes (Pipelex API layer 2 — `/v1/build/*`) ──────────────────
 
 export type ConceptRepresentationFormat = "json" | "python" | "schema";
