@@ -3,50 +3,63 @@
  * (`dist-hooks/check.mjs`), ready to vendor into `pipelex-plugins` as a static
  * hook asset.
  *
- * `@pipelex/tools-wasm` is unpublished, so it is resolved via an esbuild alias
- * pointing at the sibling `vscode-pipelex` checkout (override with
- * PIPELEX_TOOLS_WASM_PATH). Its base64-inlined WASM dominates the artifact
- * size — build it in release mode first (`RELEASE=true make tools-wasm` in
- * vscode-pipelex). Once the package is on npm, drop the alias and add it as a
- * devDependency (and delete `src/hooks/tools-wasm.d.ts`).
+ * `@pipelex/tools-wasm` resolves from node_modules (a normal devDependency).
+ * To bundle an unreleased engine build instead, point PIPELEX_TOOLS_WASM_PATH
+ * at a `vscode-pipelex/js/tools-wasm` checkout with a release `dist/index.js`
+ * (`RELEASE=true make tools-wasm` there) — the base64-inlined WASM dominates
+ * the artifact size, so never bundle a debug build.
  */
 
 import { build } from "esbuild";
 import { execSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const readJson = (path) => JSON.parse(readFileSync(path, "utf-8"));
 
-const toolsWasmDir = resolve(
-  repoRoot,
-  process.env.PIPELEX_TOOLS_WASM_PATH ?? "../vscode-pipelex/js/tools-wasm",
-);
-const toolsWasmEntry = resolve(toolsWasmDir, "dist/index.js");
-if (!existsSync(toolsWasmEntry)) {
-  console.error(
-    `@pipelex/tools-wasm bundle not found at ${toolsWasmEntry}.\n` +
-      "Build it first (RELEASE=true make tools-wasm in vscode-pipelex), or point " +
-      "PIPELEX_TOOLS_WASM_PATH at a checkout that has dist/index.js.",
-  );
-  process.exit(1);
+let toolsWasmAlias;
+let toolsWasmProvenance;
+if (process.env.PIPELEX_TOOLS_WASM_PATH) {
+  const toolsWasmDir = resolve(repoRoot, process.env.PIPELEX_TOOLS_WASM_PATH);
+  const toolsWasmEntry = resolve(toolsWasmDir, "dist/index.js");
+  if (!existsSync(toolsWasmEntry)) {
+    console.error(
+      `@pipelex/tools-wasm bundle not found at ${toolsWasmEntry}.\n` +
+        "Build it first (RELEASE=true make tools-wasm in vscode-pipelex), or unset " +
+        "PIPELEX_TOOLS_WASM_PATH to bundle the npm devDependency.",
+    );
+    process.exit(1);
+  }
+  const gitSha = (() => {
+    try {
+      return execSync("git rev-parse --short HEAD", { cwd: toolsWasmDir, encoding: "utf-8" }).trim();
+    } catch {
+      return "unknown";
+    }
+  })();
+  toolsWasmAlias = { "@pipelex/tools-wasm": toolsWasmEntry };
+  toolsWasmProvenance = `${readJson(resolve(toolsWasmDir, "package.json")).version} (local checkout ${gitSha})`;
+} else {
+  const require = createRequire(import.meta.url);
+  const pkgPath = require.resolve("@pipelex/tools-wasm/package.json", { paths: [repoRoot] });
+  toolsWasmProvenance = `${readJson(pkgPath).version} (npm)`;
 }
 
-const readJson = (path) => JSON.parse(readFileSync(path, "utf-8"));
 const sdkVersion = readJson(resolve(repoRoot, "package.json")).version;
-const toolsWasmVersion = readJson(resolve(toolsWasmDir, "package.json")).version;
-const gitOf = (dir) => {
+const sdkSha = (() => {
   try {
-    return execSync("git rev-parse --short HEAD", { cwd: dir, encoding: "utf-8" }).trim();
+    return execSync("git rev-parse --short HEAD", { cwd: repoRoot, encoding: "utf-8" }).trim();
   } catch {
     return "unknown";
   }
-};
+})();
 
 const banner = `// check.mjs — .mthds PostToolUse hook (lint/format local via WASM, validate via Pipelex API)
 // GENERATED FILE — do not edit. Rebuild with \`npm run build:hook\` in pipelex-sdk-js.
-// Provenance: @pipelex/sdk ${sdkVersion} (${gitOf(repoRoot)}) + @pipelex/tools-wasm ${toolsWasmVersion} (${gitOf(toolsWasmDir)})`;
+// Provenance: @pipelex/sdk ${sdkVersion} (${sdkSha}) + @pipelex/tools-wasm ${toolsWasmProvenance}`;
 
 await build({
   entryPoints: [resolve(repoRoot, "src/hooks/claude-mthds-check.ts")],
@@ -55,7 +68,7 @@ await build({
   platform: "node",
   target: "node18",
   format: "esm",
-  alias: { "@pipelex/tools-wasm": toolsWasmEntry },
+  ...(toolsWasmAlias ? { alias: toolsWasmAlias } : {}),
   banner: { js: banner },
   legalComments: "none",
   logLevel: "info",

@@ -43,6 +43,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@pipelex/tools-wasm": "^0.1.0",
     "@types/node": "^22.12.0",
     "@vitest/coverage-v8": "^4.1.9",
     "dependency-cruiser": "^17.4.3",
