@@ -39,23 +39,111 @@ export type HookOutcome =
   { kind: "pass" } | { kind: "block"; reason: string } | { kind: "context"; context: string };
 
 /**
- * Extract the edited `.mthds` path from the PostToolUse stdin payload;
+ * Which harness invoked the hook. Claude and Codex share the block /
+ * `hookSpecificOutput` stdout protocol; Mistral Vibe speaks
+ * deny / `hook_specific_output.additional_context`.
+ */
+export type HookPlatform = "claude" | "codex" | "vibe";
+
+function parseJsonOrNull(stdinJson: string): unknown {
+  try {
+    return JSON.parse(stdinJson);
+  } catch {
+    return null; // fail open on unparseable input, mirroring the plxt-era hooks
+  }
+}
+
+/**
+ * Extract the edited `.mthds` path from the Claude PostToolUse stdin payload;
  * null = not this hook's business (fail open, mirroring the plxt-era hook,
  * which also passed silently on unparseable input).
  */
 export function extractMthdsFilePath(stdinJson: string): string | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stdinJson);
-  } catch {
-    return null;
-  }
+  const parsed = parseJsonOrNull(stdinJson);
   const filePath = (parsed as { tool_input?: { file_path?: unknown } } | null)?.tool_input
     ?.file_path;
   if (typeof filePath !== "string" || !filePath.endsWith(".mthds")) {
     return null;
   }
   return filePath;
+}
+
+/**
+ * Extract every distinct `.mthds` path from a Codex PostToolUse(apply_patch)
+ * payload. `apply_patch` is Codex's freeform multi-file write tool: the patch
+ * envelope rides verbatim in `tool_input.command`, and the touched files are
+ * its `*** Update File: / *** Add File: / *** Move to:` headers (`Delete
+ * File:` and `Move from:` are skipped — the file no longer exists post-patch).
+ * Mirrors `mthds-agent codex hook`'s parser. Paths come back as written in
+ * the envelope (usually cwd-relative); the caller resolves and existence-checks.
+ */
+export function extractCodexMthdsFiles(stdinJson: string): string[] {
+  const parsed = parseJsonOrNull(stdinJson);
+  const command = (parsed as { tool_input?: { command?: unknown } } | null)?.tool_input?.command;
+  if (typeof command !== "string") {
+    return [];
+  }
+  const headerRe = /^\*\*\* (?:Update File|Add File|Move to):\s*(.+\.mthds)\s*$/gm;
+  const seen = new Set<string>();
+  let match: RegExpExecArray | null;
+  while ((match = headerRe.exec(command)) !== null) {
+    seen.add(match[1]!.trim());
+  }
+  return Array.from(seen);
+}
+
+/**
+ * Extract the edited `.mthds` path from a Mistral Vibe AfterToolInvocation
+ * payload, plus the cwd to resolve it against. Only successful tool calls
+ * count (`tool_status: "success"`); the path rides in `tool_output.file` /
+ * `tool_output.path` / `tool_input.file_path` / `tool_input.path` — the same
+ * fallback chain as the plxt-era Vibe hook.
+ */
+export function extractVibeMthdsFilePath(
+  stdinJson: string,
+): { filePath: string; cwd?: string } | null {
+  const parsed = parseJsonOrNull(stdinJson) as {
+    tool_status?: unknown;
+    cwd?: unknown;
+    tool_output?: { file?: unknown; path?: unknown };
+    tool_input?: { file_path?: unknown; path?: unknown };
+  } | null;
+  if (!parsed || parsed.tool_status !== "success") {
+    return null;
+  }
+  const candidates = [
+    parsed.tool_output?.file,
+    parsed.tool_output?.path,
+    parsed.tool_input?.file_path,
+    parsed.tool_input?.path,
+  ];
+  const filePath = candidates.find(
+    (value): value is string => typeof value === "string" && value.endsWith(".mthds"),
+  );
+  if (!filePath) {
+    return null;
+  }
+  return { filePath, cwd: typeof parsed.cwd === "string" ? parsed.cwd : undefined };
+}
+
+/**
+ * Merge per-file outcomes (Codex's `apply_patch` can touch several `.mthds`
+ * files in one call) into the single decision the hook emits: any block wins
+ * (reasons joined), else contexts are joined, else pass.
+ */
+export function mergeOutcomes(outcomes: HookOutcome[]): HookOutcome {
+  const blocks = outcomes.filter((outcome) => outcome.kind === "block");
+  if (blocks.length > 0) {
+    return { kind: "block", reason: truncate(blocks.map((block) => block.reason).join("\n\n")) };
+  }
+  const contexts = outcomes.filter((outcome) => outcome.kind === "context");
+  if (contexts.length > 0) {
+    return {
+      kind: "context",
+      context: truncate(contexts.map((context) => context.context).join("\n\n")),
+    };
+  }
+  return { kind: "pass" };
 }
 
 /** Cap on emitted reason/context bodies — same guard as the plxt-era hook. */
@@ -150,16 +238,28 @@ export function decideAfterValidate(filePath: string, validate: ValidateStage): 
 }
 
 /**
- * Encode an outcome as the Claude Code PostToolUse stdout payload.
- * `pass` is empty output; the hook always exits 0.
+ * Encode an outcome as the harness's stdout payload. `pass` is empty output;
+ * the hook always exits 0. Claude and Codex share the block /
+ * `hookSpecificOutput` protocol; Vibe speaks deny / `hook_specific_output`.
  */
-export function encodeOutcome(outcome: HookOutcome): string {
+export function encodeOutcome(outcome: HookOutcome, platform: HookPlatform = "claude"): string {
   switch (outcome.kind) {
     case "pass":
       return "";
     case "block":
+      if (platform === "vibe") {
+        return JSON.stringify({ decision: "deny", reason: outcome.reason }) + "\n";
+      }
       return JSON.stringify({ decision: "block", reason: outcome.reason }) + "\n";
     case "context":
+      if (platform === "vibe") {
+        return (
+          JSON.stringify({
+            decision: "allow",
+            hook_specific_output: { additional_context: outcome.context },
+          }) + "\n"
+        );
+      }
       return (
         JSON.stringify({
           hookSpecificOutput: {

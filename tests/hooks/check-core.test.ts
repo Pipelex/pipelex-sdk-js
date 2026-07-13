@@ -9,7 +9,10 @@ import {
   decideAfterLint,
   decideAfterValidate,
   encodeOutcome,
+  extractCodexMthdsFiles,
   extractMthdsFilePath,
+  extractVibeMthdsFilePath,
+  mergeOutcomes,
   truncate,
 } from "../../src/hooks/check-core.js";
 import type { Diagnostic, ValidationErrorItem } from "../../src/models.js";
@@ -165,6 +168,91 @@ describe("extractMthdsFilePath", () => {
   });
 });
 
+describe("extractCodexMthdsFiles", () => {
+  const envelope = (body: string) => JSON.stringify({ tool_input: { command: body } });
+
+  it("extracts Update/Add/Move-to targets, deduped", () => {
+    const files = extractCodexMthdsFiles(
+      envelope(
+        "*** Begin Patch\n*** Update File: a.mthds\n@@\n*** Add File: sub/b.mthds\n" +
+          "*** Update File: a.mthds\n*** Move to: c.mthds\n*** End Patch\n",
+      ),
+    );
+    expect(files).toEqual(["a.mthds", "sub/b.mthds", "c.mthds"]);
+  });
+
+  it("skips Delete File and Move from headers, and non-mthds files", () => {
+    const files = extractCodexMthdsFiles(
+      envelope("*** Delete File: gone.mthds\n*** Move from: old.mthds\n*** Update File: code.py\n"),
+    );
+    expect(files).toEqual([]);
+  });
+
+  it("returns empty on unparseable input or missing command", () => {
+    expect(extractCodexMthdsFiles("not json")).toEqual([]);
+    expect(extractCodexMthdsFiles(JSON.stringify({ tool_input: {} }))).toEqual([]);
+  });
+});
+
+describe("extractVibeMthdsFilePath", () => {
+  it("reads the path from the tool_output/tool_input fallback chain with cwd", () => {
+    const payload = JSON.stringify({
+      tool_status: "success",
+      cwd: "/work",
+      tool_output: { file: "demo.mthds" },
+    });
+    expect(extractVibeMthdsFilePath(payload)).toEqual({ filePath: "demo.mthds", cwd: "/work" });
+  });
+
+  it("falls back to tool_input.path", () => {
+    const payload = JSON.stringify({
+      tool_status: "success",
+      tool_input: { path: "x/demo.mthds" },
+    });
+    expect(extractVibeMthdsFilePath(payload)).toEqual({ filePath: "x/demo.mthds", cwd: undefined });
+  });
+
+  it("ignores failed tool calls and non-mthds paths", () => {
+    expect(
+      extractVibeMthdsFilePath(
+        JSON.stringify({ tool_status: "error", tool_output: { file: "demo.mthds" } }),
+      ),
+    ).toBeNull();
+    expect(
+      extractVibeMthdsFilePath(
+        JSON.stringify({ tool_status: "success", tool_output: { file: "demo.py" } }),
+      ),
+    ).toBeNull();
+    expect(extractVibeMthdsFilePath("not json")).toBeNull();
+  });
+});
+
+describe("mergeOutcomes", () => {
+  it("passes when everything passes", () => {
+    expect(mergeOutcomes([{ kind: "pass" }, { kind: "pass" }])).toEqual({ kind: "pass" });
+    expect(mergeOutcomes([])).toEqual({ kind: "pass" });
+  });
+
+  it("any block wins and reasons are joined", () => {
+    const merged = mergeOutcomes([
+      { kind: "pass" },
+      { kind: "block", reason: "first" },
+      { kind: "context", context: "note" },
+      { kind: "block", reason: "second" },
+    ]);
+    expect(merged).toEqual({ kind: "block", reason: "first\n\nsecond" });
+  });
+
+  it("contexts are joined when nothing blocks", () => {
+    const merged = mergeOutcomes([
+      { kind: "context", context: "a" },
+      { kind: "pass" },
+      { kind: "context", context: "b" },
+    ]);
+    expect(merged).toEqual({ kind: "context", context: "a\n\nb" });
+  });
+});
+
 describe("truncate", () => {
   it("leaves short text alone", () => {
     expect(truncate("short")).toBe("short");
@@ -196,5 +284,26 @@ describe("encodeOutcome", () => {
         additionalContext: "heads up",
       },
     });
+  });
+
+  it("codex shares the claude dialect", () => {
+    expect(encodeOutcome({ kind: "block", reason: "why" }, "codex")).toBe(
+      encodeOutcome({ kind: "block", reason: "why" }, "claude"),
+    );
+    expect(encodeOutcome({ kind: "context", context: "note" }, "codex")).toBe(
+      encodeOutcome({ kind: "context", context: "note" }, "claude"),
+    );
+  });
+
+  it("vibe speaks deny / hook_specific_output.additional_context", () => {
+    expect(JSON.parse(encodeOutcome({ kind: "block", reason: "why" }, "vibe"))).toEqual({
+      decision: "deny",
+      reason: "why",
+    });
+    expect(JSON.parse(encodeOutcome({ kind: "context", context: "note" }, "vibe"))).toEqual({
+      decision: "allow",
+      hook_specific_output: { additional_context: "note" },
+    });
+    expect(encodeOutcome({ kind: "pass" }, "vibe")).toBe("");
   });
 });
