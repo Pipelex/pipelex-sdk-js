@@ -11,7 +11,9 @@ import type {
 } from "mthds/protocol";
 import type {
   BuildInputsRequest,
+  BuildInputsResponse,
   BuildOutputRequest,
+  BuildOutputResponse,
   BuildRunnerRequest,
   BuildRunnerResponse,
   ConceptRequest,
@@ -262,9 +264,11 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   /**
-   * Issue a request and parse the JSON body, throwing a plain `Error` on a
-   * non-2xx response. Used by the build extensions and `health` — surfaces
-   * that don't need the protocol's structured error taxonomy.
+   * Issue a request and parse the JSON body, throwing a plain `Error` on a non-2xx
+   * response. Used only by `health` — the origin-level liveness probe, which sits
+   * outside `/v1` and outside the RFC 7807 error taxonomy the `/v1` routes share.
+   * Every `/v1` route goes through a helper that maps its problem body to the typed
+   * `ApiResponseError` instead.
    */
   private async requestJson<T>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -284,10 +288,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       throw new Error(`API ${method} ${url} failed (${res.status}): ${text || res.statusText}`);
     }
     return res.json() as Promise<T>;
-  }
-
-  private postApi<T>(path: string, body: unknown): Promise<T> {
-    return this.requestJson("POST", this.url(path), body);
   }
 
   /**
@@ -586,7 +586,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (source !== undefined) {
       body.source = source;
     }
-    return this.requestTool("lint", body);
+    return this.requestExtension("lint", body);
   }
 
   /**
@@ -606,15 +606,21 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (options !== undefined) {
       body.options = options;
     }
-    return this.requestTool("format", body);
+    return this.requestExtension("format", body);
   }
 
   /**
-   * POST one of the diagnostic tools routes. They answer fast (no inference), so
-   * they use the management-call timeout, and their non-2xx bodies are RFC 7807
-   * problems — mapped to the typed `ApiResponseError`, like the product routes.
+   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`) and
+   * the build projections (`build/*`). They answer fast (no inference), so they use
+   * the management-call timeout, and their non-2xx bodies are RFC 7807 problems —
+   * mapped to the typed `ApiResponseError`, like the product routes.
+   *
+   * The mapping is what makes their no-verdict arms usable: a build route answers
+   * `422` for an unresolvable pipe selector (unknown `pipe_ref`; or an omitted one
+   * on a closure declaring no `main_pipe`, or several) and `501` for the reserved
+   * `method_ref`. A caller branches on `ApiResponseError.status`, never on a message.
    */
-  private async requestTool<T>(endpoint: string, body: Record<string, unknown>): Promise<T> {
+  private async requestExtension<T>(endpoint: string, body: unknown): Promise<T> {
     const res = await this.requestRaw("POST", this.url(endpoint), {
       body,
       timeoutMs: POLL_REQUEST_TIMEOUT_MS,
@@ -653,24 +659,53 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
 
-  async buildInputs(request: BuildInputsRequest): Promise<unknown> {
-    return this.postApi("build/inputs", request);
+  /**
+   * Project a pipe's declared inputs as a fill-in template — `POST /v1/build/inputs`.
+   *
+   * Supply the closure as `files` (each `{content, source?}`) and, optionally, the
+   * QUALIFIED `pipe_ref` to project; omitting it defaults to the closure's
+   * `main_pipe`. The template rides `inputs` (a parsed object) for `format: "json"`,
+   * the default, and `inputs_toml` (raw text) for `format: "toml"`.
+   *
+   * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — an
+   * unresolvable closure comes back as `is_valid: false` with `validation_errors[]`,
+   * not as a thrown error.
+   */
+  async buildInputs(request: BuildInputsRequest): Promise<BuildInputsResponse> {
+    return this.requestExtension("build/inputs", request);
   }
 
-  async buildOutput(request: BuildOutputRequest): Promise<unknown> {
-    return this.postApi("build/output", request);
+  /**
+   * Project a pipe's output concept — `POST /v1/build/output`. Same envelope and
+   * same 200-verdict discipline as {@link buildInputs}. `format: "schema"` (the
+   * default) and `"json"` put a parsed object in `output`; `"python"` puts source
+   * text in `output_python`.
+   */
+  async buildOutput(request: BuildOutputRequest): Promise<BuildOutputResponse> {
+    return this.requestExtension("build/output", request);
   }
 
+  /**
+   * Generate a runnable Python script plus its stamped typed structures —
+   * `POST /v1/build/runner`. Same envelope and same 200-verdict discipline as
+   * {@link buildInputs}.
+   *
+   * Alone among the build routes this one dry-runs the closure, so it also takes
+   * `allow_signatures` (accept unresolved pipe signatures as pending). Note that
+   * omitting `pipe_ref` sweeps the WHOLE closure rather than just the defaulted
+   * pipe — the default can only be resolved after the sweep has run — so a broken
+   * sibling pipe can sink the request. Pass `pipe_ref` to scope the sweep.
+   */
   async buildRunner(request: BuildRunnerRequest): Promise<BuildRunnerResponse> {
-    return this.postApi("build/runner", request);
+    return this.requestExtension("build/runner", request);
   }
 
   async concept(request: ConceptRequest): Promise<ConceptResponse> {
-    return this.postApi("build/concept", request);
+    return this.requestExtension("build/concept", request);
   }
 
   async pipeSpec(request: PipeSpecRequest): Promise<PipeSpecResponse> {
-    return this.postApi("build/pipe-spec", request);
+    return this.requestExtension("build/pipe-spec", request);
   }
 
   // ── Hosted extension: durable run lifecycle (NOT part of the protocol) ──

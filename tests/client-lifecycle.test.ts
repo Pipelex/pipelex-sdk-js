@@ -295,7 +295,7 @@ describe("PipelexApiClient run-lifecycle delegation", () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(async () => jsonResponse(200, {}));
-    await client.buildInputs({ mthds_contents: ["x"], pipe_code: "p" });
+    await client.buildInputs({ files: [{ content: "x" }] });
     await client.concept({ spec: {} });
     await client.pipeSpec({ pipe_type: "PipeLLM", spec: {} });
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/build/inputs");
