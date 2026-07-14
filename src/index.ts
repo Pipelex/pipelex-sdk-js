@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.3.1";
+export const SDK_VERSION = "0.4.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
