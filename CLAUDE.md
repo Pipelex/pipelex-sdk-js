@@ -20,6 +20,7 @@ TypeScript SDK for the **Pipelex hosted API**. It owns the Pipelex-branded produ
 make install    # Install dependencies
 make check      # Lint + format check + typecheck + build + depcruise (alias: make c)
 make test       # Run the test suite (alias: make t)
+make test-e2e   # E2E suite against a live pipelex-api (alias: make te) — PIPELEX_E2E_BASE_URL, default http://localhost:8081
 make all        # Clean, check, and test
 make build      # TypeScript compilation only
 make clean      # Remove dist/ and tsbuildinfo
@@ -39,6 +40,7 @@ src/
 ├── runs.ts         # Run-lifecycle types + the single poll loop (pollUntilResult)
 └── errors.ts       # Typed errors (derive from PipelineRequestError from mthds/protocol)
 tests/              # Vitest suites (mock the fetch boundary)
+tests/e2e/          # E2E suites (*.e2e.ts) against a LIVE pipelex-api — excluded from `make test`, run via `make test-e2e`
 docs/               # Architecture and surface documentation
 ```
 

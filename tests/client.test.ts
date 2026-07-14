@@ -868,3 +868,139 @@ describe("PipelexApiClient.validate render extra", () => {
     expect(bodyOf(fetchSpy).render).toEqual(["html", "markdown"]);
   });
 });
+
+describe("PipelexApiClient.lint", () => {
+  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
+    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+  }
+
+  it("POSTs /v1/lint and returns the diagnostics of a clean file", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    const result = await client.lint("domain = 'x'");
+    expect(result.diagnostics).toEqual([]);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/lint");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain = 'x'" });
+  });
+
+  it("returns malformed content as a 200 verdict rather than throwing", async () => {
+    const client = makeClient();
+    const diagnostic = {
+      kind: "syntax",
+      severity: "error",
+      message: "expected '='",
+      location: null,
+      range: {
+        start_offset: 0,
+        end_offset: 6,
+        start_line: 1,
+        start_col: 1,
+        end_line: 1,
+        end_col: 7,
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { diagnostics: [diagnostic] }),
+    );
+    const result = await client.lint("domain");
+    expect(result.diagnostics[0]!.kind).toBe("syntax");
+    expect(result.diagnostics[0]!.range?.end_col).toBe(7);
+  });
+
+  it("sends the optional source label when given", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    await client.lint("domain = 'x'", "recipe.mthds");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain = 'x'", source: "recipe.mthds" });
+  });
+
+  it("omits source from the wire body when not given", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    await client.lint("domain = 'x'");
+    expect("source" in bodyOf(fetchSpy)).toBe(false);
+  });
+
+  it("maps a non-2xx problem response to ApiResponseError", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(422, { detail: { error_type: "RequestValidationError", message: "bad body" } }),
+    );
+    await expect(client.lint("domain = 'x'")).rejects.toBeInstanceOf(ApiResponseError);
+  });
+});
+
+describe("PipelexApiClient.format", () => {
+  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
+    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+  }
+
+  it("POSTs /v1/format and returns the formatted content", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        formatted: "domain = 'x'\n",
+        changed: true,
+        diagnostics: [],
+      }),
+    );
+    const result = await client.format("domain='x'");
+    expect(result.formatted).toBe("domain = 'x'\n");
+    expect(result.changed).toBe(true);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/format");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain='x'" });
+  });
+
+  it("returns a syntax error as a 200 verdict with unchanged content", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        formatted: "domain",
+        changed: false,
+        diagnostics: [
+          {
+            kind: "syntax",
+            severity: "error",
+            message: "expected '='",
+            location: null,
+            range: null,
+          },
+        ],
+      }),
+    );
+    const result = await client.format("domain");
+    expect(result.changed).toBe(false);
+    expect(result.formatted).toBe("domain");
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("passes formatter options through to the server", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { formatted: "", changed: false, diagnostics: [] }));
+    await client.format("domain = 'x'", { column_width: 100 });
+    expect(bodyOf(fetchSpy)).toEqual({
+      content: "domain = 'x'",
+      options: { column_width: 100 },
+    });
+  });
+
+  it("maps malformed formatter options (422) to ApiResponseError", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(422, { detail: { error_type: "ValueError", message: "bad column_width" } }),
+    );
+    await expect(client.format("domain = 'x'", { column_width: "wide" })).rejects.toMatchObject({
+      status: 422,
+    });
+  });
+});

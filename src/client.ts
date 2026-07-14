@@ -11,13 +11,17 @@ import type {
 } from "mthds/protocol";
 import type {
   BuildInputsRequest,
+  BuildInputsResponse,
   BuildOutputRequest,
+  BuildOutputResponse,
   BuildRunnerRequest,
   BuildRunnerResponse,
   ConceptRequest,
   ConceptResponse,
   DictPipeOutput,
   DictRunResultExecute,
+  FormatResponse,
+  LintResponse,
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexValidationResult,
@@ -114,6 +118,11 @@ const RUNS = "runs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 1_200_000; // 20 min — matches the runner's blocking execute ceiling.
 const POLL_REQUEST_TIMEOUT_MS = 30_000; // single status/result GETs; the hosted gateway caps responses at ~30s.
+// `build/runner` is the one extension route that dry-run-sweeps the closure, and it
+// sweeps the WHOLE closure when `pipe_ref` is omitted. The 30s management timeout is
+// sized for the static routes; a large closure legitimately exceeds it, and aborting
+// it would surface as `ApiUnreachableError` — blaming the network for a healthy server.
+const BUILD_RUNNER_TIMEOUT_MS = 300_000; // 5 min
 const DEFAULT_DEGRADED_RETRY_SECONDS = 5; // matches the platform's `_DEGRADE_RETRY_AFTER_SECONDS`.
 const VALIDATE_MARKDOWN_RENDER_FORMAT = "markdown";
 
@@ -132,6 +141,8 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
+ * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
+ *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
  *   durable polling extension that survives long runs and lets a caller resume by
  *   id. Served only by a deployment that includes the platform block (the Pipelex
@@ -258,9 +269,11 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   /**
-   * Issue a request and parse the JSON body, throwing a plain `Error` on a
-   * non-2xx response. Used by the build extensions and `health` — surfaces
-   * that don't need the protocol's structured error taxonomy.
+   * Issue a request and parse the JSON body, throwing a plain `Error` on a non-2xx
+   * response. Used only by `health` — the origin-level liveness probe, which sits
+   * outside `/v1` and outside the RFC 7807 error taxonomy the `/v1` routes share.
+   * Every `/v1` route goes through a helper that maps its problem body to the typed
+   * `ApiResponseError` instead.
    */
   private async requestJson<T>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     const headers: Record<string, string> = { Accept: "application/json" };
@@ -280,10 +293,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       throw new Error(`API ${method} ${url} failed (${res.status}): ${text || res.statusText}`);
     }
     return res.json() as Promise<T>;
-  }
-
-  private postApi<T>(path: string, body: unknown): Promise<T> {
-    return this.requestJson("POST", this.url(path), body);
   }
 
   /**
@@ -561,6 +570,79 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     );
   }
 
+  // ── Tools extensions (Pipelex API — `/v1/lint`, `/v1/format`) ─────────
+
+  /**
+   * Lint one `.mthds` file against the embedded MTHDS schema — `POST /v1/lint`.
+   *
+   * A diagnostic endpoint, like `validate`: malformed content is a produced verdict
+   * on a 200 carrying `diagnostics[]` (empty when the file is clean), never a thrown
+   * error. Only a no-verdict condition (a malformed request, auth, a server fault) is
+   * non-2xx and surfaces as `ApiResponseError`.
+   *
+   * `source` is an optional logical filename accepted for parity with the local
+   * tooling; today's diagnostics do not echo it back.
+   *
+   * Unlike `validate`, this is a static single-file check — no bundle load, no
+   * dry-run, no cross-file resolution. Use `validate` for the full verdict.
+   */
+  async lint(content: string, source?: string): Promise<LintResponse> {
+    const body: Record<string, unknown> = { content };
+    if (source !== undefined) {
+      body.source = source;
+    }
+    return this.requestExtension("lint", body);
+  }
+
+  /**
+   * Format one `.mthds` file with the canonical MTHDS formatter — `POST /v1/format`.
+   *
+   * Returns the formatted content, a `changed` flag, and any `diagnostics[]`. A syntax
+   * error is a produced verdict on a 200: the content comes back unchanged
+   * (`changed: false`) with the diagnostics that explain why. Malformed formatter
+   * `options` (e.g. a non-numeric `column_width`) ARE caller input errors and surface as
+   * a 422 `ApiResponseError`.
+   *
+   * `options` passes formatter settings (e.g. `{ column_width: 100 }`) straight through
+   * to the server-side formatter.
+   */
+  async format(content: string, options?: Record<string, unknown>): Promise<FormatResponse> {
+    const body: Record<string, unknown> = { content };
+    if (options !== undefined) {
+      body.options = options;
+    }
+    return this.requestExtension("format", body);
+  }
+
+  /**
+   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`) and
+   * the build projections (`build/*`). Their non-2xx bodies are RFC 7807 problems,
+   * mapped to the typed `ApiResponseError` like the product routes.
+   *
+   * The mapping is what makes their no-verdict arms usable: a build route answers
+   * `422` for an unresolvable pipe selector (unknown `pipe_ref`; or an omitted one
+   * on a closure declaring no `main_pipe`, or several) and `501` for the reserved
+   * `method_ref`. A caller branches on `ApiResponseError.status`, never on a message.
+   *
+   * All of these are inference-free, so they default to the management-call timeout.
+   * `build/runner` is the exception — it dry-run-sweeps the closure — and overrides it
+   * via `timeoutMs`.
+   */
+  private async requestExtension<T>(
+    endpoint: string,
+    body: unknown,
+    options: { timeoutMs?: number } = {},
+  ): Promise<T> {
+    const res = await this.requestRaw("POST", this.url(endpoint), {
+      body,
+      timeoutMs: options.timeoutMs ?? POLL_REQUEST_TIMEOUT_MS,
+    });
+    if (res.status < 200 || res.status >= 300) {
+      this.throwApiResponseError("POST", endpoint, res);
+    }
+    return JSON.parse(res.body) as T;
+  }
+
   /** The model deck the runner can route to — `GET /v1/models[?type=]`. */
   async models(category?: ModelCategory): Promise<ModelDeck> {
     const endpoint = category ? `models?type=${encodeURIComponent(category)}` : "models";
@@ -589,24 +671,62 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
 
-  async buildInputs(request: BuildInputsRequest): Promise<unknown> {
-    return this.postApi("build/inputs", request);
+  /**
+   * Project a pipe's declared inputs as a fill-in template — `POST /v1/build/inputs`.
+   *
+   * Supply the closure as `files` (each `{content, source?}`) and, optionally, the
+   * QUALIFIED `pipe_ref` to project; omitting it defaults to the closure's
+   * `main_pipe`. The template rides `inputs` (a parsed object) for `format: "json"`,
+   * the default, and `inputs_toml` (raw text) for `format: "toml"`.
+   *
+   * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — an
+   * unresolvable closure comes back as `is_valid: false` with `validation_errors[]`,
+   * not as a thrown error.
+   */
+  async buildInputs(request: BuildInputsRequest): Promise<BuildInputsResponse> {
+    return this.requestExtension("build/inputs", request);
   }
 
-  async buildOutput(request: BuildOutputRequest): Promise<unknown> {
-    return this.postApi("build/output", request);
+  /**
+   * Project a pipe's output concept — `POST /v1/build/output`. Same envelope and
+   * same 200-verdict discipline as {@link buildInputs}. `format: "schema"` (the
+   * default) and `"json"` put a parsed object in `output`; `"python"` puts source
+   * text in `output_python`.
+   */
+  async buildOutput(request: BuildOutputRequest): Promise<BuildOutputResponse> {
+    return this.requestExtension("build/output", request);
   }
 
-  async buildRunner(request: BuildRunnerRequest): Promise<BuildRunnerResponse> {
-    return this.postApi("build/runner", request);
+  /**
+   * Generate a runnable Python script plus its stamped typed structures —
+   * `POST /v1/build/runner`. Same envelope and same 200-verdict discipline as
+   * {@link buildInputs}.
+   *
+   * Alone among the build routes this one dry-runs the closure, so it also takes
+   * `allow_signatures` (accept unresolved pipe signatures as pending). Note that
+   * omitting `pipe_ref` sweeps the WHOLE closure rather than just the defaulted
+   * pipe — the default can only be resolved after the sweep has run — so a broken
+   * sibling pipe can sink the request. Pass `pipe_ref` to scope the sweep.
+   *
+   * Because of that sweep it is the one extension route that can legitimately run
+   * long, so it gets its own generous timeout (5 min) rather than the 30s the static
+   * routes use. Override it per call with `options.timeoutMs`.
+   */
+  async buildRunner(
+    request: BuildRunnerRequest,
+    options: { timeoutMs?: number } = {},
+  ): Promise<BuildRunnerResponse> {
+    return this.requestExtension("build/runner", request, {
+      timeoutMs: options.timeoutMs ?? BUILD_RUNNER_TIMEOUT_MS,
+    });
   }
 
   async concept(request: ConceptRequest): Promise<ConceptResponse> {
-    return this.postApi("build/concept", request);
+    return this.requestExtension("build/concept", request);
   }
 
   async pipeSpec(request: PipeSpecRequest): Promise<PipeSpecResponse> {
-    return this.postApi("build/pipe-spec", request);
+    return this.requestExtension("build/pipe-spec", request);
   }
 
   // ── Hosted extension: durable run lifecycle (NOT part of the protocol) ──
