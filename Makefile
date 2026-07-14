@@ -94,6 +94,7 @@ c: check
 clean:
 	$(call PRINT_TITLE,"Cleaning Build Artifacts")
 	@rm -rf dist/
+	@rm -rf dist-hooks/
 	@rm -rf *.tsbuildinfo
 	@echo "$(GREEN)✓ Clean complete$(NC)"
 

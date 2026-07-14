@@ -37,13 +37,15 @@ export const DEFAULT_GATHER_CAPS: GatherCaps = {
 export type GatherResult =
   { ok: true; files: MthdsFile[] } | { ok: false; reason: "overflow" | "unreadable" };
 
+/**
+ * Recursively collect `.mthds` paths under `dir`. Throws if any directory in
+ * the tree can't be read: a silently-skipped subtree would drop cross-file
+ * refs and risk a FALSE invalid verdict, so the caller must treat an
+ * unreadable scan as `unreadable` (validate unavailable), not as a smaller
+ * bundle. The caps guard the opposite failure (over-supply), never this one.
+ */
 function walkMthdsFiles(dir: string, collected: string[]): void {
-  let entries;
-  try {
-    entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return; // unreadable subdirectory — skip, the cap check guards correctness
-  }
+  const entries = readdirSync(dir, { withFileTypes: true });
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith(".") || EXCLUDED_DIRS.has(entry.name)) {
       continue;
@@ -71,7 +73,11 @@ export function gatherBundle(
   const parentDir = dirname(editedAbs);
 
   const paths: string[] = [];
-  walkMthdsFiles(parentDir, paths);
+  try {
+    walkMthdsFiles(parentDir, paths);
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
 
   const ordered = [editedAbs, ...paths.filter((path) => resolve(path) !== editedAbs)];
   if (ordered.length > caps.maxFiles) {

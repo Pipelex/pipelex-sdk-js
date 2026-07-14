@@ -5,7 +5,7 @@
  * `unavailable` upstream (an under-supplied bundle risks a false block).
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -88,5 +88,26 @@ describe("gatherBundle", () => {
     rmSync(edited);
     const result = gatherBundle(edited);
     expect(result).toEqual({ ok: false, reason: "unreadable" });
+  });
+
+  it("reports unreadable when a subdirectory cannot be scanned", ({ skip }) => {
+    // Root can traverse a 0-perm directory, so this scenario is unobservable
+    // when the suite runs as root (common in CI containers).
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      skip();
+      return;
+    }
+    const edited = put("main.mthds");
+    const locked = join(root, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "hidden.mthds"), `domain = "d"\n`);
+    chmodSync(locked, 0o000);
+    try {
+      const result = gatherBundle(edited);
+      expect(result).toEqual({ ok: false, reason: "unreadable" });
+    } finally {
+      // Restore perms so afterEach can remove the tree.
+      chmodSync(locked, 0o700);
+    }
   });
 });

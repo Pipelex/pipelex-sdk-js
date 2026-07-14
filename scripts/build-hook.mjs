@@ -66,7 +66,7 @@ await build({
   outfile: resolve(repoRoot, "dist-hooks/check.mjs"),
   bundle: true,
   platform: "node",
-  target: "node18",
+  target: "node22",
   format: "esm",
   ...(toolsWasmAlias ? { alias: toolsWasmAlias } : {}),
   banner: { js: banner },
