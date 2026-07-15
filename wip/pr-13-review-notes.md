@@ -5,7 +5,7 @@ Confirmed-but-deferred items from the SWE-agent review of https://github.com/Pip
 ## 1. `files` XOR `method_ref` is not enforced client-side
 
 - **Reporter:** cubic-dev-ai — [thread](https://github.com/Pipelex/pipelex-sdk-js/pull/13) on `src/models.ts` (`BuildRequestBase`).
-- **Issue:** The wire contract requires exactly one of `files[]` / `method_ref` (`../docs/specs/pipelex-codegen.md` — neither or both ⇒ 422), but `BuildRequestBase` models them as two independent optionals, so a request with neither (or both) type-checks and only fails after the network call.
+- **Issue:** The wire contract requires exactly one of `files[]` / `method_ref` ([`docs/build-routes.md`](../docs/build-routes.md) — "either … or … never both"; spec source: `docs/specs/pipelex-codegen.md` at the Pipelex workspace root — neither or both ⇒ 422), but `BuildRequestBase` models them as two independent optionals, so a request with neither (or both) type-checks and only fails after the network call.
 - **Why deferred (needs-judgment):** `method_ref` is reserved — the server answers 501 for it today — so the "both" arm is academic, and the TS XOR-union pattern (`{files; method_ref?: never} | {files?: never; method_ref}`) would force `BuildRequestBase` from an interface into a union and the three route request types from `extends` into intersections. Disproportionate ceremony for a field nobody can use yet.
 - **Recommendation:** if/when this gap is closed (e.g. when `method_ref` becomes real), prefer a small runtime fail-fast guard shared by the three build methods — throw `PipelineRequestError` before the network call, matching the `execute`/`start`/`validateFiles` idiom — over the type-level union.
 
