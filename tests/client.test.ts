@@ -40,6 +40,12 @@ function textResponse(status: number, body: string, statusText = ""): Response {
   return new Response(body, { status, statusText });
 }
 
+/** The JSON body of the first request a spied fetch received. */
+function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+  const init = fetchSpy.mock.calls[0]![1] as { body?: string };
+  return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -680,11 +686,6 @@ describe("PipelexApiClient.validate", () => {
 });
 
 describe("PipelexApiClient.validateFiles", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("sends content and sources for files that all have URIs", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -768,6 +769,58 @@ describe("PipelexApiClient.validateFiles", () => {
       render: ["markdown"],
     });
   });
+
+  // validate/validateFiles default to the 20-min execute ceiling; a bounded
+  // consumer (the post-edit hook) needs a per-call ceiling that actually aborts
+  // the fetch, not a Promise.race that leaves the request running.
+  describe("timeout and abort options", () => {
+    function hangingFetch(): typeof fetch {
+      return ((_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        })) as typeof fetch;
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("honors a caller-supplied timeoutMs, aborting the request itself", async () => {
+      vi.useFakeTimers();
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+      const client = makeClient();
+
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { timeoutMs: 1_000 })
+        .catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const err = await failure;
+      expect(err).toBeInstanceOf(ApiUnreachableError);
+      expect((err as ApiUnreachableError).code).toBe("ABORT_TIMEOUT");
+      // The fetch itself was handed an abort signal that has fired.
+      const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+      expect(init.signal?.aborted).toBe(true);
+    });
+
+    it("lets a caller-supplied signal abort validate, propagating the reason untouched", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+      const client = makeClient();
+
+      const controller = new AbortController();
+      const walkAway = new Error("caller walked away");
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { signal: controller.signal })
+        .catch((e: unknown) => e);
+
+      controller.abort(walkAway);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await failure).toBe(walkAway);
+    });
+  });
 });
 
 describe("PipelexApiClient.models", () => {
@@ -819,11 +872,6 @@ describe("PipelexApiClient.version", () => {
 });
 
 describe("PipelexApiClient.validate render extra", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("sends markdown render in the request body when asked", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -866,5 +914,131 @@ describe("PipelexApiClient.validate render extra", () => {
       );
     await client.validate(["domain = 'x'"], false, undefined, ["html"]);
     expect(bodyOf(fetchSpy).render).toEqual(["html", "markdown"]);
+  });
+});
+
+describe("PipelexApiClient.lint", () => {
+  it("POSTs /v1/lint and returns the diagnostics of a clean file", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    const result = await client.lint("domain = 'x'");
+    expect(result.diagnostics).toEqual([]);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/lint");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain = 'x'" });
+  });
+
+  it("returns malformed content as a 200 verdict rather than throwing", async () => {
+    const client = makeClient();
+    const diagnostic = {
+      kind: "syntax",
+      severity: "error",
+      message: "expected '='",
+      location: null,
+      range: {
+        start_offset: 0,
+        end_offset: 6,
+        start_line: 1,
+        start_col: 1,
+        end_line: 1,
+        end_col: 7,
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { diagnostics: [diagnostic] }),
+    );
+    const result = await client.lint("domain");
+    expect(result.diagnostics[0]!.kind).toBe("syntax");
+    expect(result.diagnostics[0]!.range?.end_col).toBe(7);
+  });
+
+  it("sends the optional source label when given", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    await client.lint("domain = 'x'", "recipe.mthds");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain = 'x'", source: "recipe.mthds" });
+  });
+
+  it("omits source from the wire body when not given", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { diagnostics: [] }));
+    await client.lint("domain = 'x'");
+    expect("source" in bodyOf(fetchSpy)).toBe(false);
+  });
+
+  it("maps a non-2xx problem response to ApiResponseError", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(422, { detail: { error_type: "RequestValidationError", message: "bad body" } }),
+    );
+    await expect(client.lint("domain = 'x'")).rejects.toBeInstanceOf(ApiResponseError);
+  });
+});
+
+describe("PipelexApiClient.format", () => {
+  it("POSTs /v1/format and returns the formatted content", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        formatted: "domain = 'x'\n",
+        changed: true,
+        diagnostics: [],
+      }),
+    );
+    const result = await client.format("domain='x'");
+    expect(result.formatted).toBe("domain = 'x'\n");
+    expect(result.changed).toBe(true);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/format");
+    expect(bodyOf(fetchSpy)).toEqual({ content: "domain='x'" });
+  });
+
+  it("returns a syntax error as a 200 verdict with unchanged content", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        formatted: "domain",
+        changed: false,
+        diagnostics: [
+          {
+            kind: "syntax",
+            severity: "error",
+            message: "expected '='",
+            location: null,
+            range: null,
+          },
+        ],
+      }),
+    );
+    const result = await client.format("domain");
+    expect(result.changed).toBe(false);
+    expect(result.formatted).toBe("domain");
+    expect(result.diagnostics).toHaveLength(1);
+  });
+
+  it("passes formatter options through to the server", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { formatted: "", changed: false, diagnostics: [] }));
+    await client.format("domain = 'x'", { column_width: 100 });
+    expect(bodyOf(fetchSpy)).toEqual({
+      content: "domain = 'x'",
+      options: { column_width: 100 },
+    });
+  });
+
+  it("maps malformed formatter options (422) to ApiResponseError", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(422, { detail: { error_type: "ValueError", message: "bad column_width" } }),
+    );
+    await expect(client.format("domain = 'x'", { column_width: "wide" })).rejects.toMatchObject({
+      status: 422,
+    });
   });
 });

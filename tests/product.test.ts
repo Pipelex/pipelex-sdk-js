@@ -185,7 +185,10 @@ describe("billing", () => {
 
   it("GETs /v1/billing/plans and /v1/billing/invoices", async () => {
     const client = makeClient();
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, []));
+    // A fresh Response per call — a body is single-read across the two requests.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(jsonResponse(200, [])));
 
     await client.listPlans();
     expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/billing/plans");

@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.3.1";
+export const SDK_VERSION = "0.4.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -23,8 +23,13 @@ export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from ".
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
 
-// ── Wire models (Dict concretes, validate surface, build routes) ─────
+// ── Wire models (Dict concretes, validate surface, tools + build routes) ─────
 export type {
+  DiagnosticKind,
+  DiagnosticRange,
+  Diagnostic,
+  LintResponse,
+  FormatResponse,
   DictStuff,
   DictWorkingMemory,
   DictPipeOutput,
@@ -37,11 +42,22 @@ export type {
   ValidationErrorCategory,
   ValidationErrorItem,
   ConceptRepresentationFormat,
+  InputsTemplateFormat,
+  MthdsFileItem,
+  BuildRequestBase,
   BuildInputsRequest,
   BuildOutputRequest,
   BuildRunnerRequest,
   ConceptRequest,
   PipeSpecRequest,
+  CrateInvalidReport,
+  BuildInputsValidReport,
+  BuildOutputValidReport,
+  BuildRunnerValidReport,
+  GeneratedArtifact,
+  RunnerStructures,
+  BuildInputsResponse,
+  BuildOutputResponse,
   BuildRunnerResponse,
   ConceptResponse,
   PipeSpecResponse,
