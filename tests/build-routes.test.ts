@@ -355,4 +355,64 @@ describe("build routes — buildRunner gets its own timeout", () => {
     expect(runner.settled).toBe(true);
     expect(runner.error).toBeInstanceOf(ApiUnreachableError);
   });
+
+  it("lets a caller-supplied signal abort buildRunner before the timeout", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const controller = new AbortController();
+    const walkAway = new Error("caller walked away");
+    const runner = track(
+      client.buildRunner(
+        { files: [{ content: "domain = 'smoke'\n" }] },
+        { signal: controller.signal },
+      ),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(runner.settled).toBe(false);
+
+    controller.abort(walkAway);
+    await vi.advanceTimersByTimeAsync(0);
+    // A caller abort propagates untouched — it is not a network failure.
+    expect(runner.settled).toBe(true);
+    expect(runner.error).toBe(walkAway);
+  });
+
+  /**
+   * A fetch that answers headers immediately, then stalls the body; the body read
+   * only rejects when the request's abort signal fires.
+   */
+  function stalledBodyFetch(): typeof fetch {
+    return ((_url: string, init?: RequestInit) =>
+      Promise.resolve({
+        status: 200,
+        statusText: "OK",
+        headers: new Headers(),
+        text: () =>
+          new Promise<string>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      } as unknown as Response)) as typeof fetch;
+  }
+
+  it("keeps the timeout armed while the response body streams", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(stalledBodyFetch());
+    const client = makeClient();
+
+    // Headers arrive instantly, then the body stalls: the advertised timeout must
+    // still fire instead of hanging on `response.text()` forever.
+    const runner = track(
+      client.buildRunner({ files: [{ content: "domain = 'smoke'\n" }] }, { timeoutMs: 1_000 }),
+    );
+
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(runner.settled).toBe(true);
+    expect(runner.error).toBeInstanceOf(ApiUnreachableError);
+    expect((runner.error as ApiUnreachableError).code).toBe("ABORT_TIMEOUT");
+  });
 });

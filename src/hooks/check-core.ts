@@ -157,11 +157,17 @@ export function truncate(text: string): string {
   return `${text.slice(0, MAX_OUTPUT_CHARS)}\n\n[truncated, ${omitted} chars omitted]`;
 }
 
-/** One diagnostic as an agent-actionable line: severity, span, message. */
+/**
+ * One diagnostic as an agent-actionable line: severity, locators, message.
+ * `location` and `range` are independent — a schema/semantic diagnostic can name
+ * its target (a pipe, a concept) without a byte span, so both render when present.
+ */
 function renderDiagnosticLine(diagnostic: Diagnostic): string {
-  const span = diagnostic.range
-    ? ` (line ${diagnostic.range.start_line}, col ${diagnostic.range.start_col})`
-    : "";
+  const locators = [
+    diagnostic.location,
+    diagnostic.range && `line ${diagnostic.range.start_line}, col ${diagnostic.range.start_col}`,
+  ].filter(Boolean);
+  const span = locators.length > 0 ? ` (${locators.join(", ")})` : "";
   return `- [${diagnostic.kind}/${diagnostic.severity}] ${diagnostic.message}${span}`;
 }
 

@@ -81,6 +81,10 @@ export interface ValidateFilesOptions {
   allowSignatures?: boolean;
   /** Optional validate presentation hints, e.g. ["markdown"]. */
   render?: string[];
+  /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
+  timeoutMs?: number;
+  /** Caller-driven cancellation; the abort reason propagates untouched. */
+  signal?: AbortSignal;
 }
 
 export interface PipelexApiClientOptions {
@@ -232,6 +236,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     }
 
     let response: Response;
+    let body: string;
     try {
       response = await fetch(url, {
         method,
@@ -239,6 +244,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
         body: hasBody ? JSON.stringify(options.body) : undefined,
         signal: controller.signal,
       });
+      // The body streams after the headers; keep the timer/abort armed until it
+      // has fully arrived, or a stalled body would hang past the advertised
+      // timeout with no way to cancel.
+      body = await response.text();
     } catch (err) {
       // A caller-initiated abort (not our timeout) propagates untouched so
       // `waitForResult` callers can distinguish "I stopped waiting" from a
@@ -259,7 +268,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       if (userSignal) userSignal.removeEventListener("abort", onUserAbort);
     }
 
-    const body = await response.text().catch(() => "");
     return {
       status: response.status,
       statusText: response.statusText,
@@ -522,6 +530,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     allowSignatures = false,
     mthdsSources?: string[],
     render?: string[],
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<PipelexValidationResult> {
     const body: Record<string, unknown> = {
       mthds_contents: mthdsContents,
@@ -531,7 +540,11 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       body.mthds_sources = mthdsSources;
     }
     body.render = withValidateMarkdownRender(render);
-    const res = await this.requestRaw("POST", this.url("validate"), { body });
+    const res = await this.requestRaw("POST", this.url("validate"), {
+      body,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+    });
     if (res.status < 200 || res.status >= 300) {
       this.throwApiResponseError("POST", "validate", res);
     }
@@ -567,6 +580,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       options.allowSignatures ?? false,
       mthdsSources,
       options.render,
+      {
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+      },
     );
   }
 
@@ -631,11 +648,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   private async requestExtension<T>(
     endpoint: string,
     body: unknown,
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<T> {
     const res = await this.requestRaw("POST", this.url(endpoint), {
       body,
       timeoutMs: options.timeoutMs ?? POLL_REQUEST_TIMEOUT_MS,
+      signal: options.signal,
     });
     if (res.status < 200 || res.status >= 300) {
       this.throwApiResponseError("POST", endpoint, res);
@@ -710,14 +728,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *
    * Because of that sweep it is the one extension route that can legitimately run
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
-   * routes use. Override it per call with `options.timeoutMs`.
+   * routes use. Override it per call with `options.timeoutMs`; a caller that stops
+   * caring mid-sweep can cancel via `options.signal` instead of waiting it out.
    */
   async buildRunner(
     request: BuildRunnerRequest,
-    options: { timeoutMs?: number } = {},
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<BuildRunnerResponse> {
     return this.requestExtension("build/runner", request, {
       timeoutMs: options.timeoutMs ?? BUILD_RUNNER_TIMEOUT_MS,
+      signal: options.signal,
     });
   }
 

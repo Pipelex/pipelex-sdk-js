@@ -72,6 +72,10 @@ The hosted catalog/account routes the webapp drives. All ride the same `{base}/v
 - **Storage:** `resolveStorageUrl`, `upload` (JSON base64 — the multipart hop is browser→BFF only).
 - **Runs list/update:** `listRuns` (by `method_id`), `updateRun` (admin/manual status patch). The status/results/start lifecycle routes live in the run-lifecycle section above.
 
+## Hook bundle (`dist-hooks/check.mjs`)
+
+`src/hooks/` holds the post-edit `.mthds` hook pipeline (local lint/format via `@pipelex/tools-wasm`, then a `POST /v1/validate` verdict through this SDK), bundled into a single dependency-free ESM file by `npm run build:hook`. **Distribution is source-checkout vendoring, not npm:** `pipelex-plugins` runs `make vendor-hook`, which builds `dist-hooks/check.mjs` in a sibling checkout of this repo and copies it in as a static hook asset — the published `@pipelex/sdk` tarball deliberately does not ship the bundle (it inlines the ~4 MB WASM engine, and no npm consumer of the SDK's library API uses it). `dist-hooks/` is gitignored; the consumer repo's own checks gate a stale vendored copy.
+
 ## Testing
 
 Two layers, split by whether a server is in the loop:

@@ -234,7 +234,11 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
   it("the run-lifecycle primitives surface RunLifecycleUnavailableError on the bare 404", async () => {
     const client = makeClient();
     // Bare runner: Starlette's default 404 body — no structured `code` field.
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(404, { detail: "Not Found" }));
+    // A fresh Response per call: a body is single-read, so a shared instance
+    // would come back empty on the second request.
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(jsonResponse(404, { detail: "Not Found" })),
+    );
 
     await expect(client.getRunStatus("r")).rejects.toBeInstanceOf(RunLifecycleUnavailableError);
     await expect(client.getRunResult("r")).rejects.toBeInstanceOf(RunLifecycleUnavailableError);

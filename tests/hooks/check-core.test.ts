@@ -78,6 +78,28 @@ describe("decideAfterLint", () => {
     if (outcome.kind !== "block") return;
     expect(outcome.reason).not.toContain("line");
   });
+
+  it("keeps the location when the diagnostic has no range", () => {
+    const outcome = decideAfterLint(FILE, {
+      status: "diagnostics",
+      diagnostics: [diagnostic({ range: null, location: "demo.extract" })],
+    });
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind !== "block") return;
+    expect(outcome.reason).toContain("demo.extract");
+    expect(outcome.reason).not.toContain("col");
+  });
+
+  it("renders both location and span when the diagnostic carries both", () => {
+    const outcome = decideAfterLint(FILE, {
+      status: "diagnostics",
+      diagnostics: [diagnostic({ location: "demo.extract" })],
+    });
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind !== "block") return;
+    expect(outcome.reason).toContain("demo.extract");
+    expect(outcome.reason).toContain("line 3, col 7");
+  });
 });
 
 describe("decideAfterValidate", () => {
@@ -141,6 +163,20 @@ describe("decideAfterValidate", () => {
     if (outcome.kind !== "block") return;
     expect(outcome.reason).toContain("Bundle is invalid.");
   });
+
+  it("shows the server message alone when the invalid verdict has no error items", () => {
+    const outcome = decideAfterValidate(FILE, {
+      status: "invalid",
+      message: "Custom server message.",
+      validationErrors: [],
+    });
+    expect(outcome.kind).toBe("block");
+    if (outcome.kind !== "block") return;
+    expect(outcome.reason).toContain("Validation failed for /work/demo.mthds");
+    expect(outcome.reason).toContain("Custom server message.");
+    expect(outcome.reason).not.toContain("Bundle is invalid.");
+    expect(outcome.reason).not.toContain("[pipe_validation]");
+  });
 });
 
 describe("extractMthdsFilePath", () => {
@@ -202,6 +238,22 @@ describe("extractVibeMthdsFilePath", () => {
       tool_output: { file: "demo.mthds" },
     });
     expect(extractVibeMthdsFilePath(payload)).toEqual({ filePath: "demo.mthds", cwd: "/work" });
+  });
+
+  it("falls back to tool_output.path", () => {
+    const payload = JSON.stringify({
+      tool_status: "success",
+      tool_output: { path: "x/demo.mthds" },
+    });
+    expect(extractVibeMthdsFilePath(payload)).toEqual({ filePath: "x/demo.mthds", cwd: undefined });
+  });
+
+  it("falls back to tool_input.file_path", () => {
+    const payload = JSON.stringify({
+      tool_status: "success",
+      tool_input: { file_path: "x/demo.mthds" },
+    });
+    expect(extractVibeMthdsFilePath(payload)).toEqual({ filePath: "x/demo.mthds", cwd: undefined });
   });
 
   it("falls back to tool_input.path", () => {

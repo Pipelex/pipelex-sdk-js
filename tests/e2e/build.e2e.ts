@@ -193,24 +193,31 @@ describe("e2e buildOutput (/v1/build/output)", () => {
 });
 
 describe("e2e buildRunner (/v1/build/runner)", () => {
-  it("returns a runner script plus its stamped structures projection", async () => {
-    const result = await client.buildRunner({
-      files: [{ content: VALID_BUNDLE }],
-      pipe_ref: "smoke.echo",
-    });
+  // The dry-run sweep is the one build call that can legitimately run long; give
+  // it the client's 5-min budget (plus slack) instead of the suite-wide 30s, so a
+  // slow but healthy build is not reported as a test failure.
+  it(
+    "returns a runner script plus its stamped structures projection",
+    { timeout: 330_000 },
+    async () => {
+      const result = await client.buildRunner({
+        files: [{ content: VALID_BUNDLE }],
+        pipe_ref: "smoke.echo",
+      });
 
-    expect(result.is_valid).toBe(true);
-    const report = result as BuildRunnerValidReport;
-    expect(report.pipe_ref).toBe("smoke.echo");
-    expect(report.python_code.length).toBeGreaterThan(0);
-    expect(report.structures.directory.length).toBeGreaterThan(0);
-    expect(report.structures.lock_filename.length).toBeGreaterThan(0);
-    expect(report.structures.artifacts.length).toBeGreaterThan(0);
-    for (const artifact of report.structures.artifacts) {
-      expect(artifact.path.length).toBeGreaterThan(0);
-      expect(artifact.content.length).toBeGreaterThan(0);
-    }
-  });
+      expect(result.is_valid).toBe(true);
+      const report = result as BuildRunnerValidReport;
+      expect(report.pipe_ref).toBe("smoke.echo");
+      expect(report.python_code.length).toBeGreaterThan(0);
+      expect(report.structures.directory.length).toBeGreaterThan(0);
+      expect(report.structures.lock_filename.length).toBeGreaterThan(0);
+      expect(report.structures.artifacts.length).toBeGreaterThan(0);
+      for (const artifact of report.structures.artifacts) {
+        expect(artifact.path.length).toBeGreaterThan(0);
+        expect(artifact.content.length).toBeGreaterThan(0);
+      }
+    },
+  );
 });
 
 describe("e2e build verdicts — an invalid CLOSURE is a 200, never a throw", () => {

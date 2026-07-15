@@ -92,8 +92,12 @@ describe("gatherBundle", () => {
 
   it("reports unreadable when a subdirectory cannot be scanned", ({ skip }) => {
     // Root can traverse a 0-perm directory, so this scenario is unobservable
-    // when the suite runs as root (common in CI containers).
-    skip(typeof process.getuid === "function" && process.getuid() === 0);
+    // when the suite runs as root (common in CI containers). Windows ACLs ignore
+    // chmod 0o000 entirely, so the directory stays readable there too.
+    skip(
+      process.platform === "win32" ||
+        (typeof process.getuid === "function" && process.getuid() === 0),
+    );
     const edited = put("main.mthds");
     const locked = join(root, "locked");
     mkdirSync(locked);

@@ -40,6 +40,12 @@ function textResponse(status: number, body: string, statusText = ""): Response {
   return new Response(body, { status, statusText });
 }
 
+/** The JSON body of the first request a spied fetch received. */
+function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+  const init = fetchSpy.mock.calls[0]![1] as { body?: string };
+  return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
+}
+
 beforeEach(() => {
   vi.restoreAllMocks();
 });
@@ -680,11 +686,6 @@ describe("PipelexApiClient.validate", () => {
 });
 
 describe("PipelexApiClient.validateFiles", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("sends content and sources for files that all have URIs", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -768,6 +769,58 @@ describe("PipelexApiClient.validateFiles", () => {
       render: ["markdown"],
     });
   });
+
+  // validate/validateFiles default to the 20-min execute ceiling; a bounded
+  // consumer (the post-edit hook) needs a per-call ceiling that actually aborts
+  // the fetch, not a Promise.race that leaves the request running.
+  describe("timeout and abort options", () => {
+    function hangingFetch(): typeof fetch {
+      return ((_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+            once: true,
+          });
+        })) as typeof fetch;
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("honors a caller-supplied timeoutMs, aborting the request itself", async () => {
+      vi.useFakeTimers();
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+      const client = makeClient();
+
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { timeoutMs: 1_000 })
+        .catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const err = await failure;
+      expect(err).toBeInstanceOf(ApiUnreachableError);
+      expect((err as ApiUnreachableError).code).toBe("ABORT_TIMEOUT");
+      // The fetch itself was handed an abort signal that has fired.
+      const init = fetchSpy.mock.calls[0]![1] as RequestInit;
+      expect(init.signal?.aborted).toBe(true);
+    });
+
+    it("lets a caller-supplied signal abort validate, propagating the reason untouched", async () => {
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+      const client = makeClient();
+
+      const controller = new AbortController();
+      const walkAway = new Error("caller walked away");
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { signal: controller.signal })
+        .catch((e: unknown) => e);
+
+      controller.abort(walkAway);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await failure).toBe(walkAway);
+    });
+  });
 });
 
 describe("PipelexApiClient.models", () => {
@@ -819,11 +872,6 @@ describe("PipelexApiClient.version", () => {
 });
 
 describe("PipelexApiClient.validate render extra", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("sends markdown render in the request body when asked", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -870,11 +918,6 @@ describe("PipelexApiClient.validate render extra", () => {
 });
 
 describe("PipelexApiClient.lint", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("POSTs /v1/lint and returns the diagnostics of a clean file", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -938,11 +981,6 @@ describe("PipelexApiClient.lint", () => {
 });
 
 describe("PipelexApiClient.format", () => {
-  function bodyOf(fetchSpy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
-    const init = fetchSpy.mock.calls[0]![1] as { body?: string };
-    return JSON.parse(init.body ?? "{}") as Record<string, unknown>;
-  }
-
   it("POSTs /v1/format and returns the formatted content", async () => {
     const client = makeClient();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(

@@ -120,18 +120,6 @@ async function loadEngine(): Promise<ToolsWasmModule> {
   return engine;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error("validate request timed out")), timeoutMs);
-  });
-  try {
-    return await Promise.race([promise, timeout]);
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /**
  * Run the networked validate stage. Every no-verdict condition maps to
  * `unavailable` — a machine consumer branches on the structured verdict,
@@ -147,10 +135,12 @@ async function runValidateStage(filePath: string): Promise<ValidateStage> {
   }
   try {
     const client = new PipelexApiClient();
-    const result = await withTimeout(
-      client.validateFiles(gathered.files, { allowSignatures: true }),
-      VALIDATE_TIMEOUT_MS,
-    );
+    // The client owns the ceiling: on timeout it aborts the fetch itself, so the
+    // request does not keep running after the hook has given up on it.
+    const result = await client.validateFiles(gathered.files, {
+      allowSignatures: true,
+      timeoutMs: VALIDATE_TIMEOUT_MS,
+    });
     if (result.is_valid === true) {
       return {
         status: "valid",
