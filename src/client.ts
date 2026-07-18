@@ -1094,13 +1094,20 @@ function isValidBaseUrl(value: string): boolean {
  * memory rides `pipe_output` (blocking only).
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
+  // The execute response's `pipe_output` is extension-open JSON: the usage pair rides
+  // beside `working_memory`. Unpack it here so `.tokens_usages` reads the same on the
+  // blocking and durable paths.
+  const pipeOutputRaw = response.pipe_output as unknown as Record<string, unknown>;
   return {
     pipeline_run_id: response.pipeline_run_id,
     main_stuff: response.main_stuff,
     // The bare-runner blocking `pipe_output` carries no graph artifact; the
     // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
     graph_spec: null,
-    pipe_output: response.pipe_output as unknown as Record<string, unknown>,
+    pipe_output: pipeOutputRaw,
+    tokens_usages: (pipeOutputRaw?.["tokens_usages"] ?? null) as RunResults["tokens_usages"],
+    usage_assembly_error: (pipeOutputRaw?.["usage_assembly_error"] ??
+      null) as RunResults["usage_assembly_error"],
   };
 }
 

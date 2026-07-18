@@ -122,6 +122,36 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     expect(versionCalls).toHaveLength(1);
   });
 
+  it("parses the usage pair on the hosted results payload, records verbatim", async () => {
+    const client = makeClient();
+    const tokensUsages = [
+      {
+        model_type: "llm",
+        inference_model_name: "test-model",
+        nb_tokens_by_category: { input: 15, output: 4 },
+        unit_costs: { input: 3.0, output: 15.0 },
+      },
+    ];
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, HOSTED_VERSION))
+      .mockResolvedValueOnce(
+        jsonResponse(202, { pipeline_run_id: "run-1", state: "STARTED", created_at: "t0" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-1",
+          main_stuff: { answer: 42 },
+          tokens_usages: tokensUsages,
+          usage_assembly_error: null,
+        }),
+      );
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p" });
+
+    expect(result.tokens_usages).toEqual(tokensUsages);
+    expect(result.usage_assembly_error).toBeNull();
+  });
+
   it("throws MissingMainStuffError on a hosted 200 whose main_stuff is null", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch")
@@ -157,8 +187,38 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
       working_memory: { root: Record<string, { content: unknown }> };
     };
     expect(pipeOutput.working_memory.root.result!.content).toEqual({ text: "hello" });
+    // No usage pair in the blocking pipe_output (usage off / older runner) → nulls, never a throw.
+    expect(result.tokens_usages).toBeNull();
+    expect(result.usage_assembly_error).toBeNull();
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/version");
     expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
+  });
+
+  it("unpacks the usage pair from the blocking pipe_output", async () => {
+    const client = makeClient();
+    const tokensUsages = [
+      {
+        model_type: "llm",
+        inference_model_name: "test-model",
+        nb_tokens_by_category: { input: 15, output: 4 },
+        unit_costs: { input: 3.0, output: 15.0 },
+      },
+    ];
+    const body = executeBody("run-x");
+    body["pipe_output"] = {
+      ...(body["pipe_output"] as Record<string, unknown>),
+      tokens_usages: tokensUsages,
+      usage_assembly_error: null,
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // Same accessor as the durable path: the pair is lifted out of the extension-open pipe_output.
+    expect(result.tokens_usages).toEqual(tokensUsages);
+    expect(result.usage_assembly_error).toBeNull();
   });
 
   it("throws MissingMainStuffError when a blocking response names no locatable main stuff", async () => {

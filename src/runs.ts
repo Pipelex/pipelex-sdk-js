@@ -114,6 +114,19 @@ export interface RunResults {
    * which is already resolved out of it; kept for consumers that need the whole working memory.
    */
   pipe_output?: Record<string, unknown> | null;
+  /**
+   * Per-call usage records — token counts by category, `unit_costs` in $/1M, model id — for
+   * LLM and img-gen/extract/search calls alike. On the hosted path this is the
+   * `tokens_usages.json` artifact's record list relayed verbatim; on the blocking path it is
+   * the execute response's `pipe_output.tokens_usages`. Null when usage assembly was off for
+   * the run, or (hosted) when the run was delivered before the artifact existed.
+   */
+  tokens_usages?: Array<Record<string, unknown>> | null;
+  /**
+   * Non-null when the runner's usage assembly failed for the run — distinguishes "usage
+   * broke" from "usage was off" (both leave `tokens_usages` null).
+   */
+  usage_assembly_error?: string | null;
 }
 
 /**
