@@ -128,8 +128,14 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
       {
         model_type: "llm",
         inference_model_name: "test-model",
+        inference_model_id: "test-model-2026-01-01",
+        pipe_code: "test_domain.summarize",
+        job_category: "llm_job",
+        unit_job_id: "llm_gen_text",
         nb_tokens_by_category: { input: 15, output: 4 },
-        unit_costs: { input: 3.0, output: 15.0 },
+        cost: 0.000105,
+        started_at: "2026-06-20T10:00:01+00:00",
+        completed_at: "2026-06-20T10:00:03+00:00",
       },
     ];
     vi.spyOn(globalThis, "fetch")
@@ -149,6 +155,12 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     const result = await client.startAndWaitForResult({ pipe_code: "p" });
 
     expect(result.tokens_usages).toEqual(tokensUsages);
+    // Read through the typed record — the fields are declared, not index-signature lookups.
+    const record = result.tokens_usages![0]!;
+    expect(record.inference_model_name).toBe("test-model");
+    expect(record.pipe_code).toBe("test_domain.summarize");
+    expect(record.nb_tokens_by_category).toEqual({ input: 15, output: 4 });
+    expect(record.cost).toBe(0.000105);
     expect(result.usage_assembly_error).toBeNull();
   });
 
@@ -183,10 +195,8 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     // The SDK resolves `main_stuff` out of the working memory via `main_stuff_name` ("result") —
     // its content, the same shape the hosted path relays; the full working memory rides pipe_output.
     expect(result.main_stuff).toEqual({ text: "hello" });
-    const pipeOutput = result.pipe_output as {
-      working_memory: { root: Record<string, { content: unknown }> };
-    };
-    expect(pipeOutput.working_memory.root.result!.content).toEqual({ text: "hello" });
+    // `pipe_output` is the typed `DictPipeOutput` — reached without a cast.
+    expect(result.pipe_output!.working_memory.root.result!.content).toEqual({ text: "hello" });
     // No usage pair in the blocking pipe_output (usage off / older runner) → nulls, never a throw.
     expect(result.tokens_usages).toBeNull();
     expect(result.usage_assembly_error).toBeNull();
@@ -200,8 +210,14 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
       {
         model_type: "llm",
         inference_model_name: "test-model",
+        inference_model_id: "test-model-2026-01-01",
+        pipe_code: "test_domain.summarize",
+        job_category: "llm_job",
+        unit_job_id: "llm_gen_text",
         nb_tokens_by_category: { input: 15, output: 4 },
-        unit_costs: { input: 3.0, output: 15.0 },
+        cost: 0.000105,
+        started_at: "2026-06-20T10:00:01+00:00",
+        completed_at: "2026-06-20T10:00:03+00:00",
       },
     ];
     const body = executeBody("run-x");
@@ -216,8 +232,13 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
 
     const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
 
-    // Same accessor as the durable path: the pair is lifted out of the extension-open pipe_output.
+    // Same accessor and same typed record as the durable path: the pair is lifted out of the
+    // extension-open pipe_output.
     expect(result.tokens_usages).toEqual(tokensUsages);
+    const record = result.tokens_usages![0]!;
+    expect(record.inference_model_name).toBe("test-model");
+    expect(record.pipe_code).toBe("test_domain.summarize");
+    expect(record.cost).toBe(0.000105);
     expect(result.usage_assembly_error).toBeNull();
   });
 

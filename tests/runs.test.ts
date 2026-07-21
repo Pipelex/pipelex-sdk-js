@@ -7,6 +7,7 @@ import {
   RunTimeoutError,
 } from "../src/errors.js";
 import { isTerminalRunStatus, isSuccessRunStatus } from "../src/runs.js";
+import type { RunResults, TokensUsageRecord } from "../src/runs.js";
 
 const BASE_URL = "http://localhost:8081";
 
@@ -284,5 +285,103 @@ describe("PipelexApiClient.waitForResult", () => {
     await expect(client.waitForResult("run-1", { intervalMs: 0 })).rejects.toBeInstanceOf(
       RunLifecycleUnavailableError,
     );
+  });
+});
+
+describe("TokensUsageRecord", () => {
+  // A record in the shape the current runtime emits: every contract field present, absent
+  // values sent as explicit nulls. Mirrors the conformance seed corpus
+  // (conformance/conformance/usage_records.py), which is what the platform arm asserts on
+  // the wire, and the pipelex-sdk-python mirror's fixtures.
+  const RATED_RECORD: TokensUsageRecord = {
+    model_type: "llm",
+    inference_model_name: "test-model",
+    inference_model_id: "test-model-2026-01-01",
+    pipe_code: "test_domain.summarize",
+    job_category: "llm_job",
+    unit_job_id: "llm_gen_text",
+    nb_tokens_by_category: { input: 15, input_cached: 5, output: 4 },
+    cost: 0.000105,
+    started_at: "2026-06-20T10:00:01+00:00",
+    completed_at: "2026-06-20T10:00:03+00:00",
+  };
+
+  // A durable artifact written BEFORE the wire contract shipped, relayed verbatim ever
+  // since: a dump of the runtime's internal reporting model, carrying the nested
+  // `job_metadata` and the `unit_costs` rate table, and lacking the computed `cost`. Old
+  // artifacts are never migrated, so the mirror must accept this — that it type-checks at
+  // all is the assertion (the fields are optional and the index signature is open).
+  const PRE_CONTRACT_RECORD: TokensUsageRecord = {
+    model_type: "llm",
+    inference_model_name: "legacy-model",
+    inference_model_id: "legacy-model-v0",
+    nb_tokens_by_category: { input: 20, output: 6 },
+    unit_costs: { input: 3.0, output: 15.0 },
+    job_metadata: {
+      pipe_code: "legacy_domain.summarize",
+      job_category: "llm_job",
+      session_id: "legacy-session",
+      user_id: "legacy-user",
+    },
+  };
+
+  it("reads every contract field off a current-shape record", () => {
+    expect(RATED_RECORD.model_type).toBe("llm");
+    expect(RATED_RECORD.inference_model_name).toBe("test-model");
+    expect(RATED_RECORD.inference_model_id).toBe("test-model-2026-01-01");
+    expect(RATED_RECORD.pipe_code).toBe("test_domain.summarize");
+    expect(RATED_RECORD.job_category).toBe("llm_job");
+    expect(RATED_RECORD.unit_job_id).toBe("llm_gen_text");
+    expect(RATED_RECORD.nb_tokens_by_category).toEqual({ input: 15, input_cached: 5, output: 4 });
+    expect(RATED_RECORD.cost).toBe(0.000105);
+    expect(RATED_RECORD.started_at).toBe("2026-06-20T10:00:01+00:00");
+    expect(RATED_RECORD.completed_at).toBe("2026-06-20T10:00:03+00:00");
+  });
+
+  it("tolerates a pre-contract record: contract fields absent, legacy fields carried", () => {
+    // `cost` is server-computed and did not exist when this artifact was written;
+    // `pipe_code` was still nested inside `job_metadata` rather than flattened onto the record.
+    expect(PRE_CONTRACT_RECORD.cost).toBeUndefined();
+    expect(PRE_CONTRACT_RECORD.pipe_code).toBeUndefined();
+    // The legacy fields survive on the index signature — relayed, never reshaped. A client
+    // must not read them as contract fields, but the mirror must not reject them either.
+    expect(PRE_CONTRACT_RECORD["unit_costs"]).toEqual({ input: 3.0, output: 15.0 });
+    expect(PRE_CONTRACT_RECORD["job_metadata"]).toEqual({
+      pipe_code: "legacy_domain.summarize",
+      job_category: "llm_job",
+      session_id: "legacy-session",
+      user_id: "legacy-user",
+    });
+  });
+
+  it("keeps an unrated call's null cost distinct from a rate table pricing it at zero", () => {
+    const unrated: TokensUsageRecord = { ...RATED_RECORD, cost: null };
+    const pricedAtZero: TokensUsageRecord = { ...RATED_RECORD, cost: 0 };
+
+    expect(unrated.cost).toBeNull();
+    expect(pricedAtZero.cost).toBe(0);
+    expect(pricedAtZero.cost).not.toBeNull();
+  });
+
+  it("keeps the usage null semantics distinct on RunResults", () => {
+    // Null (assembly off, broke, or pre-artifact) vs [] (assembly ran, no inference).
+    const assemblyOff: RunResults = {
+      pipeline_run_id: "run-1",
+      main_stuff: {},
+      tokens_usages: null,
+    };
+    const assemblyBroke: RunResults = {
+      pipeline_run_id: "run-1",
+      main_stuff: {},
+      tokens_usages: null,
+      usage_assembly_error: "failed to read usage events for the run",
+    };
+    const noInference: RunResults = { pipeline_run_id: "run-1", main_stuff: {}, tokens_usages: [] };
+
+    expect(assemblyOff.tokens_usages).toBeNull();
+    expect(noInference.tokens_usages).toEqual([]);
+    // `usage_assembly_error` is the ONLY field separating a broken assembly from an off one.
+    expect(assemblyOff.usage_assembly_error).toBeUndefined();
+    expect(assemblyBroke.usage_assembly_error).toBe("failed to read usage events for the run");
   });
 });

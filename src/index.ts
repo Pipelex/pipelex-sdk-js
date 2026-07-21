@@ -102,6 +102,7 @@ export type {
   RunRead,
   RunResults,
   RunResultState,
+  TokensUsageRecord,
   WaitForResultOptions,
 } from "./runs.js";
 
