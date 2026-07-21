@@ -93,7 +93,7 @@ export function extractCodexMthdsFiles(stdinJson: string): string[] {
 }
 
 /**
- * Extract the edited `.mthds` path from a Mistral Vibe AfterToolInvocation
+ * Extract the edited `.mthds` path from a Mistral Vibe stable `post_tool`
  * payload, plus the cwd to resolve it against. Only successful tool calls
  * count (`tool_status: "success"`); the path rides in `tool_output.file` /
  * `tool_output.path` / `tool_input.file_path` / `tool_input.path` — the same

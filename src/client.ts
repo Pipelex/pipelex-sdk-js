@@ -1094,13 +1094,22 @@ function isValidBaseUrl(value: string): boolean {
  * memory rides `pipe_output` (blocking only).
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
+  // The usage pair rides `pipe_output` as Pipelex extension fields, beside `working_memory`
+  // — `DictPipeOutput` is extension-open, mirroring the Python model's `extra="allow"`, so
+  // it is read through the type rather than by casting the whole value away. Lifting the
+  // pair onto the two top-level fields is what makes `.tokens_usages` read the same on the
+  // blocking and durable paths. The remaining casts are unavoidable: an index-signature read
+  // is `unknown`, and this is unvalidated server JSON.
   return {
     pipeline_run_id: response.pipeline_run_id,
     main_stuff: response.main_stuff,
     // The bare-runner blocking `pipe_output` carries no graph artifact; the
     // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
     graph_spec: null,
-    pipe_output: response.pipe_output as unknown as Record<string, unknown>,
+    pipe_output: response.pipe_output,
+    tokens_usages: (response.pipe_output["tokens_usages"] ?? null) as RunResults["tokens_usages"],
+    usage_assembly_error: (response.pipe_output["usage_assembly_error"] ??
+      null) as RunResults["usage_assembly_error"],
   };
 }
 
