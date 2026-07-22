@@ -67,6 +67,10 @@ import {
   RunLifecycleUnavailableError,
   RunStillRunningError,
 } from "./errors.js";
+import { uploadFile as uploadFileImpl } from "./upload.js";
+import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
+import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
+import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
 export interface MthdsFile {
@@ -1032,6 +1036,31 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /** Upload a base64 file — `POST /v1/upload`. */
   async upload(input: UploadInput): Promise<UploadedFile> {
     return this.requestProduct("POST", "upload", input);
+  }
+
+  /**
+   * Upload one local asset and return its {@link UploadRecord} — the single-asset
+   * convenience over {@link upload}. Accepts `Blob`/`File`/`ArrayBuffer`/`Uint8Array`
+   * in every runtime; a path string is Node-only (it fails instructively elsewhere).
+   * The record guarantees `uri`, `contentType`, `size`, and `filename`. Transport
+   * failures surface as the semantic input-preparation errors (rejected asset, auth,
+   * unsupported capability, transport). See `docs/input-preparation.md`.
+   */
+  async uploadFile(asset: UploadableAsset, options?: UploadFileOptions): Promise<UploadRecord> {
+    return uploadFileImpl(this, asset, options);
+  }
+
+  /**
+   * Prepare a pipe's inputs — resolve the declared signature, upload the
+   * file-bearing assets, and return copy-on-write rewritten inputs (canonical
+   * content carrying `pipelex-storage://` in `url`) plus one upload record per
+   * prepared asset. HTTP(S) URLs and existing `pipelex-storage://` URIs pass
+   * through unchanged; all failures are raised before any run is created. The
+   * caller supplies the method closure as inline `files`. See
+   * `docs/input-preparation.md`.
+   */
+  async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
+    return prepareInputsImpl(this, request);
   }
 
   /** List a method's runs — `GET /v1/runs?method_id={methodId}`. */

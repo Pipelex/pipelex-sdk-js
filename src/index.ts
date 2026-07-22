@@ -23,6 +23,11 @@ export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from ".
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
 
+// ── Input preparation (client.uploadFile / client.prepareInputs — hosted upload capability) ──
+// The operations are client methods; only their public types travel with the barrel.
+export type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
+export type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
+
 // ── Wire models (Dict concretes, validate surface, tools + build routes) ─────
 export type {
   DiagnosticKind,
@@ -117,4 +122,10 @@ export {
   RunTimeoutError,
   RunStillRunningError,
   RunLifecycleUnavailableError,
+  InputPreparationError,
+  InvalidLocalSourceError,
+  RejectedAssetError,
+  UnsupportedUploadCapabilityError,
+  UploadAuthenticationError,
+  UploadTransportError,
 } from "./errors.js";
