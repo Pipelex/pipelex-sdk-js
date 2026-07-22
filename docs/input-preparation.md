@@ -21,6 +21,8 @@ Uploads one asset and returns its upload record. It is the language-native conve
 - A string that is an **HTTP(S) URL** or an existing **`pipelex-storage://` URI** is not a local asset and passes through in any runtime (see pass-through rules below).
 - Open file objects and streams are **deferred** — they can be added later without removing anything.
 
+> **Runtime acceptance vs. bundling.** These source types are accepted at *runtime* in every environment, but at the *packaging* level `@pipelex/sdk` is **Node-first**: it statically references `node:fs/promises` (to read path strings), so bundling the SDK for a browser or edge target currently requires marking `node:*` external. This is a deliberate stance — every consumer runs the SDK server-side in Node (Next.js Server Actions, the MCP server, the plugins hook) — revisited only if the SDK is ever imported into a browser client bundle or an edge route (see `wip/pr-16-review-notes.md`).
+
 The returned **upload record** guarantees, beyond the source identity:
 
 | Field | Guarantee |
