@@ -17,6 +17,82 @@ export class ClientAuthenticationError extends Error {
 }
 
 /**
+ * Base class for every failure raised by input preparation (`uploadFile` /
+ * `prepareInputs`). Catch this to handle any preparation failure; catch a
+ * subclass to branch on the semantic category. All preparation failures are
+ * raised BEFORE any run is created — a run never triggers a hidden upload.
+ */
+export class InputPreparationError extends PipelineRequestError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "InputPreparationError";
+  }
+}
+
+/**
+ * A local asset could not be turned into bytes: a missing or unreadable path, or
+ * a path string in a non-Node runtime (path strings are Node-only). `source` is
+ * the offending path.
+ */
+export class InvalidLocalSourceError extends InputPreparationError {
+  public readonly source: string;
+
+  constructor(message: string, source: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "InvalidLocalSourceError";
+    this.source = source;
+  }
+}
+
+/**
+ * The server refused the asset — most commonly a `413` past the service-defined
+ * size cap. The SDK does not impose a client-side cap; it surfaces the server's
+ * rejection. `filename` and `status` locate it.
+ */
+export class RejectedAssetError extends InputPreparationError {
+  public readonly filename: string;
+  public readonly status: number;
+
+  constructor(message: string, filename: string, status: number, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "RejectedAssetError";
+    this.filename = filename;
+    this.status = status;
+  }
+}
+
+/**
+ * The configured deployment does not support upload (no `/v1/upload` route, seen
+ * as a `404`). Upload is a hosted Pipelex-product capability even though the SDK
+ * can be pointed at other base URLs.
+ */
+export class UnsupportedUploadCapabilityError extends InputPreparationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "UnsupportedUploadCapabilityError";
+  }
+}
+
+/** Upload was not authorized — a `401`/`403` from the upload route. */
+export class UploadAuthenticationError extends InputPreparationError {
+  public readonly status: number;
+
+  constructor(message: string, status: number, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "UploadAuthenticationError";
+    this.status = status;
+  }
+}
+
+/** A network or server fault reaching the upload route (unreachable host, `5xx`). */
+export class UploadTransportError extends InputPreparationError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "UploadTransportError";
+  }
+}
+
+/**
  * Thrown when the Pipelex API host cannot be reached at all (DNS failure,
  * connection refused, TLS handshake failure, request timeout). The HTTP
  * exchange never produced a response — distinguish from `ApiResponseError`,

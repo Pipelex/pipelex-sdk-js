@@ -1,6 +1,8 @@
 # Input preparation (`uploadFile` / `prepareInputs`)
 
-> **Status: planned surface — not yet implemented.** This document records the approved cross-repository contract (design source: `wip/upload/README.md` in the workspace, tracked in `TODOS.md`) so the SDK's own docs carry the part it owns before the code lands. The raw `upload()` primitive described in [architecture.md](./architecture.md) already exists; `uploadFile` and `prepareInputs` are the higher-level surface built on top of it.
+> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace, tracked in `TODOS.md`). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
+>
+> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source). Two pieces are deliberately deferred and additive (they do not change this contract): resolving a closure from a catalog `method_id` (would duplicate the method-source parser that lives in `pipelex-mcp`/the platform), and the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
 ## Why this exists
 
