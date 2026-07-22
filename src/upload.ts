@@ -226,8 +226,12 @@ function mapUploadError(error: unknown, filename: string): Error {
     );
   }
   // Only errors thrown by the `client.upload()` call reach here — the local-source
-  // and asset-type failures are raised in `toAssetBytes`, before this try block. A
-  // custom client that throws something other than the two mapped types falls through
-  // to a transport error.
-  return error instanceof Error ? error : new UploadTransportError(String(error));
+  // and asset-type failures are raised in `toAssetBytes`, before this try block. Any
+  // error that is neither of the two mapped types (a malformed 2xx body surfacing as a
+  // SyntaxError, a custom client throwing a plain Error) is wrapped so every upload
+  // failure stays catchable as an InputPreparationError, never a raw escape.
+  const detail = error instanceof Error ? error.message : String(error);
+  return new UploadTransportError(`Upload of "${filename}" failed unexpectedly: ${detail}.`, {
+    cause: error,
+  });
 }

@@ -69,7 +69,7 @@ The hosted catalog/account routes the webapp drives. All ride the same `{base}/v
 - **Pipelex API keys (`plx_sk_…`):** `listPipelexApiKeys`, `createPipelexApiKey` (409 `pipelex_api_key_limit_reached`), `revokePipelexApiKey`, `rotatePipelexApiKey`. The plaintext `api_key` is returned once, on create/rotate.
 - **Gateway API key (LLM inference key):** `createGatewayApiKey` (the JSON body is always sent, even with `promo_code: null`), `getGatewayApiKey`.
 - **Onboarding:** `submitOnboarding`.
-- **Storage:** `resolveStorageUrl`, `upload` (JSON base64 — the multipart hop is browser→BFF only). The higher-level `uploadFile` / `prepareInputs` preparation surface built on top of `upload` is a planned addition — see [input-preparation.md](./input-preparation.md).
+- **Storage:** `resolveStorageUrl`, `upload` (JSON base64 — the multipart hop is browser→BFF only). The higher-level `uploadFile` / `prepareInputs` preparation surface is built on top of `upload` — see [input-preparation.md](./input-preparation.md).
 - **Runs list/update:** `listRuns` (by `method_id`), `updateRun` (admin/manual status patch). The status/results/start lifecycle routes live in the run-lifecycle section above.
 
 ## Hook bundle (`dist-hooks/check.mjs`)

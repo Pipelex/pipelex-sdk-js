@@ -29,17 +29,17 @@ The returned **upload record** guarantees, beyond the source identity:
 | `contentType` (MIME) | Known client-side at upload time. |
 | `size` (bytes) | Known client-side at upload time. |
 | `filename` | Already in the wire model. |
-| checksum | **Best-effort, not guaranteed.** Within-preparation dedup relies on source identity, not hashing; cross-preparation dedup is a hosted storage-policy concern (Phase 5). |
+| checksum | **Not present.** Within-preparation dedup relies on source identity, not hashing; cross-preparation dedup is a hosted storage-policy concern (Phase 5). |
 
 The MIME type and size are known client-side, so the record is assembled without extending the `/v1/upload` response.
 
 ### `prepareInputs` — signature-driven input preparation
 
 ```
-prepareInputs(methodRef, pipe, inputs) → PreparedInputs
+client.prepareInputs({ files, pipe_ref?, inputs }) → PreparedInputs
 ```
 
-Takes the **method reference** (bundle files or catalog `method_id`) plus the target **pipe**, resolves the pipe's declared input signature, interprets the caller's compact `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`:
+Takes the **method closure** (inline `files` — the signature source) plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's compact `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`:
 
 - `inputs` — a **copy** of the caller's inputs with each asset reference replaced by the canonical content shape carrying `pipelex-storage://` in its `url` field (see "Rewritten-input shape" below). Copy-on-write: the caller's original object is never mutated.
 - `uploads` — one upload record per prepared asset (the `uploadFile` record shape), exposing `uri` so callers can log which source became which reference without reverse-engineering the rewritten object.
@@ -78,13 +78,13 @@ The "uploaded reference is named `uri`" decision applies to the **upload surface
 
 Upload is a **hosted Pipelex-product capability**, even though the SDK can be pointed at other base URLs. A deployment that does not support upload must produce a specific, actionable error — preparation must never silently leave a local path in place and let a later run fail obscurely.
 
-The contract distinguishes at least these semantic outcomes (exact typed error classes are settled during implementation):
+The contract distinguishes these semantic outcomes, each a typed subclass of `InputPreparationError` (catch the base to handle any preparation failure, a subclass to branch on category):
 
-- **invalid local source** — missing, unreadable, or a path string outside Node;
-- **rejected asset** — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error);
-- **unsupported server capability** — the configured deployment has no upload route;
-- **authentication / authorization failure** — `401` / `403`;
-- **transport failure** — network / server fault.
+- **invalid local source** (`InvalidLocalSourceError`) — missing, unreadable, or a path string outside Node;
+- **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error);
+- **unsupported server capability** (`UnsupportedUploadCapabilityError`) — the configured deployment has no upload route;
+- **authentication / authorization failure** (`UploadAuthenticationError`) — `401` / `403`;
+- **transport failure** (`UploadTransportError`) — a network or server fault, a malformed data URL payload, or any other unexpected upload failure.
 
 All preparation failures are raised **before any run is created**.
 

@@ -84,7 +84,12 @@ export class UploadAuthenticationError extends InputPreparationError {
   }
 }
 
-/** A network or server fault reaching the upload route (unreachable host, `5xx`). */
+/**
+ * A network or server fault reaching the upload route — an unreachable host, a
+ * `5xx`, or any other unexpected `upload()` failure. It carries no `status` field
+ * of its own: when a `5xx` produced it, the response and its status are reachable
+ * on the wrapped `ApiResponseError` via `cause`.
+ */
 export class UploadTransportError extends InputPreparationError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);

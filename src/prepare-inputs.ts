@@ -80,13 +80,23 @@ function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; contentType: strin
   const payload = dataUrl.slice(comma + 1);
   const isBase64 = /;base64/i.test(header);
   const contentType = header.split(";")[0] || "application/octet-stream";
-  if (isBase64) {
-    const binary =
-      typeof Buffer !== "undefined" ? Buffer.from(payload, "base64") : base64ToBytes(payload);
-    return { bytes: new Uint8Array(binary), contentType };
+  // Decoding can throw on a malformed payload — a URIError from percent-decoding,
+  // or an InvalidCharacterError from `atob` on bad base64. Surface those as a typed
+  // InputPreparationError so a bad data URL stays within the preparation contract.
+  try {
+    if (isBase64) {
+      const binary =
+        typeof Buffer !== "undefined" ? Buffer.from(payload, "base64") : base64ToBytes(payload);
+      return { bytes: new Uint8Array(binary), contentType };
+    }
+    const text = decodeURIComponent(payload);
+    return { bytes: new TextEncoder().encode(text), contentType };
+  } catch (cause) {
+    throw new InputPreparationError(
+      `Malformed data URL payload (${isBase64 ? "invalid base64" : "invalid percent-encoding"}): ${dataUrl.slice(0, 32)}…`,
+      { cause },
+    );
   }
-  const text = decodeURIComponent(payload);
-  return { bytes: new TextEncoder().encode(text), contentType };
 }
 
 /** Browser-side base64 decode (Node uses Buffer). */

@@ -259,6 +259,17 @@ describe("prepareInputs", () => {
     expect(client.uploadCalls).toHaveLength(0);
   });
 
+  it("throws InputPreparationError for a malformed data URL instead of a raw decode error", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    // Malformed percent-encoding — `decodeURIComponent` would otherwise throw a raw URIError
+    // that escapes the typed preparation-error contract.
+    await expect(
+      prepareInputs(client, { files: FILES, inputs: { photo: "data:text/plain,%ZZ" } }),
+    ).rejects.toBeInstanceOf(InputPreparationError);
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
   it("throws InputPreparationError when the method signature does not resolve", async () => {
     const client = makeClient(
       {},

@@ -194,4 +194,18 @@ describe("uploadFile", () => {
       UploadTransportError,
     );
   });
+
+  it("wraps an unexpected non-transport error as UploadTransportError, preserving the cause", async () => {
+    // A malformed 2xx upload body surfaces from the client as a SyntaxError, not one of
+    // the two mapped transport types — it must still land in the preparation-error family.
+    const original = new SyntaxError("Unexpected token < in JSON");
+    const client = throwingClient(original);
+
+    await expect(uploadFile(client, new Uint8Array([1]))).rejects.toBeInstanceOf(
+      UploadTransportError,
+    );
+    await expect(uploadFile(client, new Uint8Array([1]))).rejects.toMatchObject({
+      cause: original,
+    });
+  });
 });
