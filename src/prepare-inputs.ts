@@ -85,9 +85,12 @@ function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; contentType: strin
   // InputPreparationError so a bad data URL stays within the preparation contract.
   try {
     if (isBase64) {
-      const binary =
-        typeof Buffer !== "undefined" ? Buffer.from(payload, "base64") : base64ToBytes(payload);
-      return { bytes: new Uint8Array(binary), contentType };
+      // Decode via atob in every runtime. atob rejects malformed base64 with an
+      // InvalidCharacterError — Buffer.from(payload, "base64") does NOT: in Node it
+      // silently drops invalid characters and returns truncated/empty bytes, which would
+      // upload corrupt content instead of failing the preparation contract. atob is a
+      // global in every supported runtime (engines.node >= 22.12).
+      return { bytes: base64ToBytes(payload), contentType };
     }
     const text = decodeURIComponent(payload);
     return { bytes: new TextEncoder().encode(text), contentType };
@@ -99,7 +102,12 @@ function decodeDataUrl(dataUrl: string): { bytes: Uint8Array; contentType: strin
   }
 }
 
-/** Browser-side base64 decode (Node uses Buffer). */
+/**
+ * Strict cross-runtime base64 decode via `atob` — the single decoder for data-URL
+ * payloads in every runtime. `atob` throws an `InvalidCharacterError` on malformed
+ * base64, unlike the lenient `Buffer.from(payload, "base64")`, so a bad payload
+ * fails the preparation contract instead of yielding truncated/empty bytes.
+ */
 function base64ToBytes(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);

@@ -95,7 +95,11 @@ export function guessContentType(filename: string): string {
  * Read a filesystem path into bytes — Node only. A path string in a non-Node
  * runtime cannot be read, so it fails as an invalid local source rather than
  * being silently misread as text or a URL. `node:fs/promises` is imported
- * dynamically so it never lands in a browser bundle.
+ * dynamically and guarded by `isNodeRuntime()`, so it is only *loaded* in Node.
+ * Note: the dynamic import defers execution, not bundling — a browser-targeting
+ * bundler still statically resolves this literal specifier, so browser consumers
+ * must currently mark `node:*` external. Making the byte-only path bundle for the
+ * browser out of the box is an open packaging decision (see wip/pr-16-review-notes.md).
  */
 export async function readLocalPath(path: string): Promise<Uint8Array> {
   if (!isNodeRuntime()) {

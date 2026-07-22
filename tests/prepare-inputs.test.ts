@@ -270,6 +270,18 @@ describe("prepareInputs", () => {
     expect(client.uploadCalls).toHaveLength(0);
   });
 
+  it("throws InputPreparationError for a malformed base64 data URL instead of silently uploading truncated bytes", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    // Node's `Buffer.from(x, "base64")` is lenient: it silently drops invalid characters and
+    // returns truncated/empty bytes, so a malformed base64 payload would upload corrupt content
+    // instead of failing the preparation contract. Both runtimes must reject it via `atob`.
+    await expect(
+      prepareInputs(client, { files: FILES, inputs: { photo: "data:image/png;base64,%%%%" } }),
+    ).rejects.toBeInstanceOf(InputPreparationError);
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
   it("throws InputPreparationError when the method signature does not resolve", async () => {
     const client = makeClient(
       {},
