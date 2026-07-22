@@ -13,8 +13,8 @@
  *
  * Per-platform input: Claude reads `tool_input.file_path` (one file); Codex
  * parses the `apply_patch` envelope in `tool_input.command` (possibly several
- * files — outcomes are merged, any block wins); Vibe reads the
- * AfterToolInvocation payload (`tool_status` gate, path resolved against `cwd`).
+ * files — outcomes are merged, any block wins); Vibe reads the stable
+ * `post_tool` payload (`tool_status` gate, path resolved against `cwd`).
  *
  * Failure posture (fail-open, per the networked-hook plan):
  * - no `.mthds` in the payload / unparseable stdin → pass silently

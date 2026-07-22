@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.4.0";
+export const SDK_VERSION = "0.5.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -22,6 +22,11 @@ export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from ".
 
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
+
+// ── Input preparation (client.uploadFile / client.prepareInputs — hosted upload capability) ──
+// The operations are client methods; only their public types travel with the barrel.
+export type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
+export type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 
 // ── Wire models (Dict concretes, validate surface, tools + build routes) ─────
 export type {
@@ -102,6 +107,7 @@ export type {
   RunRead,
   RunResults,
   RunResultState,
+  TokensUsageRecord,
   WaitForResultOptions,
 } from "./runs.js";
 
@@ -116,4 +122,10 @@ export {
   RunTimeoutError,
   RunStillRunningError,
   RunLifecycleUnavailableError,
+  InputPreparationError,
+  InvalidLocalSourceError,
+  RejectedAssetError,
+  UnsupportedUploadCapabilityError,
+  UploadAuthenticationError,
+  UploadTransportError,
 } from "./errors.js";

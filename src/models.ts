@@ -26,10 +26,18 @@ export interface DictWorkingMemory {
  * runtime-internal field produced by the pipelex runtime inside the
  * `pipe_output` payload — it deliberately keeps its name (runtime internals are
  * out of the wire-rename scope).
+ *
+ * **Extension-open**, mirroring `DictPipeOutputAbstract`'s `extra="allow"`: the
+ * runner rides Pipelex extension fields here beside `working_memory` — the usage
+ * pair (`tokens_usages` / `usage_assembly_error`) is the current example. Without
+ * the index signature, reading one means casting the whole value away, and the
+ * two SDK mirrors of the same wire shape disagree on whether it is closed.
  */
 export interface DictPipeOutput {
   working_memory: DictWorkingMemory;
   pipeline_run_id: string;
+  /** Pipelex extension fields the runner rides on the pipe output. */
+  [extension: string]: unknown;
 }
 
 /**
