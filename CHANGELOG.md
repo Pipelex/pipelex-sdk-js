@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.5.1] - 2026-07-22
+
+### Security
+
+- **Bumped the transitive dev dependency `brace-expansion` to a patched release (CVE-2026-13149 / GHSA-3jxr-9vmj-r5cp).** The vulnerable `5.0.6` copy pulled in via `@typescript-eslint` — exponential-time expansion of consecutive non-expanding `{}` groups, a DoS that can stall the calling thread — is updated to `5.0.7`; the unaffected top-level `1.x` copy moves to its latest patch in the same lockfile update. Lockfile-only change with no effect on the published runtime surface: `brace-expansion` is dev-only and is never shipped in `@pipelex/sdk`.
+
 ## [v0.5.0] - 2026-07-22
 
 ### Added
