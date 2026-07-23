@@ -9,13 +9,17 @@ A and B are orthogonal: A is a *client-side semantic layer* over `getMethod` (th
 
 ---
 
-## ▶ RESUME HERE — state as of Phase A complete (last session)
+## ▶ RESUME HERE — ALL PHASES COMPLETE (Checkpoint C reached) → next step is `/release`
 
-**Done: all of Phase A (A1 + A2 + A3).** Committed on `feature/Method-id` as `0dcdc54` ("feat: add method_id support for buildInputs and prepareInputs"). **Working tree is clean** — everything below, plus the checked boxes in this file, is in that commit. `make check` and `make test` were both green at commit time (the tree is unchanged since, so they still are). The commit also (re)tracks `TODOS.md` and `wip/method-id-closure-resolution.md`.
+**Done: all of Phase A + Phase B + Phase C.** The plan is fully implemented. Phase A committed on `feature/Method-id` as `0dcdc54`; **Phases B + C are the current uncommitted working tree.** `make check` and `make test` both green; `contract-check` clean (no protocol/validation-spec drift). Every acceptance box below is ticked.
 
-**Remaining: Phase B (drift reconciliation) and Phase C (docs/changelog/contract-check).** Start at Phase B below — it's independent of A. Then C.
+**Only thing left: commit B + C, then hand to `/release`** for the version bump + CHANGELOG heading/date finalization. **Do NOT self-bump `package.json`/`SDK_VERSION`** — `/release` owns that (`tests/index.test.ts` asserts they match, so a manual bump breaks the tree until release reconciles).
 
-**Concrete surface that landed in Phase A** (verify by reading, don't rebuild):
+**Uncommitted working-tree surface (Phases B + C):**
+- **Phase B** — `src/client.ts` REMOVED `deleteMethod`; `src/product-models.ts` `MethodData` gained `org_id`/`created_by_user_id`/`description?`; `tests/product.test.ts` + `tests/method-closure.test.ts` fixtures enriched; `docs/architecture.md` stale-delete mention dropped.
+- **Phase C** — `docs/input-preparation.md` by-id section + `EmptyMethodSourceError` in the taxonomy, `method_id`-deferred caveat dropped; `docs/architecture.md` methods-catalog bullet (new fields + `getMethodClosure`) + `method-source.ts` module entry; `CHANGELOG.md` new `## [v0.6.0]` block (Phase A + B). No `conformance/` change needed.
+
+**Phase A surface (committed @ `0dcdc54`, verify by reading, don't rebuild):**
 - `src/method-source.ts` — NEW. `methodSourceToContents(mthds: string): string[]` (verbatim port + `rawBundle`/`isFileEntry` helpers). Exported from the barrel.
 - `src/errors.ts` — NEW `EmptyMethodSourceError extends InputPreparationError` (public readonly `methodId`). Exported from the barrel's errors block.
 - `src/client.ts` — NEW `getMethodClosure(methodId): Promise<MthdsFileItem[]>` immediately after `getMethod`. NEW exported client param type `BuildInputsByMethodId` (defined after `MthdsFile`, exported from the barrel). `buildInputs` param widened to `BuildInputsRequest | BuildInputsByMethodId`; the by-id branch resolves via `getMethodClosure`, strips `method_id`, posts the normal `files`-form body. Imports added: `InputsTemplateFormat`, `MthdsFileItem`, `EmptyMethodSourceError`, `methodSourceToContents`.
@@ -99,38 +103,36 @@ Design rule: `method_id` is a **client-side convenience**, resolved to `files` b
 
 ## Phase B — Drift reconciliation (methods read model + phantom route)
 
-- [ ] **Remove `deleteMethod`** — the method definition is at `src/client.ts:988` (`async deleteMethod(...)`, the `DELETE /v1/methods/{id}` wrapper). It is NOT a separate barrel export (just a class method), so nothing in `src/index.ts` references it. The only test is `tests/product.test.ts:125` ("DELETEs /v1/methods/{id} and tolerates an empty 204 body") — remove that `it(...)` block. (Breaking export change — changelog it.)
-- [ ] **Add fields to `MethodData`** (`src/product-models.ts`, ~`27`): `org_id: string`, `created_by_user_id: string`, and `description?: string | null` (server-derived, present on GET/list read responses; absent on the write contract). Keep neutral field names (no `pipelex_` prefix). Leave `pipe_output` as-is — the SDK's "legacy, optional" note already matches the platform stance (kept for old rows, cleared on resave).
-  - [ ] Confirm `MethodWriteInput` still matches `MethodSaveBody` (`name`, `mthds`, `input_data`) — it does; no change. `description` must NOT be added to the write input.
-  - [ ] Fixtures: **no test fixture is typed as `MethodData`** (they're inline JSON literals in `jsonResponse(200, {...})` — verified: the only `: MethodData` annotation is `listMethods`'s return type in `src/client.ts`). So the two required additions do NOT break `typecheck` / `typecheck:test`. Updating the method literals in `tests/product.test.ts` (and the `methodResponse` helper in `tests/method-closure.test.ts`) to include `org_id` / `created_by_user_id` is fidelity-only — do it, but nothing goes red if a literal omits them.
+- [x] **Remove `deleteMethod`** — removed the `DELETE /v1/methods/{id}` wrapper from `src/client.ts` (was between `updateMethod` and `listMemberships`). It was never a barrel export, so `src/index.ts` needed no change. Removed the `tests/product.test.ts` "DELETEs /v1/methods/{id}" `it(...)` block; `emptyResponse` helper is still used by other tests. (Breaking export change — changelogged in Phase C.)
+- [x] **Add fields to `MethodData`** (`src/product-models.ts`): added `org_id: string`, `created_by_user_id: string`, and `description?: string | null` (server-derived, GET/list read side only, absent on the write contract; documented inline). Neutral field names, no `pipelex_` prefix. `pipe_output` left as-is.
+  - [x] Confirmed `MethodWriteInput` unchanged (`name`, `mthds`, `input_data`); `description` NOT added to the write input.
+  - [x] Fixtures updated for fidelity — the `listMethods` literal in `tests/product.test.ts` and the `methodResponse` helper in `tests/method-closure.test.ts` now carry `org_id` / `created_by_user_id`.
+- [x] **Bonus (same-change doc fidelity):** dropped the now-stale `deleteMethod` mention from `docs/architecture.md`'s methods-catalog line, noting the no-delete-by-design stance. The fuller methods-surface doc pass (new fields, `getMethodClosure`, by-id) remains Phase C.
 
-> **Checkpoint B** — the SDK's methods surface is faithful to the platform contract (right fields on reads, no phantom delete). Independent of A; can be done before or after.
+> **Checkpoint B** ✅ **COMPLETE** — the SDK's methods surface is faithful to the platform contract (right fields on reads, no phantom delete). `make check` and `make test` both green. Committed on `feature/Method-id`.
 
 ---
 
 ## Phase C — Docs, changelog, verification
 
-- [ ] **`docs/input-preparation.md`**: drop the "`method_id` resolution deferred" caveat; document by-id `prepareInputs`/`buildInputs`, `getMethodClosure`, `methodSourceToContents`, the API-key requirement for by-id, and `EmptyMethodSourceError`. (Leave the separately-deferred opt-in `http(s)` ingest note intact.)
-- [ ] **Methods-surface docs**: document the `MethodData` field additions and the `deleteMethod` removal wherever the product surface is described (`docs/architecture.md` or a methods section — check what exists).
-- [ ] **`CHANGELOG.md`** — new `## [v0.6.0]` block at top:
-  - *Added*: `methodSourceToContents` (exported canonical parser); `getMethodClosure`; by-id `method_id` on `prepareInputs`/`buildInputs`; `EmptyMethodSourceError`; `MethodData.org_id` / `.created_by_user_id` / `.description`.
-  - *Changed / breaking*: removed `deleteMethod` (the hosted platform has no delete route by design).
-  - Follow the repo's changelog voice (no hardcoded counts; "breaking", not "pre-1.0 breaking").
-- [ ] `make check` (lint + format + typecheck + build + depcruise) green.
-- [ ] `make test` green.
-- [ ] Run the `contract-check` skill (methods read model + build-route shapes changed) — it's the pre-release gate for wire-surface drift.
+- [x] **`docs/input-preparation.md`**: dropped the "`method_id` resolution deferred" caveat (only `http(s)` ingest remains deferred). Added a "Closure from a stored `method_id`" section documenting by-id `prepareInputs`/`buildInputs`, `getMethodClosure`, `methodSourceToContents`, the API-key requirement, and the stability-across-future-native-route posture; added `EmptyMethodSourceError` to the error taxonomy. The `http(s)` ingest note is left intact.
+- [x] **Methods-surface docs** (`docs/architecture.md`): methods-catalog bullet now notes the new `MethodData` read-model fields (`org_id`/`created_by_user_id`/`description`) and `getMethodClosure`; the `deleteMethod` removal was already reflected there in Phase B; added a `method-source.ts` entry to the module layout.
+- [x] **`CHANGELOG.md`** — new `## [v0.6.0]` block at top covering BOTH Phase A (`methodSourceToContents`, `getMethodClosure`, by-id `method_id`, `EmptyMethodSourceError`, plus the `BuildInputsByMethodId` param type) AND Phase B (`MethodData.org_id`/`.created_by_user_id`/`.description`; removed `deleteMethod` under *Changed* as "(breaking)"). Repo voice (no hardcoded counts; "breaking"). Dated 2026-07-23 as a placeholder — `/release` finalizes the heading/date.
+- [x] `make check` green (lint + format + typecheck ×2 + build + depcruise).
+- [x] `make test` green (all suites).
+- [x] Ran the `contract-check` skill (baseline v0.5.1 → working tree): **no protocol/validation-spec drift**. All wire-visible changes are on the Pipelex-product `/v1/methods` catalog (governed by neither in-scope spec) or are client-side layers (`method_id` never travels on the wire; `EmptyMethodSourceError` is not a wire error). No `conformance/` test or spec edit required.
 
-> **Checkpoint C** — release-ready. Hand to `/release` for the version bump + CHANGELOG finalization. Do NOT self-bump `package.json`/`SDK_VERSION`.
+> **Checkpoint C** ✅ **COMPLETE** — release-ready. `make check` + `make test` green; contract-check clean. Hand to `/release` for the version bump + CHANGELOG heading/date finalization. Do NOT self-bump `package.json`/`SDK_VERSION`. **Working tree holds all of Phase B + C uncommitted** (Phase A is committed as `0dcdc54`).
 
 ---
 
 ## Acceptance (mirrors the WIP doc)
 
-- [ ] `methodSourceToContents` exported + unit-tested for every source shape (raw / JSON file-array / JSON `[]` / non-array JSON / unparseable / blank / whitespace-only / null).
-- [ ] `prepareInputs({ method_id, inputs })` and `buildInputs({ method_id, … })` resolve a stored method and produce the same result as the equivalent inline-`files` call.
-- [ ] Empty-source path → `EmptyMethodSourceError`; unknown/foreign-org id → the `getMethod` 404 (`ApiResponseError` `not_found`), distinctly.
-- [ ] `MethodData` carries `org_id`, `created_by_user_id`, `description`; `deleteMethod` is gone.
-- [ ] `docs/input-preparation.md` no longer claims by-id is deferred; CHANGELOG has the `## [v0.6.0]` entry.
+- [x] `methodSourceToContents` exported + unit-tested for every source shape (raw / JSON file-array / JSON `[]` / non-array JSON / unparseable / blank / whitespace-only / null).
+- [x] `prepareInputs({ method_id, inputs })` and `buildInputs({ method_id, … })` resolve a stored method and produce the same result as the equivalent inline-`files` call.
+- [x] Empty-source path → `EmptyMethodSourceError`; unknown/foreign-org id → the `getMethod` 404 (`ApiResponseError` `not_found`), distinctly.
+- [x] `MethodData` carries `org_id`, `created_by_user_id`, `description`; `deleteMethod` is gone.
+- [x] `docs/input-preparation.md` no longer claims by-id is deferred; CHANGELOG has the `## [v0.6.0]` entry.
 
 ## Out of scope (do not do here)
 

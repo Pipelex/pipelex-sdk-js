@@ -2,7 +2,7 @@
 
 > **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace, tracked in `TODOS.md`). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
-> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source). Two pieces are deliberately deferred and additive (they do not change this contract): resolving a closure from a catalog `method_id` (would duplicate the method-source parser that lives in `pipelex-mcp`/the platform), and the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
+> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source) **or** as a stored catalog `method_id`, resolved client-side to its closure before anything hits the wire (see "[Closure from a stored `method_id`](#closure-from-a-stored-method_id)" below). One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
 ## Why this exists
 
@@ -38,15 +38,49 @@ The MIME type and size are known client-side, so the record is assembled without
 ### `prepareInputs` — signature-driven input preparation
 
 ```
-client.prepareInputs({ files, pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ files,     pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ method_id, pipe_ref?, inputs }) → PreparedInputs
 ```
 
-Takes the **method closure** (inline `files` — the signature source) plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's compact `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`:
+Takes the **method closure** — inline `files` (the signature source) **or** a stored `method_id` (resolved client-side; see below), never both — plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's compact `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`:
 
 - `inputs` — a **copy** of the caller's inputs with each asset reference replaced by the canonical content shape carrying `pipelex-storage://` in its `url` field (see "Rewritten-input shape" below). Copy-on-write: the caller's original object is never mutated.
 - `uploads` — one upload record per prepared asset (the `uploadFile` record shape), exposing `uri` so callers can log which source became which reference without reverse-engineering the rewritten object.
 
 The prepared `inputs` are passed to the existing run lifecycle unchanged.
+
+## Closure from a stored `method_id`
+
+A caller that has already saved a method to the hosted catalog should not have to re-supply its source. Passing `method_id` instead of inline `files` lets the SDK resolve the closure from the stored method, so the same prepared-inputs flow works from a catalog id:
+
+```
+client.prepareInputs({ method_id: "mt_…", pipe_ref?, inputs }) → PreparedInputs
+client.buildInputs({ method_id: "mt_…", pipe_ref?, format?, explicit? }) → BuildInputsResponse
+```
+
+`method_id` is a **client-side convenience, not a wire field.** Before anything hits the network it is resolved to inline `files` via `getMethodClosure`, and the request that reaches the runner is the ordinary `files`-form body — `method_id` never travels on the wire. So `prepareInputs({ method_id, inputs })` returns exactly the same `PreparedInputs` as the equivalent inline-`files` call. (Do not confuse this client-side `method_id` with the reserved wire field `method_ref` on `BuildRequestBase`, a registry reference the runner does not yet serve.)
+
+### `getMethodClosure` — id → runnable closure
+
+```
+client.getMethodClosure(methodId) → MthdsFileItem[]
+```
+
+`getMethodClosure` is the seam the by-id callers plug into — a **client-side semantic layer** over `getMethod` (the platform has no route that returns a parsed closure). It fetches the method, parses its polymorphic `mthds` source with [`methodSourceToContents`](#methodsourcetocontents--the-canonical-source-parser), and labels each resulting file with the `method_id` as its `source` provenance.
+
+- **Requires an API key.** The methods catalog is org-scoped to the key's org, so resolution only works with an authenticated Pipelex-product key.
+- **Unknown or foreign-org id → the `getMethod` `404`** (`ApiResponseError`, `code: "not_found"`), propagated unchanged. An id from another org is indistinguishable from a nonexistent one — both 404.
+- **A real, in-org method whose source parses to nothing → `EmptyMethodSourceError`** — the row exists but has no runnable MTHDS source yet. This is a distinct outcome from the 404 (see "[Error and capability behavior](#error-and-capability-behavior)").
+
+### `methodSourceToContents` — the canonical source parser
+
+```
+methodSourceToContents(mthds: string) → string[]
+```
+
+A stored method's `mthds` field is **polymorphic**: it is either the raw single-bundle source, or a JSON array of `{ name, content }` file entries (a multi-file closure). `methodSourceToContents` is the one canonical parser that turns either shape into a flat list of file contents — a verbatim port of the platform's `_method_source_to_contents`, so the SDK and the runtime read a stored source identically. It is exported from the barrel for consumers (e.g. `pipelex-mcp`) that need the parse without the fetch. Blank entries are dropped; a source that parses to no non-blank content yields `[]`, which is what `getMethodClosure` turns into `EmptyMethodSourceError`.
+
+> **Stability across a future native route.** `getMethodClosure` and `prepareInputs({ method_id })` / `buildInputs({ method_id })` are the client-side intermediate for a capability the runner may one day serve natively (a `method_id`/`method_ref` on `/v1/build/inputs` and `/v1/validate`). The consumer-facing signatures are kept stable so they can later delegate to a native route without a breaking change — exactly the posture the upload surface takes across its endpoint move.
 
 ## Signature-driven asset identification
 
@@ -82,6 +116,7 @@ Upload is a **hosted Pipelex-product capability**, even though the SDK can be po
 
 The contract distinguishes these semantic outcomes, each a typed subclass of `InputPreparationError` (catch the base to handle any preparation failure, a subclass to branch on category):
 
+- **empty method source** (`EmptyMethodSourceError`, carries `methodId`) — a by-id closure resolution found the stored method but its `mthds` source parses to nothing (the row exists, no runnable source yet). Distinct from the `getMethod` `404` for an unknown/foreign id, which stays an `ApiResponseError`;
 - **invalid local source** (`InvalidLocalSourceError`) — missing, unreadable, or a path string outside Node;
 - **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error);
 - **unsupported server capability** (`UnsupportedUploadCapabilityError`) — the configured deployment has no upload route;

@@ -20,6 +20,8 @@ function jsonResponse(status: number, body: unknown): Response {
 function methodResponse(methodId: string, mthds: string): Response {
   return jsonResponse(200, {
     method_id: methodId,
+    org_id: "o1",
+    created_by_user_id: "u1",
     name: "M",
     mthds,
     created_at: "t",

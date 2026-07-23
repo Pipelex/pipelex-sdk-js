@@ -69,7 +69,15 @@ describe("methods catalog", () => {
   it("GETs /v1/methods (list)", async () => {
     const client = makeClient();
     const methods = [
-      { method_id: "m1", name: "M", mthds: "...", created_at: "t", updated_at: "t" },
+      {
+        method_id: "m1",
+        org_id: "o1",
+        created_by_user_id: "u1",
+        name: "M",
+        mthds: "...",
+        created_at: "t",
+        updated_at: "t",
+      },
     ];
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, methods));
 
@@ -116,17 +124,6 @@ describe("methods catalog", () => {
     expect(req.method).toBe("PUT");
     expect(req.url).toBe("http://localhost:8081/v1/methods/m1");
     expect(req.body).toEqual({ name: "Renamed", mthds: "src" });
-  });
-
-  it("DELETEs /v1/methods/{id} and tolerates an empty 204 body", async () => {
-    const client = makeClient();
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(emptyResponse(204));
-
-    await expect(client.deleteMethod("m1")).resolves.toBeUndefined();
-
-    const req = lastRequest(spy);
-    expect(req.method).toBe("DELETE");
-    expect(req.url).toBe("http://localhost:8081/v1/methods/m1");
   });
 });
 

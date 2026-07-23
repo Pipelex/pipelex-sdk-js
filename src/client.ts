@@ -984,11 +984,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestProduct("PUT", `methods/${encodeURIComponent(methodId)}`, input);
   }
 
-  /** Delete a method — `DELETE /v1/methods/{id}`. */
-  async deleteMethod(methodId: string): Promise<void> {
-    await this.requestProduct("DELETE", `methods/${encodeURIComponent(methodId)}`);
-  }
-
   /** The caller's org memberships + active-org feature flags — `GET /v1/organizations/memberships`. */
   async listMemberships(): Promise<MembershipsResponse> {
     return this.requestProduct("GET", "organizations/memberships");
