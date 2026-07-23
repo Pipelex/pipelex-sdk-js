@@ -86,6 +86,35 @@ describe("build routes — request envelope", () => {
     });
   });
 
+  it("resolves method_id to files client-side, so the wire body carries files (never method_id)", async () => {
+    const client = makeClient();
+    const method = {
+      method_id: "mt_1",
+      name: "M",
+      mthds: "domain = 'smoke'",
+      created_at: "t",
+      updated_at: "t",
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, method))
+      .mockResolvedValueOnce(jsonResponse(200, { is_valid: true }));
+
+    await client.buildInputs({ method_id: "mt_1", pipe_ref: "smoke.echo", format: "json" });
+
+    // First call fetches the method; the second posts the RESOLVED closure — the by-id
+    // form is exactly the files form (`method_id` is client-side sugar, never on the wire).
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/methods/mt_1");
+    expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/build/inputs");
+    const posted = JSON.parse((fetchSpy.mock.calls[1]![1] as RequestInit).body as string);
+    expect(posted).toEqual({
+      files: [{ content: "domain = 'smoke'", source: "mt_1" }],
+      pipe_ref: "smoke.echo",
+      format: "json",
+    });
+    expect("method_id" in posted).toBe(false);
+  });
+
   it("omits pipe_ref entirely when the caller defers to the closure's main_pipe", async () => {
     const client = makeClient();
     const fetchSpy = vi

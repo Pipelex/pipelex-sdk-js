@@ -18,7 +18,15 @@ export * from "mthds/protocol";
 
 // ── Pipelex product client ───────────────────────────────────────────
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
-export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from "./client.js";
+export type {
+  MthdsFile,
+  BuildInputsByMethodId,
+  ValidateFilesOptions,
+  PipelexApiClientOptions,
+} from "./client.js";
+
+// Canonical parser: a stored method's polymorphic `MethodData.mthds` source → bundle contents.
+export { methodSourceToContents } from "./method-source.js";
 
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
@@ -123,6 +131,7 @@ export {
   RunStillRunningError,
   RunLifecycleUnavailableError,
   InputPreparationError,
+  EmptyMethodSourceError,
   InvalidLocalSourceError,
   RejectedAssetError,
   UnsupportedUploadCapabilityError,

@@ -21,7 +21,9 @@ import type {
   DictPipeOutput,
   DictRunResultExecute,
   FormatResponse,
+  InputsTemplateFormat,
   LintResponse,
+  MthdsFileItem,
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexValidationResult,
@@ -61,12 +63,14 @@ import type {
 import {
   ApiResponseError,
   ApiUnreachableError,
+  EmptyMethodSourceError,
   MissingMainStuffError,
   PipelineExecuteTimeoutError,
   PipelineRequestError,
   RunLifecycleUnavailableError,
   RunStillRunningError,
 } from "./errors.js";
+import { methodSourceToContents } from "./method-source.js";
 import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
 import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
@@ -78,6 +82,26 @@ export interface MthdsFile {
   content: string;
   /** Optional provenance URI threaded into validation diagnostics. */
   uri?: string;
+}
+
+/**
+ * The by-id alternative to the wire model `BuildInputsRequest`: resolve the
+ * closure from a stored method's `method_id` instead of inline `files`.
+ *
+ * Client-side sugar — `method_id` is resolved to `files` via `getMethodClosure`
+ * before the request hits the wire, so it never travels as a wire field (and is
+ * distinct from `BuildRequestBase.method_ref`, the reserved registry ref). Supply
+ * a `method_id` OR inline `files`, never both.
+ */
+export interface BuildInputsByMethodId {
+  /** A stored method's id — resolved client-side to its closure before the build call. Requires an API key. */
+  method_id: string;
+  files?: never;
+  method_ref?: never;
+  /** The pipe to project, as a qualified `domain.pipe_code`; omit to default to the closure's `main_pipe`. */
+  pipe_ref?: string;
+  format?: InputsTemplateFormat;
+  explicit?: boolean;
 }
 
 export interface ValidateFilesOptions {
@@ -704,8 +728,21 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — an
    * unresolvable closure comes back as `is_valid: false` with `validation_errors[]`,
    * not as a thrown error.
+   *
+   * Accepts the closure as inline `files` (the wire model {@link BuildInputsRequest})
+   * or as a stored {@link BuildInputsByMethodId} — the by-id form is resolved to
+   * `files` via {@link getMethodClosure} before the request hits the wire (an empty
+   * source throws `EmptyMethodSourceError`; an unknown/foreign id, the `getMethod`
+   * 404). Supply one or the other, never both.
    */
-  async buildInputs(request: BuildInputsRequest): Promise<BuildInputsResponse> {
+  async buildInputs(
+    request: BuildInputsRequest | BuildInputsByMethodId,
+  ): Promise<BuildInputsResponse> {
+    if ("method_id" in request && request.method_id !== undefined) {
+      const files = await this.getMethodClosure(request.method_id);
+      const { method_id: _methodId, ...rest } = request;
+      return this.requestExtension("build/inputs", { ...rest, files });
+    }
     return this.requestExtension("build/inputs", request);
   }
 
@@ -915,6 +952,28 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestProduct("GET", `methods/${encodeURIComponent(methodId)}`);
   }
 
+  /**
+   * Resolve a stored method's id into its runnable MTHDS closure — a client-side
+   * semantic layer over `getMethod` (the platform has no route that returns a
+   * parsed closure). Fetches the method, parses its polymorphic `mthds` source
+   * with `methodSourceToContents`, and labels each resulting file with the
+   * `method_id` as its `source` provenance.
+   *
+   * Requires an API key: the methods catalog is org-scoped to the key's org, so
+   * an unknown OR foreign-org id is a `getMethod` `404` (`ApiResponseError`
+   * `not_found`), which propagates unchanged. A real, in-org method whose source
+   * parses to nothing throws `EmptyMethodSourceError` (distinct from the 404) —
+   * the row exists but has no runnable source yet.
+   */
+  async getMethodClosure(methodId: string): Promise<MthdsFileItem[]> {
+    const method = await this.getMethod(methodId);
+    const contents = methodSourceToContents(method.mthds);
+    if (contents.length === 0) {
+      throw new EmptyMethodSourceError(methodId);
+    }
+    return contents.map((content) => ({ content, source: methodId }));
+  }
+
   /** Create a method — `POST /v1/methods`. */
   async createMethod(input: MethodWriteInput): Promise<MethodData> {
     return this.requestProduct("POST", "methods", input);
@@ -1056,8 +1115,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * content carrying `pipelex-storage://` in `url`) plus one upload record per
    * prepared asset. HTTP(S) URLs and existing `pipelex-storage://` URIs pass
    * through unchanged; all failures are raised before any run is created. The
-   * caller supplies the method closure as inline `files`. See
-   * `docs/input-preparation.md`.
+   * caller supplies the method closure EITHER as inline `files` OR as a stored
+   * `method_id` (resolved to its closure via `getMethodClosure` first; requires
+   * an API key). See `docs/input-preparation.md`.
    */
   async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
     return prepareInputsImpl(this, request);
