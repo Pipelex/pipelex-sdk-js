@@ -126,6 +126,69 @@ describe("PipelexApiClient.execute argument validation", () => {
   });
 });
 
+describe("PipelexApiClient method-bundle transport (files / bundle_b64)", () => {
+  it("sends the files map on execute and accepts a bundle-only request", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "ok" }));
+    // No pipe_code, no mthds_contents — the bundle alone satisfies the precondition.
+    await client.execute({
+      files: { "m.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." },
+    });
+    const body = bodyOf(fetchSpy);
+    expect(body.files).toEqual({ "m.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." });
+    expect(body.mthds_contents).toBeUndefined();
+  });
+
+  it("sends bundle_b64 on start", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(202, { pipeline_run_id: "run-b", state: "STARTED" }));
+    await client.start({ bundle_b64: "UEsDBBQ=" });
+    expect(bodyOf(fetchSpy).bundle_b64).toBe("UEsDBBQ=");
+  });
+
+  it("rejects files + bundle_b64 before dispatch (two encodings of one bundle)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(
+      client.execute({ files: { "m.mthds": "domain = 'x'" }, bundle_b64: "UEsDBBQ=" }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a bundle combined with mthds_contents before dispatch (self-contained)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(
+      client.start({ files: { "m.mthds": "domain = 'x'" }, mthds_contents: ["domain = 'y'"] }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects bundle fields smuggled through `extra` (reserved request keys)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(
+      client.execute({ pipe_code: "p", extra: { files: { "m.mthds": "domain = 'x'" } } }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not ship an empty files map on the wire", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "ok" }));
+    await client.execute({ pipe_code: "registered_pipe", files: {} });
+    const body = bodyOf(fetchSpy);
+    expect(body.files).toBeUndefined();
+    expect(body.pipe_code).toBe("registered_pipe");
+  });
+});
+
 describe("PipelexApiClient network errors", () => {
   it("wraps ECONNREFUSED in ApiUnreachableError with code", async () => {
     const client = makeClient();

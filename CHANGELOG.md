@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Method-bundle transport (custom PipeFunc Python).** `execute()` and `start()` now accept the Pipelex-API method-bundle fields — `files` (a `{ relativePath: text }` map of the `.mthds` plus its `funcs/*.py` / `structures/*.py`) and `bundle_b64` (the same bundle as a base64 zip) — so a method's custom PipeFunc Python travels to the runner instead of only the inline `.mthds`. A bundle is self-contained: it satisfies the "something to run" precondition on its own (no `pipe_code` / `mthds_contents` required), and the blocking-execute fallback forwards it too. Bumps the `mthds` dependency to `^0.20.0` (the release that carries these fields on `RunRequest` / `RunOptions`).
+- **`python` on the methods catalog model.** `MethodData` and `MethodWriteInput` gain an optional `python` field (JSON `[{name, content}]` of self-contained `.py` files, serialized like `mthds`) so a `method_id`-run client can round-trip stored custom PipeFunc Python. Omitting it on a `PUT` preserves the stored Python server-side; send an explicit value (including `""`) to set or clear it.
+
+### Changed
+
+- **Run-source exclusivity enforced before dispatch.** A bundle combined with `mthds_contents`, or `files` combined with `bundle_b64`, throws a clear `PipelineRequestError` client-side (presence-based, so an empty-but-supplied encoding is caught too) rather than surfacing as an opaque server `422`; empty encodings are never shipped on the wire. `files` / `bundle_b64` are reserved request keys, so they cannot be smuggled through `extra`.
+
 ## [v0.5.1] - 2026-07-22
 
 ### Security

@@ -29,6 +29,12 @@ export interface MethodData {
   name: string;
   /** The `.mthds` bundle source. */
   mthds: string;
+  /**
+   * Custom-PipeFunc Python sources, serialized like `mthds` as a JSON
+   * `[{name, content}]` array of self-contained `.py` files. Empty string when
+   * the method has no custom Python. Returned on both get and list.
+   */
+  python?: string;
   input_data?: Record<string, unknown> | null;
   /** Legacy persisted output spec; optional. */
   pipe_output?: Record<string, unknown> | null;
@@ -40,6 +46,13 @@ export interface MethodData {
 export interface MethodWriteInput {
   name: string;
   mthds: string;
+  /**
+   * Custom-PipeFunc Python (`JSON [{name, content}]`). OMITTING it on a `PUT`
+   * preserves the stored Python (the server treats absent as "not sent"); send
+   * an explicit value — including `""` — to set or clear it. Always send the
+   * full set on a save that intends to change it.
+   */
+  python?: string;
   input_data?: Record<string, unknown> | null;
 }
 

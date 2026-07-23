@@ -418,12 +418,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
+      !hasBundlePayload(options) &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents or a server-specific extension arg (extra) must be provided to execute().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to execute().",
       );
     }
+    assertExclusiveRunSources(options);
 
     const request: RunRequest & Record<string, unknown> = {
       pipe_code: options.pipe_code,
@@ -432,6 +434,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name,
       output_multiplicity: options.output_multiplicity,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref,
+      files: nonEmptyFiles(options.files),
+      bundle_b64: nonEmptyString(options.bundle_b64),
       ...extensions,
     };
 
@@ -474,12 +478,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
+      !hasBundlePayload(options) &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents or a server-specific extension arg (extra) must be provided to start().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to start().",
       );
     }
+    assertExclusiveRunSources(options);
 
     // `?? undefined` so JSON.stringify drops absent fields from the wire body.
     const request: StartRequest & Record<string, unknown> = {
@@ -489,6 +495,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name ?? undefined,
       output_multiplicity: options.output_multiplicity ?? undefined,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
+      files: nonEmptyFiles(options.files),
+      bundle_b64: nonEmptyString(options.bundle_b64),
       ...extensions,
     };
 
@@ -1087,6 +1095,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name ?? undefined,
       output_multiplicity: options.output_multiplicity ?? undefined,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
+      // Forward the method bundle so a custom-PipeFunc method falls back onto
+      // the blocking path (bare runner / no run store) with its Python intact.
+      files: options.files ?? undefined,
+      bundle_b64: options.bundle_b64 ?? undefined,
       extra: options.extra ?? undefined,
     });
     return mapRunResultToRunResults(response);
@@ -1143,6 +1155,10 @@ function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
 }
 
 // The protocol's own request fields — `extra` is for extension args only.
+// `files` / `bundle_b64` (the Pipelex-API method-bundle transport) are reserved
+// too: they are named run-source options, so smuggling them through `extra`
+// (which merges last into the body) would overwrite the validated fields and
+// bypass the run-source exclusivity check.
 const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "pipe_code",
   "mthds_contents",
@@ -1150,7 +1166,56 @@ const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "output_name",
   "output_multiplicity",
   "dynamic_output_concept_ref",
+  "files",
+  "bundle_b64",
 ]);
+
+/**
+ * Does the request carry a method bundle (the Pipelex-API `files` / `bundle_b64`
+ * transport, which lets custom PipeFunc Python travel with the method)? A bundle
+ * is self-contained — it carries its own `.mthds` — so it satisfies the
+ * "something to run" precondition on its own, without `pipe_code` / `mthds_contents`.
+ */
+function hasBundlePayload(options: RunOptions): boolean {
+  const hasFiles = options.files != null && Object.keys(options.files).length > 0;
+  const hasZip = options.bundle_b64 != null && options.bundle_b64.length > 0;
+  return hasFiles || hasZip;
+}
+
+/**
+ * Enforce the run-source exclusivity contract before dispatch, so a conflicting
+ * request fails as a clear `PipelineRequestError` here rather than an opaque
+ * server `422`. A method bundle is self-contained, so it cannot ride alongside
+ * `mthds_contents`, and `files` / `bundle_b64` are two encodings of one bundle.
+ * Exclusivity keys off PRESENCE (an empty-but-supplied encoding still counts) —
+ * `mthds_contents` counts only when non-empty. Mirrors the server's validator.
+ */
+function assertExclusiveRunSources(options: RunOptions): void {
+  const hasFiles = options.files != null;
+  const hasZip = options.bundle_b64 != null;
+  const hasContents = options.mthds_contents != null && options.mthds_contents.length > 0;
+  if (hasFiles && hasZip) {
+    throw new PipelineRequestError(
+      "files and bundle_b64 are two encodings of the same bundle and are mutually exclusive; provide one.",
+    );
+  }
+  if ((hasFiles || hasZip) && hasContents) {
+    throw new PipelineRequestError(
+      "A method bundle (files/bundle_b64) is self-contained; it cannot be combined with mthds_contents.",
+    );
+  }
+}
+
+/** An empty map is not a runnable bundle; drop it so the runner never sees a zero-file bundle. */
+function nonEmptyFiles(
+  files: Record<string, string> | null | undefined,
+): Record<string, string> | undefined {
+  return files != null && Object.keys(files).length > 0 ? files : undefined;
+}
+
+function nonEmptyString(value: string | null | undefined): string | undefined {
+  return value != null && value.length > 0 ? value : undefined;
+}
 
 /**
  * Validate and copy the generic `extra` passthrough. Extension args ride the

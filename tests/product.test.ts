@@ -118,6 +118,18 @@ describe("methods catalog", () => {
     expect(req.body).toEqual({ name: "Renamed", mthds: "src" });
   });
 
+  it("POSTs /v1/methods carrying custom-PipeFunc `python`", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { method_id: "m1" }));
+
+    const python = '[{"name":"helper.py","content":"from pipelex import log\\n"}]';
+    await client.createMethod({ name: "M", mthds: "src", python });
+
+    expect(lastRequest(spy).body).toEqual({ name: "M", mthds: "src", python });
+  });
+
   it("DELETEs /v1/methods/{id} and tolerates an empty 204 body", async () => {
     const client = makeClient();
     const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(emptyResponse(204));
