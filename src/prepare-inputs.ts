@@ -22,15 +22,32 @@ import { uploadFile } from "./upload.js";
 const PIPELEX_STORAGE_SCHEME = "pipelex-storage://";
 const HTTP_URL_RE = /^https?:\/\//i;
 
-/** What `prepareInputs` takes: the method closure, the target pipe, and the caller's compact inputs. */
-export interface PrepareInputsRequest {
-  /** The method closure — inline MTHDS files. This is the signature source. */
-  files: MthdsFileItem[];
+/** The pipe selector + caller inputs shared by both closure-source shapes. */
+interface PrepareInputsBase {
   /** The pipe to prepare inputs for, as a qualified `domain.pipe_code`; omit to default to the closure's `main_pipe`. */
   pipe_ref?: string;
   /** The caller's compact inputs (variable name → value). */
   inputs: Record<string, unknown>;
 }
+
+/**
+ * What `prepareInputs` takes: the method closure, the target pipe, and the
+ * caller's compact inputs. Supply the closure EITHER as inline `files` OR as a
+ * stored `method_id` — never both. `method_id` is a client-side convenience:
+ * it is resolved to `files` via `getMethodClosure` before anything hits the
+ * wire (it never travels as a wire field), and requires an API key.
+ */
+export type PrepareInputsRequest =
+  | (PrepareInputsBase & {
+      /** The method closure — inline MTHDS files. This is the signature source. */
+      files: MthdsFileItem[];
+      method_id?: never;
+    })
+  | (PrepareInputsBase & {
+      /** A stored method's id — resolved client-side to its closure before the build call. */
+      method_id: string;
+      files?: never;
+    });
 
 /** The result of `prepareInputs`: rewritten inputs (copy-on-write) plus upload records. */
 export interface PreparedInputs {
@@ -40,7 +57,10 @@ export interface PreparedInputs {
   uploads: UploadRecord[];
 }
 
-/** The client surface `prepareInputs` needs: raw `upload` plus the `buildInputs` signature source. */
+/**
+ * The client surface `prepareInputs` needs: raw `upload`, the `buildInputs`
+ * signature source, and `getMethodClosure` to resolve a by-id request's closure.
+ */
 export interface PrepareCapableClient extends UploadCapableClient {
   buildInputs(request: {
     files: MthdsFileItem[];
@@ -48,6 +68,8 @@ export interface PrepareCapableClient extends UploadCapableClient {
     format?: "json";
     explicit?: boolean;
   }): Promise<BuildInputsResponse>;
+  /** Resolve a stored method's id into its runnable closure — the by-id signature source. */
+  getMethodClosure(methodId: string): Promise<MthdsFileItem[]>;
 }
 
 /** Mutable state threaded through one preparation walk. */
@@ -192,6 +214,33 @@ async function resolveNode(
 }
 
 /**
+ * Resolve the request's closure to inline `files`: fetch and parse a stored
+ * method when `method_id` is given, else use the inline `files`. The either/or
+ * is a type invariant (the discriminated union); these guards back it at runtime
+ * for the degenerate "neither given" and the over-specified "both given" cases a
+ * non-typed caller could still construct.
+ */
+async function resolveClosureFiles(
+  client: PrepareCapableClient,
+  request: PrepareInputsRequest,
+): Promise<MthdsFileItem[]> {
+  if (request.method_id !== undefined && request.files !== undefined) {
+    throw new InputPreparationError(
+      "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method), never both.",
+    );
+  }
+  if (request.method_id !== undefined) {
+    return client.getMethodClosure(request.method_id);
+  }
+  if (request.files !== undefined) {
+    return request.files;
+  }
+  throw new InputPreparationError(
+    "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method).",
+  );
+}
+
+/**
  * Prepare a pipe's inputs: upload local/byte/data-URL assets at the signature's
  * file-bearing positions and return copy-on-write rewritten inputs plus upload
  * records. HTTP(S) URLs and existing `pipelex-storage://` URIs pass through
@@ -206,8 +255,10 @@ export async function prepareInputs(
   client: PrepareCapableClient,
   request: PrepareInputsRequest,
 ): Promise<PreparedInputs> {
+  const files = await resolveClosureFiles(client, request);
+
   const report = await client.buildInputs({
-    files: request.files,
+    files,
     ...(request.pipe_ref === undefined ? {} : { pipe_ref: request.pipe_ref }),
     format: "json",
     explicit: true,
