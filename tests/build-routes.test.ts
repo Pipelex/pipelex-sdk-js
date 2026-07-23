@@ -15,8 +15,9 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
-import { ApiResponseError, ApiUnreachableError } from "../src/errors.js";
+import { ApiResponseError, ApiUnreachableError, PipelineRequestError } from "../src/errors.js";
 import type {
+  BuildInputsRequest,
   BuildInputsValidReport,
   BuildOutputValidReport,
   BuildRunnerValidReport,
@@ -113,6 +114,29 @@ describe("build routes — request envelope", () => {
       format: "json",
     });
     expect("method_id" in posted).toBe(false);
+  });
+
+  it("rejects an over-specified both-files-and-method_id buildInputs call before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // A non-typed (JS) caller can still supply both closure sources. The request is
+    // genuinely ambiguous, so it must fail fast — no catalog resolution, no build request
+    // on the wire — rather than silently letting `method_id` overwrite the inline `files`.
+    await expect(
+      client.buildInputs({
+        files: [{ content: "x" }],
+        method_id: "mt_1",
+      } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("makes an over-specified buildInputs closure a type error (files + method_id)", () => {
+    // @ts-expect-error — `files` and `method_id` are mutually exclusive on buildInputs,
+    // mirroring the prepareInputs discriminated union.
+    const both: BuildInputsRequest = { files: [{ content: "x" }], method_id: "mt_1" };
+    expect(both).toBeDefined();
   });
 
   it("omits pipe_ref entirely when the caller defers to the closure's main_pipe", async () => {

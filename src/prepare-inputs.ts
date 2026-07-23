@@ -216,13 +216,19 @@ async function resolveNode(
 /**
  * Resolve the request's closure to inline `files`: fetch and parse a stored
  * method when `method_id` is given, else use the inline `files`. The either/or
- * is a type invariant (the discriminated union); this guards the degenerate
- * "neither given" case a non-typed caller could still construct.
+ * is a type invariant (the discriminated union); these guards back it at runtime
+ * for the degenerate "neither given" and the over-specified "both given" cases a
+ * non-typed caller could still construct.
  */
 async function resolveClosureFiles(
   client: PrepareCapableClient,
   request: PrepareInputsRequest,
 ): Promise<MthdsFileItem[]> {
+  if (request.method_id !== undefined && request.files !== undefined) {
+    throw new InputPreparationError(
+      "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method), never both.",
+    );
+  }
   if (request.method_id !== undefined) {
     return client.getMethodClosure(request.method_id);
   }

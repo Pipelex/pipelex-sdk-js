@@ -60,6 +60,8 @@ client.buildInputs({ method_id: "mt_…", pipe_ref?, format?, explicit? }) → B
 
 `method_id` is a **client-side convenience, not a wire field.** Before anything hits the network it is resolved to inline `files` via `getMethodClosure`, and the request that reaches the runner is the ordinary `files`-form body — `method_id` never travels on the wire. So `prepareInputs({ method_id, inputs })` returns exactly the same `PreparedInputs` as the equivalent inline-`files` call. (Do not confuse this client-side `method_id` with the reserved wire field `method_ref` on `BuildRequestBase`, a registry reference the runner does not yet serve.)
 
+**Exactly one closure source.** Supplying both `files` and `method_id` is a compile error for typed callers (the request types are mutually exclusive) and is rejected at runtime for untyped (JS) callers before any resolution — `prepareInputs` throws `InputPreparationError`, `buildInputs` throws `PipelineRequestError`. The request is genuinely ambiguous, so it fails fast rather than silently preferring one source over the other. Supplying neither is likewise rejected.
+
 ### `getMethodClosure` — id → runnable closure
 
 ```

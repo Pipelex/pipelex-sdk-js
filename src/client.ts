@@ -738,7 +738,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   async buildInputs(
     request: BuildInputsRequest | BuildInputsByMethodId,
   ): Promise<BuildInputsResponse> {
-    if ("method_id" in request && request.method_id !== undefined) {
+    // The either/or is a compile-time invariant (the two param types are
+    // mutually exclusive); this backs it at runtime for untyped (JS) callers.
+    // An over-specified `{ files, method_id }` is genuinely ambiguous — reject it
+    // before resolving anything, rather than silently letting `method_id` win.
+    if (request.method_id !== undefined && request.files !== undefined) {
+      throw new PipelineRequestError(
+        "buildInputs: supply the closure as either `files` or `method_id`, never both.",
+      );
+    }
+    if (request.method_id !== undefined) {
       const files = await this.getMethodClosure(request.method_id);
       const { method_id: _methodId, ...rest } = request;
       return this.requestExtension("build/inputs", { ...rest, files });

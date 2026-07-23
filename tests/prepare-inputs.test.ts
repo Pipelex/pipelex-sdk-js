@@ -378,6 +378,22 @@ describe("prepareInputs by method_id", () => {
     ).rejects.toBeInstanceOf(InputPreparationError);
   });
 
+  it("rejects an over-specified both-files-and-method_id call before resolving the closure", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    // A non-typed caller can still supply both closure sources; the request is genuinely
+    // ambiguous, so it must fail fast rather than silently preferring `method_id` — and it
+    // must NOT resolve the catalog method (no throwaway fetch on the rejected path).
+    await expect(
+      prepareInputs(client, {
+        files: FILES,
+        method_id: "mt_1",
+        inputs: { photo: "x" },
+      } as unknown as PrepareInputsRequest),
+    ).rejects.toBeInstanceOf(InputPreparationError);
+    expect(client.getMethodClosureCalls).toEqual([]);
+  });
+
   it("makes an over- or under-specified closure a type error (discriminated union)", () => {
     // @ts-expect-error — `files` and `method_id` are mutually exclusive.
     const both: PrepareInputsRequest = { files: FILES, method_id: "mt_1", inputs: {} };
