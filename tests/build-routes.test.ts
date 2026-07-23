@@ -139,6 +139,35 @@ describe("build routes — request envelope", () => {
     expect(both).toBeDefined();
   });
 
+  it("rejects a buildInputs call with neither files nor method_id before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // A non-typed (JS) caller can still omit both closure sources. Reject it fast rather
+    // than posting a closure-less request to the server.
+    await expect(
+      client.buildInputs({ pipe_ref: "smoke.echo" } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a buildInputs call combining method_id with the reserved method_ref before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // `method_ref` is `never` on the by-id form at compile time; a non-typed caller can
+    // still construct it. Reject rather than letting it ride the wire alongside the
+    // resolved `files`, which would violate the build routes' own files-xor-method_ref
+    // closure contract.
+    await expect(
+      client.buildInputs({
+        method_id: "mt_1",
+        method_ref: "some.reserved.ref",
+      } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("omits pipe_ref entirely when the caller defers to the closure's main_pipe", async () => {
     const client = makeClient();
     const fetchSpy = vi

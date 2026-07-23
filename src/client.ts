@@ -739,18 +739,32 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     request: BuildInputsRequest | BuildInputsByMethodId,
   ): Promise<BuildInputsResponse> {
     // The either/or is a compile-time invariant (the two param types are
-    // mutually exclusive); this backs it at runtime for untyped (JS) callers.
-    // An over-specified `{ files, method_id }` is genuinely ambiguous — reject it
-    // before resolving anything, rather than silently letting `method_id` win.
-    if (request.method_id !== undefined && request.files !== undefined) {
+    // mutually exclusive); these guards back it at runtime for untyped (JS)
+    // callers, mirroring `resolveClosureFiles`'s degenerate-case handling in
+    // prepare-inputs.ts. An over-specified `{ files, method_id }` is genuinely
+    // ambiguous — reject it before resolving anything, rather than silently
+    // letting `method_id` win. A closure with neither is rejected too, rather
+    // than falling through to a malformed request on the wire.
+    const { method_id, files, method_ref } = request;
+    if (method_id !== undefined && files !== undefined) {
       throw new PipelineRequestError(
         "buildInputs: supply the closure as either `files` or `method_id`, never both.",
       );
     }
-    if (request.method_id !== undefined) {
-      const files = await this.getMethodClosure(request.method_id);
+    if (method_id === undefined && files === undefined) {
+      throw new PipelineRequestError(
+        "buildInputs: supply the closure as either `files` or `method_id`.",
+      );
+    }
+    if (method_id !== undefined) {
+      if (method_ref !== undefined) {
+        throw new PipelineRequestError(
+          "buildInputs: `method_ref` cannot be combined with `method_id`.",
+        );
+      }
+      const resolvedFiles = await this.getMethodClosure(method_id);
       const { method_id: _methodId, ...rest } = request;
-      return this.requestExtension("build/inputs", { ...rest, files });
+      return this.requestExtension("build/inputs", { ...rest, files: resolvedFiles });
     }
     return this.requestExtension("build/inputs", request);
   }
