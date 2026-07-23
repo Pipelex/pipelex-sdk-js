@@ -9,6 +9,26 @@ A and B are orthogonal: A is a *client-side semantic layer* over `getMethod` (th
 
 ---
 
+## ▶ RESUME HERE — state as of Phase A complete (last session)
+
+**Done: all of Phase A (A1 + A2 + A3).** Committed on `feature/Method-id` as `0dcdc54` ("feat: add method_id support for buildInputs and prepareInputs"). **Working tree is clean** — everything below, plus the checked boxes in this file, is in that commit. `make check` and `make test` were both green at commit time (the tree is unchanged since, so they still are). The commit also (re)tracks `TODOS.md` and `wip/method-id-closure-resolution.md`.
+
+**Remaining: Phase B (drift reconciliation) and Phase C (docs/changelog/contract-check).** Start at Phase B below — it's independent of A. Then C.
+
+**Concrete surface that landed in Phase A** (verify by reading, don't rebuild):
+- `src/method-source.ts` — NEW. `methodSourceToContents(mthds: string): string[]` (verbatim port + `rawBundle`/`isFileEntry` helpers). Exported from the barrel.
+- `src/errors.ts` — NEW `EmptyMethodSourceError extends InputPreparationError` (public readonly `methodId`). Exported from the barrel's errors block.
+- `src/client.ts` — NEW `getMethodClosure(methodId): Promise<MthdsFileItem[]>` immediately after `getMethod`. NEW exported client param type `BuildInputsByMethodId` (defined after `MthdsFile`, exported from the barrel). `buildInputs` param widened to `BuildInputsRequest | BuildInputsByMethodId`; the by-id branch resolves via `getMethodClosure`, strips `method_id`, posts the normal `files`-form body. Imports added: `InputsTemplateFormat`, `MthdsFileItem`, `EmptyMethodSourceError`, `methodSourceToContents`.
+- `src/prepare-inputs.ts` — `PrepareInputsRequest` is now a discriminated union `{files}|{method_id}` (mutually exclusive via `never` guards) over a shared `PrepareInputsBase`. `PrepareCapableClient` gained `getMethodClosure`. NEW private `resolveClosureFiles` helper resolves the closure at the top of `prepareInputs` (with a runtime `InputPreparationError` guard for the degenerate neither-given case).
+- Tests: NEW `tests/method-source.test.ts`, NEW `tests/method-closure.test.ts`; extended `tests/prepare-inputs.test.ts` (fake client gained call-recording `getMethodClosure`; new by-id describe incl. a `@ts-expect-error` type-level test that `typecheck:test` enforces) and `tests/build-routes.test.ts` (by-id `buildInputs` posts resolved `files`, `method_id` never on the wire).
+
+**Nuances a resumer should know:**
+- **`method_id` never travels on the wire** — it's resolved to `files` client-side. `BuildInputsByMethodId` is a *client param type*, deliberately NOT part of the wire model `BuildInputsRequest`. Keep it that way. Do not confuse it with `BuildRequestBase.method_ref` (reserved registry ref, server 501s).
+- **By-id `buildInputs` / `prepareInputs` make TWO fetch calls**: first `GET /v1/methods/{id}` (the `getMethod`), then the `build/inputs` POST. Any new test at the fetch boundary must mock both (`mockResolvedValueOnce` ×2) — see the by-id test in `tests/build-routes.test.ts`.
+- **`MTHDSProtocol` is exactly `execute/start/validate/models/version`** — `buildInputs` is a client extension, so widening it broke no interface conformance. Confirmed against `node_modules/mthds/dist/protocol/protocol.d.ts`.
+
+---
+
 ## Cold-start context (read this first in a new session)
 
 **What the SDK is.** `@pipelex/sdk` (`PipelexApiClient`) is the TS client for the Pipelex hosted API. Flat `src/`. ESM-only, `tsc` build, Vitest, `make check` before commit. Depends one-way on `mthds/protocol` only. See `CLAUDE.md`.
@@ -79,10 +99,10 @@ Design rule: `method_id` is a **client-side convenience**, resolved to `files` b
 
 ## Phase B — Drift reconciliation (methods read model + phantom route)
 
-- [ ] **Remove `deleteMethod`** from `src/client.ts` (the `DELETE /v1/methods/{id}` method) and from the barrel if separately referenced. Remove/adjust any test that exercised it. (Breaking export change — changelog it.)
-- [ ] **Add fields to `MethodData`** (`src/product-models.ts`): `org_id: string`, `created_by_user_id: string`, and `description?: string | null` (server-derived, present on GET/list read responses; absent on the write contract). Keep neutral field names (no `pipelex_` prefix). Leave `pipe_output` as-is — the SDK's "legacy, optional" note already matches the platform stance (kept for old rows, cleared on resave).
+- [ ] **Remove `deleteMethod`** — the method definition is at `src/client.ts:988` (`async deleteMethod(...)`, the `DELETE /v1/methods/{id}` wrapper). It is NOT a separate barrel export (just a class method), so nothing in `src/index.ts` references it. The only test is `tests/product.test.ts:125` ("DELETEs /v1/methods/{id} and tolerates an empty 204 body") — remove that `it(...)` block. (Breaking export change — changelog it.)
+- [ ] **Add fields to `MethodData`** (`src/product-models.ts`, ~`27`): `org_id: string`, `created_by_user_id: string`, and `description?: string | null` (server-derived, present on GET/list read responses; absent on the write contract). Keep neutral field names (no `pipelex_` prefix). Leave `pipe_output` as-is — the SDK's "legacy, optional" note already matches the platform stance (kept for old rows, cleared on resave).
   - [ ] Confirm `MethodWriteInput` still matches `MethodSaveBody` (`name`, `mthds`, `input_data`) — it does; no change. `description` must NOT be added to the write input.
-  - [ ] Update/extend any `MethodData` fixtures in tests to include the new fields.
+  - [ ] Fixtures: **no test fixture is typed as `MethodData`** (they're inline JSON literals in `jsonResponse(200, {...})` — verified: the only `: MethodData` annotation is `listMethods`'s return type in `src/client.ts`). So the two required additions do NOT break `typecheck` / `typecheck:test`. Updating the method literals in `tests/product.test.ts` (and the `methodResponse` helper in `tests/method-closure.test.ts`) to include `org_id` / `created_by_user_id` is fidelity-only — do it, but nothing goes red if a literal omits them.
 
 > **Checkpoint B** — the SDK's methods surface is faithful to the platform contract (right fields on reads, no phantom delete). Independent of A; can be done before or after.
 
