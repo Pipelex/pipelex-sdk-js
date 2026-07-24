@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.8.0] - 2026-07-24
+
+### Added
+
+- **`python` on the methods catalog model.** `MethodData` and `MethodWriteInput` gain an optional `python` field — the custom PipeFunc Python that travels with a stored method — typed as `MethodFile[]` (`{ name, content }`), so a `method_id`-run client can round-trip stored Python. On the wire it is the serialized `[{ name, content }]` catalog string; the client (de)serializes it at the boundary via `mthds/protocol`'s canonical `parseMethodFiles`/`serializeMethodFiles` (one owner of the format, no per-consumer parser mirror). Three-way on a `PUT`: **omit** preserves the stored Python (nothing sent), an **empty array** `[]` clears it (serialized to the `""` sentinel), a **non-empty array** replaces it. Raises the `mthds` floor to `^0.22.0` (the release that exports the `MethodFile` serialization).
+
 ## [v0.7.0] - 2026-07-24
 
 ### Added
