@@ -12,7 +12,12 @@ import type {
 // Run-source predicates come from the standard, not a local restatement: which
 // source combinations are legal is an invariant of `RunRequest` itself, so this
 // client and the MTHDS runners cannot disagree about what they reject.
-import { assertExclusiveRunSources, hasBundlePayload } from "mthds/protocol";
+import {
+  assertExclusiveRunSources,
+  hasBundlePayload,
+  parseMethodFiles,
+  serializeMethodFiles,
+} from "mthds/protocol";
 import type {
   BuildInputsRequest,
   BuildInputsResponse,
@@ -189,6 +194,35 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * stay shaped like the standard's wire surface (`mthds/protocol`). The Pipelex
  * extensions (build, run lifecycle) ride on top.
  */
+
+// ── Methods catalog: typed `python` ⇄ wire string ────────────────────────
+// The catalog stores a method's `python` as the serialized `[{ name, content }]`
+// string; the public `MethodData`/`MethodWriteInput` type it as `MethodFile[]`.
+// These wire shapes + converters are the one place the SDK (de)serializes it, via
+// `mthds/protocol`'s canonical `parseMethodFiles`/`serializeMethodFiles`.
+
+/** `MethodData` as it travels on the wire — `python` is the serialized catalog string. */
+type MethodDataWire = Omit<MethodData, "python"> & { python?: string };
+/** `MethodWriteInput` as it travels on the wire — `python` is the serialized catalog string. */
+type MethodWriteWire = Omit<MethodWriteInput, "python"> & { python?: string };
+
+/** Parse a wire method into the public shape (`python` → `MethodFile[]`). */
+function methodDataFromWire(wire: MethodDataWire): MethodData {
+  const { python, ...rest } = wire;
+  return python == null ? rest : { ...rest, python: parseMethodFiles(python) };
+}
+
+/**
+ * Serialize a write payload for the wire. `python` is three-way: OMITTED stays
+ * omitted (preserve server-side); an array — including `[]` — is serialized (`[]`
+ * → `""`, the clear sentinel; non-empty → the JSON array). It is never sent as an
+ * array on the wire.
+ */
+function methodWriteToWire(input: MethodWriteInput): MethodWriteWire {
+  const { python, ...rest } = input;
+  return python === undefined ? rest : { ...rest, python: serializeMethodFiles(python) };
+}
+
 export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   private readonly apiKey: string | undefined;
   private readonly baseUrl: string;
@@ -991,12 +1025,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /** List the caller's saved methods — `GET /v1/methods`. */
   async listMethods(): Promise<MethodData[]> {
-    return this.requestProduct("GET", "methods");
+    const wire = await this.requestProduct<MethodDataWire[]>("GET", "methods");
+    return wire.map(methodDataFromWire);
   }
 
   /** Fetch one method by id — `GET /v1/methods/{id}`. */
   async getMethod(methodId: string): Promise<MethodData> {
-    return this.requestProduct("GET", `methods/${encodeURIComponent(methodId)}`);
+    const wire = await this.requestProduct<MethodDataWire>(
+      "GET",
+      `methods/${encodeURIComponent(methodId)}`,
+    );
+    return methodDataFromWire(wire);
   }
 
   /**
@@ -1023,12 +1062,22 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /** Create a method — `POST /v1/methods`. */
   async createMethod(input: MethodWriteInput): Promise<MethodData> {
-    return this.requestProduct("POST", "methods", input);
+    const wire = await this.requestProduct<MethodDataWire>(
+      "POST",
+      "methods",
+      methodWriteToWire(input),
+    );
+    return methodDataFromWire(wire);
   }
 
   /** Replace a method (rename = changed `name`) — `PUT /v1/methods/{id}`. */
   async updateMethod(methodId: string, input: MethodWriteInput): Promise<MethodData> {
-    return this.requestProduct("PUT", `methods/${encodeURIComponent(methodId)}`, input);
+    const wire = await this.requestProduct<MethodDataWire>(
+      "PUT",
+      `methods/${encodeURIComponent(methodId)}`,
+      methodWriteToWire(input),
+    );
+    return methodDataFromWire(wire);
   }
 
   /** The caller's org memberships + active-org feature flags — `GET /v1/organizations/memberships`. */

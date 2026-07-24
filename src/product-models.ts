@@ -10,6 +10,8 @@
  * consumes — not a speculative mirror of every server field.
  */
 
+import type { MethodFile } from "mthds/protocol";
+
 import type { RunStatus } from "./runs.js";
 
 // ── User profile (`/v1/me`) ─────────────────────────────────────────────
@@ -31,6 +33,15 @@ export interface MethodData {
   name: string;
   /** The `.mthds` bundle source. */
   mthds: string;
+  /**
+   * Custom-PipeFunc Python sources, as `MethodFile[]` (`{ name, content }`). On
+   * the wire this is the serialized `[{ name, content }]` catalog string (empty
+   * `""` when the method has no custom Python); the client (de)serializes it via
+   * `mthds/protocol`'s `parseMethodFiles`/`serializeMethodFiles`, so callers work
+   * with the typed array. Empty array when the method has no custom Python.
+   * Returned on both get and list.
+   */
+  python?: MethodFile[];
   input_data?: Record<string, unknown> | null;
   /** Legacy persisted output spec; optional. */
   pipe_output?: Record<string, unknown> | null;
@@ -47,6 +58,14 @@ export interface MethodData {
 export interface MethodWriteInput {
   name: string;
   mthds: string;
+  /**
+   * Custom-PipeFunc Python as `MethodFile[]`. Three-way on a `PUT`: **omit**
+   * (`undefined`) preserves the stored Python (the client sends nothing, the
+   * server treats absent as "not sent"); an **empty array** `[]` clears it (the
+   * client serializes to `""`); a **non-empty array** replaces it. It is a
+   * replace, not a merge — send the full set on a save that intends to change it.
+   */
+  python?: MethodFile[];
   input_data?: Record<string, unknown> | null;
 }
 

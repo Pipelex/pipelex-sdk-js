@@ -125,6 +125,70 @@ describe("methods catalog", () => {
     expect(req.url).toBe("http://localhost:8081/v1/methods/m1");
     expect(req.body).toEqual({ name: "Renamed", mthds: "src" });
   });
+
+  it("POSTs /v1/methods serializing custom-PipeFunc `python` (MethodFile[] → wire string)", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { method_id: "m1" }));
+
+    await client.createMethod({
+      name: "M",
+      mthds: "src",
+      python: [{ name: "helper.py", content: "from pipelex import log\n" }],
+    });
+
+    // The typed array is serialized to the catalog string on the wire.
+    expect(lastRequest(spy).body).toEqual({
+      name: "M",
+      mthds: "src",
+      python: '[{"name":"helper.py","content":"from pipelex import log\\n"}]',
+    });
+  });
+
+  it("GETs /v1/methods/{id} parsing the wire `python` string into MethodFile[]", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        method_id: "m1",
+        name: "M",
+        mthds: "src",
+        python: '[{"name":"helper.py","content":"x"}]',
+      }),
+    );
+
+    const method = await client.getMethod("m1");
+
+    expect(method.python).toEqual([{ name: "helper.py", content: "x" }]);
+  });
+
+  it("PUT `python` is three-way: omit preserves, [] clears (''), array sets", async () => {
+    const client = makeClient();
+    // A fresh Response per call — the client reads the body, single-read across calls.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() => Promise.resolve(jsonResponse(200, { method_id: "m1" })));
+
+    // omit → the wire body carries no `python` key (server preserves stored).
+    await client.updateMethod("m1", { name: "M", mthds: "src" });
+    expect("python" in (lastRequest(spy).body as object)).toBe(false);
+
+    // [] → cleared as the "" sentinel.
+    spy.mockClear();
+    await client.updateMethod("m1", { name: "M", mthds: "src", python: [] });
+    expect((lastRequest(spy).body as { python?: string }).python).toBe("");
+
+    // non-empty → serialized array.
+    spy.mockClear();
+    await client.updateMethod("m1", {
+      name: "M",
+      mthds: "src",
+      python: [{ name: "a.py", content: "y" }],
+    });
+    expect((lastRequest(spy).body as { python?: string }).python).toBe(
+      '[{"name":"a.py","content":"y"}]',
+    );
+  });
 });
 
 describe("organizations", () => {
