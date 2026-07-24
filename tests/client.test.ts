@@ -126,6 +126,97 @@ describe("PipelexApiClient.execute argument validation", () => {
   });
 });
 
+describe("PipelexApiClient method-bundle transport", () => {
+  const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+
+  function executeResponse(): Response {
+    return jsonResponse(200, {
+      pipeline_run_id: "run-b",
+      pipe_output: { working_memory: { root: {} } },
+    });
+  }
+
+  it("sends `files` on execute — a bundle must reach the wire, not be dropped", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", files: BUNDLE }).catch(() => undefined);
+    expect(bodyOf(fetchSpy)).toMatchObject({ pipe_code: "p", files: BUNDLE });
+  });
+
+  it("accepts a bundle-only execute — a bundle carries its own .mthds", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ files: BUNDLE }).catch(() => undefined);
+    const body = bodyOf(fetchSpy);
+    expect(body).toMatchObject({ files: BUNDLE });
+    expect(body.pipe_code).toBeUndefined();
+  });
+
+  it("sends `bundle_b64` on start", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        jsonResponse(202, { pipeline_run_id: "run-c", state: "STARTED", created_at: "t0" }),
+      );
+    await client.start({ bundle_b64: "UEsDBA==" });
+    expect(bodyOf(fetchSpy)).toEqual({ bundle_b64: "UEsDBA==" });
+  });
+
+  it("rejects the two bundle encodings together (presence, even when one is empty)", async () => {
+    const client = makeClient();
+    await expect(client.execute({ files: BUNDLE, bundle_b64: "UEs=" })).rejects.toBeInstanceOf(
+      PipelineRequestError,
+    );
+    await expect(client.start({ files: {}, bundle_b64: "UEs=" })).rejects.toBeInstanceOf(
+      PipelineRequestError,
+    );
+  });
+
+  it("rejects a bundle combined with non-empty mthds_contents", async () => {
+    const client = makeClient();
+    await expect(
+      client.execute({ files: BUNDLE, mthds_contents: ["domain = 'y'"] }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    await expect(
+      client.start({ bundle_b64: "UEs=", mthds_contents: ["domain = 'y'"] }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("never ships an empty bundle encoding (an empty map carries no method)", async () => {
+    const client = makeClient();
+    // One encoding at a time — supplying both is an exclusivity violation on
+    // presence, empty or not, and is covered above.
+    const withFiles = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", files: {} }).catch(() => undefined);
+    expect(bodyOf(withFiles).files).toBeUndefined();
+
+    vi.restoreAllMocks();
+    const withZip = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", bundle_b64: "" }).catch(() => undefined);
+    expect(bodyOf(withZip).bundle_b64).toBeUndefined();
+  });
+
+  it("rejects run-source fields smuggled through `extra`", async () => {
+    const client = makeClient();
+    // `extra` merges last into the body, so this would overwrite the validated
+    // fields and bypass the exclusivity check.
+    await expect(client.execute({ extra: { files: BUNDLE } })).rejects.toBeInstanceOf(
+      PipelineRequestError,
+    );
+    await expect(client.start({ extra: { bundle_b64: "UEs=" } })).rejects.toBeInstanceOf(
+      PipelineRequestError,
+    );
+  });
+
+  it("keeps the client-only `bundleMain` hint off the wire", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ files: BUNDLE, bundleMain: "bundle.mthds" }).catch(() => undefined);
+    expect(bodyOf(fetchSpy).bundleMain).toBeUndefined();
+  });
+});
+
 describe("PipelexApiClient network errors", () => {
   it("wraps ECONNREFUSED in ApiUnreachableError with code", async () => {
     const client = makeClient();

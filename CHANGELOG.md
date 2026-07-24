@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.7.0] - 2026-07-24
+
+### Added
+
+- **Method-bundle transport on `execute` / `start`: run a method whose custom PipeFunc Python travels with it.** A run can now carry the whole method — the `.mthds` plus its `funcs/*.py`, `structures/*.py` and an optional `requirements.txt` — instead of only the inline `mthds_contents` text, so a method with custom Python is runnable through this SDK. Two equivalent, mutually exclusive encodings on the run options: `files` (a `{ relativePath: text }` map) and `bundle_b64` (the same bundle as a base64 zip). A bundle is self-contained, so it satisfies the "something to run" precondition on its own — neither `pipe_code` nor `mthds_contents` is required beside it, and a bundle-only call is now accepted rather than rejected as under-specified. The bundle is forwarded on the durable `start` path **and** on the blocking `execute` fallback, so a bare runner reached through `startAndWaitForResult` runs the same method as a hosted one.
+
+  Run-source rules are enforced from the standard rather than restated here: `assertExclusiveRunSources` and `hasBundlePayload` are imported from `mthds/protocol` (new in `mthds` 0.21.0), so this client and the MTHDS runners cannot drift on which combinations they reject. Combining the two encodings, or either encoding with non-empty `mthds_contents`, raises `PipelineRequestError`. Exclusivity keys off **presence** (supplying `files: {}` alongside `bundle_b64` is still two encodings) while the run-source precondition keys off **runnability** (an empty encoding carries no method, so it is neither shipped on the wire nor counted as something to run). `files` and `bundle_b64` are now reserved keys on the `extra` passthrough — `extra` merges last into the body, so smuggling a run source through it would overwrite the validated fields and bypass the exclusivity check. The client-only `bundleMain` entrypoint hint is never serialized.
+
+  Because the barrel re-exports `mthds/protocol`, both predicates are also available to consumers directly from `@pipelex/sdk`.
+
+### Changed
+
+- **Raised the `mthds` floor to `^0.21.0`** (was `^0.19.0`), adopting the method-bundle run-source surface and the protocol-level run-source predicates the transport above is built on.
+
 ## [v0.6.0] - 2026-07-23
 
 ### Added

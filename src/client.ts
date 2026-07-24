@@ -9,6 +9,10 @@ import type {
   StartRequest,
   VersionInfo,
 } from "mthds/protocol";
+// Run-source predicates come from the standard, not a local restatement: which
+// source combinations are legal is an invariant of `RunRequest` itself, so this
+// client and the MTHDS runners cannot disagree about what they reject.
+import { assertExclusiveRunSources, hasBundlePayload } from "mthds/protocol";
 import type {
   BuildInputsRequest,
   BuildInputsResponse,
@@ -442,12 +446,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
+      !hasBundlePayload(options) &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents or a server-specific extension arg (extra) must be provided to execute().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to execute().",
       );
     }
+    assertExclusiveRunSources(options);
 
     const request: RunRequest & Record<string, unknown> = {
       pipe_code: options.pipe_code,
@@ -456,6 +462,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name,
       output_multiplicity: options.output_multiplicity,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref,
+      files: nonEmptyFiles(options.files),
+      bundle_b64: nonEmptyString(options.bundle_b64),
       ...extensions,
     };
 
@@ -498,12 +506,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
+      !hasBundlePayload(options) &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents or a server-specific extension arg (extra) must be provided to start().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to start().",
       );
     }
+    assertExclusiveRunSources(options);
 
     // `?? undefined` so JSON.stringify drops absent fields from the wire body.
     const request: StartRequest & Record<string, unknown> = {
@@ -513,6 +523,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name ?? undefined,
       output_multiplicity: options.output_multiplicity ?? undefined,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
+      files: nonEmptyFiles(options.files),
+      bundle_b64: nonEmptyString(options.bundle_b64),
       ...extensions,
     };
 
@@ -1172,6 +1184,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name ?? undefined,
       output_multiplicity: options.output_multiplicity ?? undefined,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
+      // The bundle must survive the fallback too — a bare runner reached through
+      // this path runs the same method as the durable one, or it runs nothing.
+      files: options.files ?? undefined,
+      bundle_b64: options.bundle_b64 ?? undefined,
       extra: options.extra ?? undefined,
     });
     return mapRunResultToRunResults(response);
@@ -1228,6 +1244,9 @@ function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
 }
 
 // The protocol's own request fields — `extra` is for extension args only.
+// `files` / `bundle_b64` are reserved too: they are named run-source options,
+// so smuggling them through `extra` (which merges last into the body) would
+// overwrite the validated fields and bypass the run-source exclusivity check.
 const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "pipe_code",
   "mthds_contents",
@@ -1235,6 +1254,8 @@ const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "output_name",
   "output_multiplicity",
   "dynamic_output_concept_ref",
+  "files",
+  "bundle_b64",
 ]);
 
 /**
@@ -1253,6 +1274,22 @@ function buildExtensions(
     );
   }
   return { ...extra };
+}
+
+/**
+ * Normalize a bundle encoding for the wire: an empty map / string is NOT a
+ * runnable bundle, so it must not be sent (the runner rejects a zero-file
+ * bundle). Exclusivity is still checked on presence upstream, so an empty
+ * encoding supplied alongside another source has already been rejected.
+ */
+function nonEmptyFiles(
+  files: Record<string, string> | null | undefined,
+): Record<string, string> | undefined {
+  return files != null && Object.keys(files).length > 0 ? files : undefined;
+}
+
+function nonEmptyString(value: string | null | undefined): string | undefined {
+  return value != null && value.length > 0 ? value : undefined;
 }
 
 function withValidateMarkdownRender(render: string[] | undefined): string[] {

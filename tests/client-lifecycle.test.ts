@@ -286,6 +286,23 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     expect(body.some_vendor_selector).toBe("sel_123");
   });
 
+  it("forwards a method bundle through the blocking execute fallback", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-y")));
+
+    const files = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+    await client.startAndWaitForResult({ files });
+
+    expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    // A bare runner reached through the fallback runs the same method as the
+    // durable path, or it runs nothing at all.
+    expect(body.files).toEqual(files);
+  });
+
   it("self-heals when a base-only version response hides a missing run store", async () => {
     const client = makeClient();
     // version omits `implementation` → looks hosted → tries /v1/start, which a
