@@ -286,6 +286,39 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     expect(body.some_vendor_selector).toBe("sel_123");
   });
 
+  it("forwards a method bundle through the blocking execute fallback", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-y")));
+
+    const files = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+    await client.startAndWaitForResult({ files });
+
+    expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    // A bare runner reached through the fallback runs the same method as the
+    // durable path, or it runs nothing at all.
+    expect(body.files).toEqual(files);
+  });
+
+  it("forwards a bundle_b64 zip through the blocking execute fallback", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, executeBody("run-z")));
+
+    // The other bundle encoding must survive the fallback too — dropping it here
+    // while keeping `files` would otherwise pass unnoticed.
+    await client.startAndWaitForResult({ bundle_b64: "UEsDBA==" });
+
+    expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse(String((fetchSpy.mock.calls[1]![1] as RequestInit).body));
+    expect(body.bundle_b64).toBe("UEsDBA==");
+  });
+
   it("self-heals when a base-only version response hides a missing run store", async () => {
     const client = makeClient();
     // version omits `implementation` → looks hosted → tries /v1/start, which a

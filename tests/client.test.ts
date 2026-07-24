@@ -126,6 +126,126 @@ describe("PipelexApiClient.execute argument validation", () => {
   });
 });
 
+describe("PipelexApiClient method-bundle transport", () => {
+  const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+
+  function executeResponse(): Response {
+    return jsonResponse(200, {
+      pipeline_run_id: "run-b",
+      pipe_output: { working_memory: { root: {} } },
+    });
+  }
+
+  it("sends `files` on execute — a bundle must reach the wire, not be dropped", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", files: BUNDLE }).catch(() => undefined);
+    expect(bodyOf(fetchSpy)).toMatchObject({ pipe_code: "p", files: BUNDLE });
+  });
+
+  it("accepts a bundle-only execute — a bundle carries its own .mthds", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ files: BUNDLE }).catch(() => undefined);
+    const body = bodyOf(fetchSpy);
+    expect(body).toMatchObject({ files: BUNDLE });
+    expect(body.pipe_code).toBeUndefined();
+  });
+
+  it("sends `bundle_b64` on start", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        jsonResponse(202, { pipeline_run_id: "run-c", state: "STARTED", created_at: "t0" }),
+      );
+    await client.start({ bundle_b64: "UEsDBA==" });
+    expect(bodyOf(fetchSpy)).toEqual({ bundle_b64: "UEsDBA==" });
+  });
+
+  it("rejects the two bundle encodings together (presence, even when one is empty)", async () => {
+    const client = makeClient();
+    // Pin to the guard's own message, not just `PipelineRequestError` — a
+    // transport failure (`ApiUnreachableError`) is also a `PipelineRequestError`,
+    // so a bare `toBeInstanceOf` would pass even if the guard were removed and
+    // the call fell through to the network.
+    await expect(client.execute({ files: BUNDLE, bundle_b64: "UEs=" })).rejects.toThrow(
+      /mutually exclusive/,
+    );
+    await expect(client.start({ files: {}, bundle_b64: "UEs=" })).rejects.toThrow(
+      /mutually exclusive/,
+    );
+  });
+
+  it("rejects a bundle combined with non-empty mthds_contents", async () => {
+    const client = makeClient();
+    await expect(
+      client.execute({ files: BUNDLE, mthds_contents: ["domain = 'y'"] }),
+    ).rejects.toThrow(/self-contained/);
+    await expect(
+      client.start({ bundle_b64: "UEs=", mthds_contents: ["domain = 'y'"] }),
+    ).rejects.toThrow(/self-contained/);
+  });
+
+  it("never ships an empty bundle encoding (an empty map carries no method)", async () => {
+    const client = makeClient();
+    // One encoding at a time — supplying both is an exclusivity violation on
+    // presence, empty or not, and is covered above.
+    const withFiles = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", files: {} }).catch(() => undefined);
+    expect(bodyOf(withFiles).files).toBeUndefined();
+
+    vi.restoreAllMocks();
+    const withZip = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", bundle_b64: "" }).catch(() => undefined);
+    expect(bodyOf(withZip).bundle_b64).toBeUndefined();
+  });
+
+  it("rejects run-source fields smuggled through `extra`", async () => {
+    const client = makeClient();
+    // `extra` merges last into the body, so this would overwrite the validated
+    // fields and bypass the exclusivity check.
+    await expect(client.execute({ extra: { files: BUNDLE } })).rejects.toThrow(
+      /pass them as named options/,
+    );
+    await expect(client.start({ extra: { bundle_b64: "UEs=" } })).rejects.toThrow(
+      /pass them as named options/,
+    );
+  });
+
+  it("keeps the client-only `bundleMain` hint off the wire", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ files: BUNDLE, bundleMain: "bundle.mthds" }).catch(() => undefined);
+    expect(bodyOf(fetchSpy).bundleMain).toBeUndefined();
+  });
+
+  it("rejects the client-only `bundleMain` hint smuggled through `extra`", async () => {
+    const client = makeClient();
+    // `bundleMain` is documented as never-serialized; routing it through `extra`
+    // must fail the same way a run source does, not leak a local path onto the wire.
+    await expect(
+      client.execute({ files: BUNDLE, extra: { bundleMain: "/local/secret.mthds" } }),
+    ).rejects.toThrow(/pass them as named options/);
+  });
+
+  it("never emits prototype-pollution keys from `extra` onto the wire", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    // An own `__proto__` is exactly what `JSON.parse` yields, and `extra` is the
+    // field most likely populated from untrusted JSON — the SDK must not carry a
+    // pollution gadget to a downstream JS hop.
+    const extra = JSON.parse('{"__proto__":{"polluted":true},"vendor":1}') as Record<
+      string,
+      unknown
+    >;
+    await client.execute({ pipe_code: "p", extra }).catch(() => undefined);
+    const raw = String((fetchSpy.mock.calls[0]![1] as RequestInit).body);
+    expect(raw).not.toContain("__proto__");
+    expect(bodyOf(fetchSpy).vendor).toBe(1);
+  });
+});
+
 describe("PipelexApiClient network errors", () => {
   it("wraps ECONNREFUSED in ApiUnreachableError with code", async () => {
     const client = makeClient();
