@@ -214,30 +214,58 @@ async function resolveNode(
 }
 
 /**
+ * Resolve a `files` / `method_id` closure pair to inline files: reject an
+ * over-specified `{ files, method_id }` (both given) before any resolution
+ * runs, then either return the inline `files` unchanged or fetch-and-parse the
+ * stored method behind `method_id` via `getMethodClosure`. Returns `undefined`
+ * when NEITHER is given — the caller decides what that means for its own
+ * request shape, since `buildInputs` (client.ts) also accepts a third source,
+ * the reserved `method_ref`, that `prepareInputs` does not.
+ *
+ * Shared between `PipelexApiClient.buildInputs` and `resolveClosureFiles`
+ * (below) so the files/method_id invariant is defined in exactly one place —
+ * a duplicated copy of this exact check is what let a `buildInputs`-only
+ * revision briefly reject a legitimate `method_ref`-only request.
+ */
+export async function resolveFilesOrMethodId(
+  files: MthdsFileItem[] | undefined,
+  methodId: string | undefined,
+  getMethodClosure: (methodId: string) => Promise<MthdsFileItem[]>,
+  makeError: (message: string) => Error,
+): Promise<MthdsFileItem[] | undefined> {
+  if (methodId !== undefined && files !== undefined) {
+    throw makeError("supply the closure as either `files` or `method_id`, never both.");
+  }
+  if (methodId !== undefined) {
+    return getMethodClosure(methodId);
+  }
+  return files;
+}
+
+/**
  * Resolve the request's closure to inline `files`: fetch and parse a stored
  * method when `method_id` is given, else use the inline `files`. The either/or
- * is a type invariant (the discriminated union); these guards back it at runtime
- * for the degenerate "neither given" and the over-specified "both given" cases a
- * non-typed caller could still construct.
+ * is a type invariant (the discriminated union); {@link resolveFilesOrMethodId}
+ * backs the over-specified "both given" case at runtime for non-typed callers,
+ * and the "neither given" case is rejected here (prepareInputs has no third
+ * closure source, unlike `buildInputs`).
  */
 async function resolveClosureFiles(
   client: PrepareCapableClient,
   request: PrepareInputsRequest,
 ): Promise<MthdsFileItem[]> {
-  if (request.method_id !== undefined && request.files !== undefined) {
+  const files = await resolveFilesOrMethodId(
+    request.files,
+    request.method_id,
+    (methodId) => client.getMethodClosure(methodId),
+    (message) => new InputPreparationError(`Cannot prepare inputs: ${message}`),
+  );
+  if (files === undefined) {
     throw new InputPreparationError(
-      "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method), never both.",
+      "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method).",
     );
   }
-  if (request.method_id !== undefined) {
-    return client.getMethodClosure(request.method_id);
-  }
-  if (request.files !== undefined) {
-    return request.files;
-  }
-  throw new InputPreparationError(
-    "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method).",
-  );
+  return files;
 }
 
 /**

@@ -73,7 +73,7 @@ import {
 import { methodSourceToContents } from "./method-source.js";
 import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
-import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
+import { prepareInputs as prepareInputsImpl, resolveFilesOrMethodId } from "./prepare-inputs.js";
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
@@ -729,42 +729,49 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * unresolvable closure comes back as `is_valid: false` with `validation_errors[]`,
    * not as a thrown error.
    *
-   * Accepts the closure as inline `files` (the wire model {@link BuildInputsRequest})
-   * or as a stored {@link BuildInputsByMethodId} — the by-id form is resolved to
-   * `files` via {@link getMethodClosure} before the request hits the wire (an empty
-   * source throws `EmptyMethodSourceError`; an unknown/foreign id, the `getMethod`
-   * 404). Supply one or the other, never both.
+   * Accepts the closure as inline `files` (the wire model {@link BuildInputsRequest}),
+   * as a reserved `method_ref` (also on {@link BuildInputsRequest} — still `501`s,
+   * same as `buildOutput`/`buildRunner`), or as a stored {@link BuildInputsByMethodId}
+   * — the by-id form is resolved to `files` via {@link getMethodClosure} before the
+   * request hits the wire (an empty source throws `EmptyMethodSourceError`; an
+   * unknown/foreign id, the `getMethod` 404). Supply exactly one of the three.
    */
   async buildInputs(
     request: BuildInputsRequest | BuildInputsByMethodId,
   ): Promise<BuildInputsResponse> {
-    // The either/or is a compile-time invariant (the two param types are
-    // mutually exclusive); these guards back it at runtime for untyped (JS)
-    // callers, mirroring `resolveClosureFiles`'s degenerate-case handling in
-    // prepare-inputs.ts. An over-specified `{ files, method_id }` is genuinely
-    // ambiguous — reject it before resolving anything, rather than silently
-    // letting `method_id` win. A closure with neither is rejected too, rather
-    // than falling through to a malformed request on the wire.
+    // The files/method_id either/or is a compile-time invariant (the two param
+    // types are mutually exclusive); `resolveFilesOrMethodId` backs the
+    // over-specified "both given" case at runtime for untyped (JS) callers —
+    // shared with `resolveClosureFiles` in prepare-inputs.ts so this exact
+    // check is defined once. `method_ref` is a third, still-legal closure
+    // source (reserved, 501s server-side) shared with `buildOutput`/`buildRunner`
+    // that prepareInputs does not have, so it stays local to this method: it
+    // cannot combine with `method_id`, and a `method_ref`-only request must
+    // reach the server like it does on those sibling routes rather than being
+    // rejected as "neither given".
     const { method_id, files, method_ref } = request;
-    if (method_id !== undefined && files !== undefined) {
+    if (method_id !== undefined && method_ref !== undefined) {
       throw new PipelineRequestError(
-        "buildInputs: supply the closure as either `files` or `method_id`, never both.",
+        "buildInputs: `method_ref` cannot be combined with `method_id`.",
       );
     }
-    if (method_id === undefined && files === undefined) {
+    const resolvedFiles = await resolveFilesOrMethodId(
+      files,
+      method_id,
+      (methodId) => this.getMethodClosure(methodId),
+      (message) => new PipelineRequestError(`buildInputs: ${message}`),
+    );
+    if (resolvedFiles === undefined && method_ref === undefined) {
       throw new PipelineRequestError(
-        "buildInputs: supply the closure as either `files` or `method_id`.",
+        "buildInputs: supply the closure as `files`, `method_id`, or `method_ref`.",
       );
     }
     if (method_id !== undefined) {
-      if (method_ref !== undefined) {
-        throw new PipelineRequestError(
-          "buildInputs: `method_ref` cannot be combined with `method_id`.",
-        );
-      }
-      const resolvedFiles = await this.getMethodClosure(method_id);
       const { method_id: _methodId, ...rest } = request;
-      return this.requestExtension("build/inputs", { ...rest, files: resolvedFiles });
+      return this.requestExtension("build/inputs", {
+        ...rest,
+        files: resolvedFiles as MthdsFileItem[],
+      });
     }
     return this.requestExtension("build/inputs", request);
   }

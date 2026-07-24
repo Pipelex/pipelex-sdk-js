@@ -116,6 +116,22 @@ describe("build routes — request envelope", () => {
     expect("method_id" in posted).toBe(false);
   });
 
+  it("propagates the getMethod 404 through buildInputs's method_id resolution, without ever posting to build/inputs", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(404, { code: "not_found", message: "No such method." }));
+
+    // The method_id branch delegates to getMethodClosure (unit-tested in
+    // tests/method-closure.test.ts), but nothing previously exercised that
+    // propagation THROUGH buildInputs itself — pin it here too.
+    await expect(
+      client.buildInputs({ method_id: "mt_missing", pipe_ref: "smoke.echo" }),
+    ).rejects.toBeInstanceOf(ApiResponseError);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/methods/mt_missing");
+  });
+
   it("rejects an over-specified both-files-and-method_id buildInputs call before any fetch", async () => {
     const client = makeClient();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -364,6 +380,21 @@ describe("build routes — the no-verdict arms throw a typed ApiResponseError", 
     const failure = client.buildRunner({ method_ref: "acme/method@1" });
     await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
     await expect(failure).rejects.toMatchObject({ status: 501 });
+  });
+
+  it("lets a method_ref-only buildInputs call reach the server (maps the reserved method_ref to a 501), matching buildOutput/buildRunner", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(problemResponse(501, "method_ref resolution is not implemented yet."));
+
+    // `method_ref` is a third, still-legal closure source alongside `files`/`method_id`
+    // (reserved, so the server 501s) — the client-side either/or/neither guard must not
+    // treat a method_ref-only request as "neither given" and reject it before any fetch.
+    const failure = client.buildInputs({ method_ref: "acme/method@1", pipe_ref: "smoke.echo" });
+    await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(failure).rejects.toMatchObject({ status: 501 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 
