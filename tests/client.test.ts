@@ -165,11 +165,15 @@ describe("PipelexApiClient method-bundle transport", () => {
 
   it("rejects the two bundle encodings together (presence, even when one is empty)", async () => {
     const client = makeClient();
-    await expect(client.execute({ files: BUNDLE, bundle_b64: "UEs=" })).rejects.toBeInstanceOf(
-      PipelineRequestError,
+    // Pin to the guard's own message, not just `PipelineRequestError` — a
+    // transport failure (`ApiUnreachableError`) is also a `PipelineRequestError`,
+    // so a bare `toBeInstanceOf` would pass even if the guard were removed and
+    // the call fell through to the network.
+    await expect(client.execute({ files: BUNDLE, bundle_b64: "UEs=" })).rejects.toThrow(
+      /mutually exclusive/,
     );
-    await expect(client.start({ files: {}, bundle_b64: "UEs=" })).rejects.toBeInstanceOf(
-      PipelineRequestError,
+    await expect(client.start({ files: {}, bundle_b64: "UEs=" })).rejects.toThrow(
+      /mutually exclusive/,
     );
   });
 
@@ -177,10 +181,10 @@ describe("PipelexApiClient method-bundle transport", () => {
     const client = makeClient();
     await expect(
       client.execute({ files: BUNDLE, mthds_contents: ["domain = 'y'"] }),
-    ).rejects.toBeInstanceOf(PipelineRequestError);
+    ).rejects.toThrow(/self-contained/);
     await expect(
       client.start({ bundle_b64: "UEs=", mthds_contents: ["domain = 'y'"] }),
-    ).rejects.toBeInstanceOf(PipelineRequestError);
+    ).rejects.toThrow(/self-contained/);
   });
 
   it("never ships an empty bundle encoding (an empty map carries no method)", async () => {
@@ -201,11 +205,11 @@ describe("PipelexApiClient method-bundle transport", () => {
     const client = makeClient();
     // `extra` merges last into the body, so this would overwrite the validated
     // fields and bypass the exclusivity check.
-    await expect(client.execute({ extra: { files: BUNDLE } })).rejects.toBeInstanceOf(
-      PipelineRequestError,
+    await expect(client.execute({ extra: { files: BUNDLE } })).rejects.toThrow(
+      /pass them as named options/,
     );
-    await expect(client.start({ extra: { bundle_b64: "UEs=" } })).rejects.toBeInstanceOf(
-      PipelineRequestError,
+    await expect(client.start({ extra: { bundle_b64: "UEs=" } })).rejects.toThrow(
+      /pass them as named options/,
     );
   });
 
@@ -214,6 +218,31 @@ describe("PipelexApiClient method-bundle transport", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
     await client.execute({ files: BUNDLE, bundleMain: "bundle.mthds" }).catch(() => undefined);
     expect(bodyOf(fetchSpy).bundleMain).toBeUndefined();
+  });
+
+  it("rejects the client-only `bundleMain` hint smuggled through `extra`", async () => {
+    const client = makeClient();
+    // `bundleMain` is documented as never-serialized; routing it through `extra`
+    // must fail the same way a run source does, not leak a local path onto the wire.
+    await expect(
+      client.execute({ files: BUNDLE, extra: { bundleMain: "/local/secret.mthds" } }),
+    ).rejects.toThrow(/pass them as named options/);
+  });
+
+  it("never emits prototype-pollution keys from `extra` onto the wire", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    // An own `__proto__` is exactly what `JSON.parse` yields, and `extra` is the
+    // field most likely populated from untrusted JSON — the SDK must not carry a
+    // pollution gadget to a downstream JS hop.
+    const extra = JSON.parse('{"__proto__":{"polluted":true},"vendor":1}') as Record<
+      string,
+      unknown
+    >;
+    await client.execute({ pipe_code: "p", extra }).catch(() => undefined);
+    const raw = String((fetchSpy.mock.calls[0]![1] as RequestInit).body);
+    expect(raw).not.toContain("__proto__");
+    expect(bodyOf(fetchSpy).vendor).toBe(1);
   });
 });
 
