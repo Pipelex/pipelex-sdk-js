@@ -15,8 +15,9 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
-import { ApiResponseError, ApiUnreachableError } from "../src/errors.js";
+import { ApiResponseError, ApiUnreachableError, PipelineRequestError } from "../src/errors.js";
 import type {
+  BuildInputsRequest,
   BuildInputsValidReport,
   BuildOutputValidReport,
   BuildRunnerValidReport,
@@ -84,6 +85,103 @@ describe("build routes — request envelope", () => {
       format: "json",
       explicit: false,
     });
+  });
+
+  it("resolves method_id to files client-side, so the wire body carries files (never method_id)", async () => {
+    const client = makeClient();
+    const method = {
+      method_id: "mt_1",
+      name: "M",
+      mthds: "domain = 'smoke'",
+      created_at: "t",
+      updated_at: "t",
+    };
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, method))
+      .mockResolvedValueOnce(jsonResponse(200, { is_valid: true }));
+
+    await client.buildInputs({ method_id: "mt_1", pipe_ref: "smoke.echo", format: "json" });
+
+    // First call fetches the method; the second posts the RESOLVED closure — the by-id
+    // form is exactly the files form (`method_id` is client-side sugar, never on the wire).
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/methods/mt_1");
+    expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/build/inputs");
+    const posted = JSON.parse((fetchSpy.mock.calls[1]![1] as RequestInit).body as string);
+    expect(posted).toEqual({
+      files: [{ content: "domain = 'smoke'", source: "mt_1" }],
+      pipe_ref: "smoke.echo",
+      format: "json",
+    });
+    expect("method_id" in posted).toBe(false);
+  });
+
+  it("propagates the getMethod 404 through buildInputs's method_id resolution, without ever posting to build/inputs", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(404, { code: "not_found", message: "No such method." }));
+
+    // The method_id branch delegates to getMethodClosure (unit-tested in
+    // tests/method-closure.test.ts), but nothing previously exercised that
+    // propagation THROUGH buildInputs itself — pin it here too.
+    await expect(
+      client.buildInputs({ method_id: "mt_missing", pipe_ref: "smoke.echo" }),
+    ).rejects.toBeInstanceOf(ApiResponseError);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/methods/mt_missing");
+  });
+
+  it("rejects an over-specified both-files-and-method_id buildInputs call before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // A non-typed (JS) caller can still supply both closure sources. The request is
+    // genuinely ambiguous, so it must fail fast — no catalog resolution, no build request
+    // on the wire — rather than silently letting `method_id` overwrite the inline `files`.
+    await expect(
+      client.buildInputs({
+        files: [{ content: "x" }],
+        method_id: "mt_1",
+      } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("makes an over-specified buildInputs closure a type error (files + method_id)", () => {
+    // @ts-expect-error — `files` and `method_id` are mutually exclusive on buildInputs,
+    // mirroring the prepareInputs discriminated union.
+    const both: BuildInputsRequest = { files: [{ content: "x" }], method_id: "mt_1" };
+    expect(both).toBeDefined();
+  });
+
+  it("rejects a buildInputs call with neither files nor method_id before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // A non-typed (JS) caller can still omit both closure sources. Reject it fast rather
+    // than posting a closure-less request to the server.
+    await expect(
+      client.buildInputs({ pipe_ref: "smoke.echo" } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects a buildInputs call combining method_id with the reserved method_ref before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    // `method_ref` is `never` on the by-id form at compile time; a non-typed caller can
+    // still construct it. Reject rather than letting it ride the wire alongside the
+    // resolved `files`, which would violate the build routes' own files-xor-method_ref
+    // closure contract.
+    await expect(
+      client.buildInputs({
+        method_id: "mt_1",
+        method_ref: "some.reserved.ref",
+      } as unknown as BuildInputsRequest),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("omits pipe_ref entirely when the caller defers to the closure's main_pipe", async () => {
@@ -282,6 +380,21 @@ describe("build routes — the no-verdict arms throw a typed ApiResponseError", 
     const failure = client.buildRunner({ method_ref: "acme/method@1" });
     await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
     await expect(failure).rejects.toMatchObject({ status: 501 });
+  });
+
+  it("lets a method_ref-only buildInputs call reach the server (maps the reserved method_ref to a 501), matching buildOutput/buildRunner", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(problemResponse(501, "method_ref resolution is not implemented yet."));
+
+    // `method_ref` is a third, still-legal closure source alongside `files`/`method_id`
+    // (reserved, so the server 501s) — the client-side either/or/neither guard must not
+    // treat a method_ref-only request as "neither given" and reject it before any fetch.
+    const failure = client.buildInputs({ method_ref: "acme/method@1", pipe_ref: "smoke.echo" });
+    await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(failure).rejects.toMatchObject({ status: 501 });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });
 

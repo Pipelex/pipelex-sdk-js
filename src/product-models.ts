@@ -26,6 +26,8 @@ export interface UserProfile {
 
 export interface MethodData {
   method_id: string;
+  org_id: string;
+  created_by_user_id: string;
   name: string;
   /** The `.mthds` bundle source. */
   mthds: string;
@@ -38,6 +40,11 @@ export interface MethodData {
   input_data?: Record<string, unknown> | null;
   /** Legacy persisted output spec; optional. */
   pipe_output?: Record<string, unknown> | null;
+  /**
+   * Server-derived from the bundle's top-level `description` — read-side only,
+   * present on GET/list responses, absent from the write contract.
+   */
+  description?: string | null;
   created_at: string;
   updated_at: string;
 }

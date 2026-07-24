@@ -259,6 +259,14 @@ export interface BuildRequestBase {
 }
 
 export interface BuildInputsRequest extends BuildRequestBase {
+  /**
+   * `method_id` (the by-id closure alternative) is a separate client param type,
+   * never a field of the inline-`files` request. Pinned to `never` so an
+   * over-specified `{ files, method_id }` request is a compile error — mirroring
+   * `PrepareInputsRequest`'s discriminated union. The runtime `buildInputs` guard
+   * backs this for untyped (JS) callers.
+   */
+  method_id?: never;
   /** `json` (default) puts the parsed template in `inputs`; `toml` puts raw text in `inputs_toml`. */
   format?: InputsTemplateFormat;
   /** Emit the ceremonial `{concept, content}` envelope per input. Defaults to the light shape. */

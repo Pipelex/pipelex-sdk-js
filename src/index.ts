@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.5.1";
+export const SDK_VERSION = "0.6.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -18,7 +18,15 @@ export * from "mthds/protocol";
 
 // ── Pipelex product client ───────────────────────────────────────────
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
-export type { MthdsFile, ValidateFilesOptions, PipelexApiClientOptions } from "./client.js";
+export type {
+  MthdsFile,
+  BuildInputsByMethodId,
+  ValidateFilesOptions,
+  PipelexApiClientOptions,
+} from "./client.js";
+
+// Canonical parser: a stored method's polymorphic `MethodData.mthds` source → bundle contents.
+export { methodSourceToContents } from "./method-source.js";
 
 // The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
 export { PipelexExecuteResult } from "./execute-result.js";
@@ -123,6 +131,7 @@ export {
   RunStillRunningError,
   RunLifecycleUnavailableError,
   InputPreparationError,
+  EmptyMethodSourceError,
   InvalidLocalSourceError,
   RejectedAssetError,
   UnsupportedUploadCapabilityError,
