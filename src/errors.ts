@@ -30,6 +30,26 @@ export class InputPreparationError extends PipelineRequestError {
 }
 
 /**
+ * The stored method resolved by `getMethodClosure` (and by-id `prepareInputs` /
+ * `buildInputs`) has no MTHDS source yet — its `MethodData.mthds` parses to an
+ * empty closure (a blank string, a JSON `[]`, or an all-blank file array).
+ *
+ * Distinct from a transport failure: the `getMethod` fetch succeeded (`200`) and
+ * the id is real and in-org; the row simply carries no runnable source. A missing
+ * or foreign-org id is a `getMethod` `404` (`ApiResponseError` `not_found`), not
+ * this. `methodId` locates the empty method.
+ */
+export class EmptyMethodSourceError extends InputPreparationError {
+  public readonly methodId: string;
+
+  constructor(methodId: string, options?: { cause?: unknown }) {
+    super(`Method "${methodId}" has no MTHDS source yet.`, options);
+    this.name = "EmptyMethodSourceError";
+    this.methodId = methodId;
+  }
+}
+
+/**
  * A local asset could not be turned into bytes: a missing or unreadable path, or
  * a path string in a non-Node runtime (path strings are Node-only). `source` is
  * the offending path.

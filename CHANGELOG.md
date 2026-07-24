@@ -1,5 +1,19 @@
 # Changelog
 
+## [v0.6.0] - 2026-07-23
+
+### Added
+
+- **By-id closure resolution: prepare and build inputs from a stored `method_id`.** `prepareInputs` and `buildInputs` now accept the method closure as a stored catalog `method_id` in place of inline `files` — `client.prepareInputs({ method_id, pipe_ref?, inputs })` and `client.buildInputs({ method_id, pipe_ref?, format?, explicit? })`. `method_id` is a client-side convenience, not a wire field: it is resolved to inline `files` via the new `getMethodClosure` before the request reaches the network, so a by-id call produces exactly the same result as the equivalent inline-`files` call and `method_id` never travels on the wire (it is distinct from the reserved `BuildRequestBase.method_ref` registry reference — that one still 501s). Supply `files` or `method_id`, never both — the either/or is a compile-time invariant (`PrepareInputsRequest` and `BuildInputsRequest` both forbid the over-specified `{ files, method_id }`), backed by runtime guards that reject both the degenerate neither-given and the over-specified both-given cases before any closure is resolved (so an untyped caller never silently gets `method_id` preferred over inline `files`). By-id resolution requires an API key (the catalog is org-scoped to the key's org). New exported client param type `BuildInputsByMethodId`. See [`docs/input-preparation.md`](./docs/input-preparation.md).
+- **`getMethodClosure(methodId)` on `PipelexApiClient`** — resolve a stored method's id into its runnable, provenance-labelled MTHDS closure (`MthdsFileItem[]`, each file's `source` set to the method id). A client-side semantic layer over `getMethod` (the platform has no route that returns a parsed closure): it fetches the method, parses its polymorphic `mthds` source, and labels each file. An unknown or foreign-org id surfaces as the `getMethod` `404` (`ApiResponseError`, `code: "not_found"`); a real in-org method whose source parses to nothing throws the new `EmptyMethodSourceError`.
+- **`methodSourceToContents(mthds)` — exported canonical source parser.** Turns a stored method's polymorphic `mthds` field — raw single-bundle text XOR a JSON `{ name, content }[]` file array — into a flat list of file contents, dropping blank entries. A verbatim port of the platform's `_method_source_to_contents`, so the SDK and the runtime read a stored source identically. Exported from the barrel for consumers that need the parse without the fetch (`getMethodClosure` is the fetch-and-parse convenience over it, and `pipelex-mcp` can retire its own parser mirror once it adopts this).
+- **`EmptyMethodSourceError`** (extends `InputPreparationError`, carries `methodId`) — a by-id closure resolution found the stored method but its source parses to no runnable content (the row exists, no runnable source yet). It joins the input-preparation failure family (catch `InputPreparationError` to handle any preparation failure), and is deliberately distinct from the `ApiResponseError` `404` raised for an unknown or foreign-org id.
+- **`MethodData` read-model fields: `org_id`, `created_by_user_id`, and a server-derived `description`.** The methods read model now carries the org and creator ids present on every `GET`/list response, plus `description` — parsed read-side by the platform from the bundle's top-level `description` key (present on reads, absent from the write contract, so typed `string | null | undefined`). Additive; the `MethodWriteInput` create/update payload is unchanged.
+
+### Changed
+
+- **Removed `deleteMethod` (breaking).** The client method wrapped `DELETE /v1/methods/{id}`, a route the hosted platform does not have and will not add by design — deletion of a saved method is an explicit product decision, not a default the SDK should imply. Callers relying on it must drop it; there is no replacement route.
+
 ## [v0.5.1] - 2026-07-22
 
 ### Security
