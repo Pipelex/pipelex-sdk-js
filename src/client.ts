@@ -9,6 +9,10 @@ import type {
   StartRequest,
   VersionInfo,
 } from "mthds/protocol";
+// Run-source predicates come from the standard, not a local restatement: which
+// source combinations are legal is an invariant of `RunRequest` itself, so this
+// client and the MTHDS runners cannot disagree about what they reject.
+import { assertExclusiveRunSources, hasBundlePayload } from "mthds/protocol";
 import type {
   BuildInputsRequest,
   BuildInputsResponse,
@@ -525,9 +529,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     };
 
     const url = this.url("start");
+    // `start` returns a 202 fast, so the poll timeout normally fits — but a
+    // method bundle can make the request *body* multi-megabyte, and the whole
+    // upload is charged against this budget. Give a bundle-carrying start the
+    // same upload ceiling the blocking `execute` path has, so the same payload
+    // can't time out on the durable path yet succeed on the fallback.
     const res = await this.requestRaw("POST", url, {
       body: request,
-      timeoutMs: POLL_REQUEST_TIMEOUT_MS,
+      timeoutMs: hasBundlePayload(options) ? DEFAULT_REQUEST_TIMEOUT_MS : POLL_REQUEST_TIMEOUT_MS,
     });
     // A bare runner with no run store 404s here just as it does on the result
     // routes — surface the same clear `RunLifecycleUnavailableError` (and let
@@ -1180,8 +1189,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       output_name: options.output_name ?? undefined,
       output_multiplicity: options.output_multiplicity ?? undefined,
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
-      // Forward the method bundle so a custom-PipeFunc method falls back onto
-      // the blocking path (bare runner / no run store) with its Python intact.
+      // The bundle must survive the fallback too — a bare runner reached through
+      // this path runs the same method as the durable one, or it runs nothing.
       files: options.files ?? undefined,
       bundle_b64: options.bundle_b64 ?? undefined,
       extra: options.extra ?? undefined,
@@ -1240,11 +1249,10 @@ function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
 }
 
 // The protocol's own request fields — `extra` is for extension args only.
-// `files` / `bundle_b64` (the Pipelex-API method-bundle transport) are reserved
-// too: they are named run-source options, so smuggling them through `extra`
-// (which merges last into the body) would overwrite the validated fields and
-// bypass the run-source exclusivity check.
-const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
+// `files` / `bundle_b64` are reserved too: they are named run-source options,
+// so smuggling them through `extra` (which merges last into the body) would
+// overwrite the validated fields and bypass the run-source exclusivity check.
+const PROTOCOL_REQUEST_KEYS: readonly string[] = [
   "pipe_code",
   "mthds_contents",
   "inputs",
@@ -1253,45 +1261,54 @@ const PROTOCOL_REQUEST_KEYS: ReadonlySet<string> = new Set([
   "dynamic_output_concept_ref",
   "files",
   "bundle_b64",
-]);
+];
+
+// Keys that must never ride `extra`: the named request options above (which
+// `extra` would overwrite — it merges last into the body) plus the client-only
+// `bundleMain` hint, which is documented as never-serialized and so must not
+// reach the wire through the passthrough either.
+const RESERVED_EXTRA_KEYS: ReadonlySet<string> = new Set([...PROTOCOL_REQUEST_KEYS, "bundleMain"]);
+
+// Prototype-pollution vectors. An own `__proto__` (exactly what `JSON.parse`
+// yields, and `extra` is the field most likely populated from untrusted JSON),
+// `constructor`, or `prototype` copied onto the body would make this client a
+// pollution carrier for any JS hop that later deep-merges the parsed request —
+// so they are stripped, never forwarded.
+const POLLUTION_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
 
 /**
- * Does the request carry a method bundle (the Pipelex-API `files` / `bundle_b64`
- * transport, which lets custom PipeFunc Python travel with the method)? A bundle
- * is self-contained — it carries its own `.mthds` — so it satisfies the
- * "something to run" precondition on its own, without `pipe_code` / `mthds_contents`.
+ * Validate and copy the generic `extra` passthrough. Extension args ride the
+ * request body as top-level properties; reserved request options (protocol
+ * args, run sources, the client-only `bundleMain` hint) must be passed as named
+ * options, never smuggled through `extra`.
  */
-function hasBundlePayload(options: RunOptions): boolean {
-  const hasFiles = options.files != null && Object.keys(options.files).length > 0;
-  const hasZip = options.bundle_b64 != null && options.bundle_b64.length > 0;
-  return hasFiles || hasZip;
+function buildExtensions(
+  extra: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!extra) return {};
+  // Snapshot once, then validate and copy the snapshot — reading `extra` twice
+  // (e.g. a `Proxy` whose `ownKeys` trap answers differently per call) could
+  // otherwise let a reserved key pass the check yet reach the copy.
+  const snapshot = { ...extra };
+  const reserved = Object.keys(snapshot).filter((key) => RESERVED_EXTRA_KEYS.has(key));
+  if (reserved.length > 0) {
+    throw new PipelineRequestError(
+      `extra carries reserved request args [${reserved.sort().join(", ")}] — pass them as named options instead.`,
+    );
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (!POLLUTION_KEYS.has(key)) result[key] = value;
+  }
+  return result;
 }
 
 /**
- * Enforce the run-source exclusivity contract before dispatch, so a conflicting
- * request fails as a clear `PipelineRequestError` here rather than an opaque
- * server `422`. A method bundle is self-contained, so it cannot ride alongside
- * `mthds_contents`, and `files` / `bundle_b64` are two encodings of one bundle.
- * Exclusivity keys off PRESENCE (an empty-but-supplied encoding still counts) —
- * `mthds_contents` counts only when non-empty. Mirrors the server's validator.
+ * Normalize a bundle encoding for the wire: an empty map / string is NOT a
+ * runnable bundle, so it must not be sent (the runner rejects a zero-file
+ * bundle). Exclusivity is still checked on presence upstream, so an empty
+ * encoding supplied alongside another source has already been rejected.
  */
-function assertExclusiveRunSources(options: RunOptions): void {
-  const hasFiles = options.files != null;
-  const hasZip = options.bundle_b64 != null;
-  const hasContents = options.mthds_contents != null && options.mthds_contents.length > 0;
-  if (hasFiles && hasZip) {
-    throw new PipelineRequestError(
-      "files and bundle_b64 are two encodings of the same bundle and are mutually exclusive; provide one.",
-    );
-  }
-  if ((hasFiles || hasZip) && hasContents) {
-    throw new PipelineRequestError(
-      "A method bundle (files/bundle_b64) is self-contained; it cannot be combined with mthds_contents.",
-    );
-  }
-}
-
-/** An empty map is not a runnable bundle; drop it so the runner never sees a zero-file bundle. */
 function nonEmptyFiles(
   files: Record<string, string> | null | undefined,
 ): Record<string, string> | undefined {
@@ -1300,24 +1317,6 @@ function nonEmptyFiles(
 
 function nonEmptyString(value: string | null | undefined): string | undefined {
   return value != null && value.length > 0 ? value : undefined;
-}
-
-/**
- * Validate and copy the generic `extra` passthrough. Extension args ride the
- * request body as top-level properties; protocol args must be passed as named
- * options, never smuggled through `extra`.
- */
-function buildExtensions(
-  extra: Record<string, unknown> | null | undefined,
-): Record<string, unknown> {
-  if (!extra) return {};
-  const overlap = Object.keys(extra).filter((key) => PROTOCOL_REQUEST_KEYS.has(key));
-  if (overlap.length > 0) {
-    throw new PipelineRequestError(
-      `extra carries protocol args [${overlap.sort().join(", ")}] — pass them as named options instead.`,
-    );
-  }
-  return { ...extra };
 }
 
 function withValidateMarkdownRender(render: string[] | undefined): string[] {

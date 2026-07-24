@@ -18,7 +18,7 @@
 ```
 
 - `@pipelex/sdk` depends on `mthds`, and only through the published **`mthds/protocol`** subpath. It never deep-imports `mthds` internals, and `mthds` never imports from `@pipelex/sdk`. `dependency-cruiser` enforces both directions.
-- The client re-implements the official MTHDS protocol routes using MTHDS *types*; it owns its own `request()` pipeline (auth, base URL, retries/timeouts/abort, problem-details, observability). It does not delegate to `mthds`'s protocol client. Pinning route shapes to `mthds/protocol` types keeps them from silently diverging from the standard.
+- The client re-implements the official MTHDS protocol routes using MTHDS _types_; it owns its own `request()` pipeline (auth, base URL, retries/timeouts/abort, problem-details, observability). It does not delegate to `mthds`'s protocol client. Pinning route shapes to `mthds/protocol` types keeps them from silently diverging from the standard.
 
 ## Brand boundary
 
@@ -38,6 +38,15 @@ Condition order in `exports` matters: `types` is listed first (TS/Node resolutio
 - Auth: `Authorization: Bearer <token>`; organization resolved from the JWT `org_id` claim, not a header.
 - A diagnostic verdict (e.g. `/v1/validate`) is a `200` discriminated on a body field (`is_valid`); non-2xx is reserved for "no verdict could be produced" (request-shape `422`, auth `401`/`403`, server `5xx`), carried as RFC 7807 `problem+json` and mapped to typed product errors.
 
+### Run sources
+
+A run request carries its method exactly one of three ways: inline `mthds_contents` text, a `files` bundle map, or a `bundle_b64` zip. The rules — and crucially, _where they live_ — are:
+
+- **Exclusivity is enforced from the standard, not restated here.** `assertExclusiveRunSources` and `hasBundlePayload` are imported from `mthds/protocol`; they are pure predicates over `RunRequest`, so this client and the MTHDS runners cannot drift on which combinations they reject. A second local copy would be free to disagree about what is legal.
+- **Exclusivity keys off presence, the run-source precondition keys off runnability.** Supplying `files: {}` _and_ `bundle_b64` is rejected — the caller expressed two encodings — while an empty encoding on its own carries no method and so is neither shipped on the wire nor counted as "something to run".
+- **`files` / `bundle_b64` / `bundleMain` are reserved keys on `extra`.** `extra` merges last into the body, so smuggling a run source through it would overwrite the validated fields and bypass the exclusivity check; `buildExtensions` rejects any reserved key — the named run sources _and_ the client-only `bundleMain` hint. `buildExtensions` also strips prototype-pollution keys (`__proto__` / `constructor` / `prototype`), which `JSON.parse`-sourced `extra` can carry, so the client never emits a pollution gadget on the wire.
+- **`bundleMain` is client-only and never serialized.** It is an entrypoint hint for a _local_ runner; the request builders name wire fields explicitly, and it is reserved on `extra`, so it cannot leak onto the wire by either path.
+
 ## Module layout
 
 Flat `src/` (mirrors `mthds-js`'s `runners/api` flatness — the SDK has one client, so no runner/registry abstraction):
@@ -54,6 +63,7 @@ Flat `src/` (mirrors `mthds-js`'s `runners/api` flatness — the SDK has one cli
 ## Client surface (current)
 
 - **Protocol execution:** `execute` (returns a `PipelexExecuteResult` with a resolved `.main_stuff`), `start`, `validate` (returns `PipelexValidationResult`), `validateFiles`, `models`, `version`.
+- **Method-bundle transport (pipelex-api extension):** `execute` / `start` / the blocking fallback accept the whole method — the `.mthds` plus its `funcs/*.py`, `structures/*.py`, `requirements.txt` — instead of only the inline `mthds_contents` text, so custom PipeFunc Python travels with the method. Two equivalent, mutually exclusive encodings: `files` (a `{ relativePath: text }` map) and `bundle_b64` (the same bundle as a base64 zip). A bundle is self-contained, so it satisfies the "something to run" precondition on its own — neither `pipe_code` nor `mthds_contents` is required beside it. See [run-sources](#run-sources) above.
 - **Build helpers (`/v1/build/*`):** `buildInputs`, `buildOutput`, `buildRunner`, `concept`, `pipeSpec`. The three projections share one closure envelope (`files: [{content, source?}]` XOR a reserved `method_ref`) plus an optional **qualified** `pipe_ref` that defaults to the closure's `main_pipe`, and each returns a **discriminated 200 verdict** (`is_valid`) rather than a bare payload — same discipline as `validate`. See [build-routes.md](./build-routes.md).
 - **Tools (`/v1/lint`, `/v1/format`):** `lint`, `format` — single-file static diagnostics and canonical formatting, served by any pipelex-api runner (no inference, no bundle load). Both are **diagnostic endpoints** like `validate`: a malformed `.mthds` file is a produced verdict on a **200** carrying `diagnostics[]`, never a thrown error — `format` additionally echoes the content back unchanged with `changed: false`. Only a no-verdict condition is non-2xx: a malformed body, **malformed formatter `options`** (e.g. a non-numeric `column_width` ⇒ 422), auth, or a server fault, all mapped to the typed `ApiResponseError`. `lint` is the cheap static check (syntax / schema / semantic); it does not replace `validate`, which loads the bundle, resolves across files, and dry-runs the pipes.
 - **Durable run lifecycle (hosted extension — NOT protocol):** `getRunStatus`, `getRunResult`, `waitForResult`, `startAndWaitForResult` (handshakes `/v1/version`, takes the durable start+poll path on a hosted deployment, and self-heals to the blocking `execute` against a bare runner).
