@@ -42,7 +42,7 @@ client.prepareInputs({ files,     pipe_ref?, inputs }) → PreparedInputs
 client.prepareInputs({ method_id, pipe_ref?, inputs }) → PreparedInputs
 ```
 
-Takes the **method closure** — inline `files` (the signature source) **or** a stored `method_id` (resolved client-side; see below), never both — plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's compact `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`:
+Takes the **method closure** — inline `files` (the signature source) **or** a stored `method_id` (resolved client-side; see below), never both — plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`. Per input, the caller may submit **either** the compact value **or** the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)" below:
 
 - `inputs` — a **copy** of the caller's inputs with each asset reference replaced by the canonical content shape carrying `pipelex-storage://` in its `url` field (see "Rewritten-input shape" below). Copy-on-write: the caller's original object is never mutated.
 - `uploads` — one upload record per prepared asset (the `uploadFile` record shape), exposing `uri` so callers can log which source became which reference without reverse-engineering the rewritten object.
@@ -84,9 +84,18 @@ A stored method's `mthds` field is **polymorphic**: it is either the raw single-
 
 > **Stability across a future native route.** `getMethodClosure` and `prepareInputs({ method_id })` / `buildInputs({ method_id })` are the client-side intermediate for a capability the runner may one day serve natively (a `method_id`/`method_ref` on `/v1/build/inputs` and `/v1/validate`). The consumer-facing signatures are kept stable so they can later delegate to a native route without a breaking change — exactly the posture the upload surface takes across its endpoint move.
 
+## Compact or explicit-envelope inputs
+
+Each input may be submitted in **either** of two shapes, and preparation treats them equivalently:
+
+- **Compact** — the bare value: a source string / bytes / canonical `{ url }` content (e.g. `photo: "https://…/p.png"`).
+- **Explicit envelope** — the `{ concept, content }` shape that `buildInputs({ explicit: true })` returns per input (e.g. `photo: { concept: "native.Image", content: { url: "https://…/p.png" } }`). This is the default template the hosted console and MCP hand agents to fill, so an agent that fills the template can hand it straight back.
+
+When a value is an envelope (a plain object whose keys are **exactly** `concept` and `content` — matching the runtime's `_is_explicit` in `input_shaper.py`), preparation unwraps `content`, interprets it exactly as the compact value would be, and **re-wraps** the result — so the concept annotation rides through to the run. The runtime accepts the envelope as a run input (`input_shaper.py` `_is_explicit` / `_shape_explicit`), and file-reference resolution (`input_normalizer.py`) runs over the already-shaped content, so a re-wrapped `{ concept, content: { url: "pipelex-storage://…" } }` resolves identically to the compact `{ url }`. The envelope's `content` may itself be a scalar, a canonical file content, a list, or a structured object nesting file fields — the same top-down walk applies underneath.
+
 ## Signature-driven asset identification
 
-The SDK **must not** guess that every string resembling a path is an asset — that would make ordinary text inputs environment-dependent and could upload unintended files. Interpretation comes from the method's **declared signature**, never from a value's shape alone. This mirrors the runtime's own top-down interpretation (`InputShaper`) combined with the file-reference resolution of `input_normalizer` in `pipelex`, so local and hosted execution read the same compact inputs the same way.
+The SDK **must not** guess that every string resembling a path is an asset — that would make ordinary text inputs environment-dependent and could upload unintended files. Interpretation comes from the method's **declared signature**, never from a value's shape alone. This mirrors the runtime's own top-down interpretation (`InputShaper`) combined with the file-reference resolution of `input_normalizer` in `pipelex`, so local and hosted execution read the same inputs the same way. (A caller value may be compact or the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)"; the walk below is over the compact value, i.e. the envelope's `content`.)
 
 The declared signature is resolved via the explicit inputs template (`buildInputs` with `explicit: true` — see [build-routes.md](./build-routes.md)), which carries concept identity, canonical content shape, and multiplicity per input.
 
