@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.9.0] - 2026-07-24
+
+### Fixed
+
+- **`prepareInputs` now accepts the explicit `{ concept, content }` input envelope, not only compact values.** An agent that fills the explicit template `buildInputs({ explicit: true })` returns — the default template shape the hosted console and MCP hand out — can now hand it straight back to `prepareInputs`. Previously every file-bearing envelope position threw `InputPreparationError: Unsupported value at a file input … got object`, breaking the `buildInputs(explicit) → fill → prepareInputs` round-trip. Per input, the caller may submit either the compact value or the `{ concept, content }` envelope (a plain object whose keys are exactly `concept` + `content`, matching the runtime's `_is_explicit`); the envelope's `content` is interpreted identically and preserved on output, so the concept annotation rides through to the run — the runtime accepts it. Nested / list / structured file positions and mixed compact+envelope inputs are all handled. See [`docs/input-preparation.md`](./docs/input-preparation.md).
+
 ## [v0.8.0] - 2026-07-24
 
 ### Added

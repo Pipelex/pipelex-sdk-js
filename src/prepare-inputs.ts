@@ -1,9 +1,16 @@
 /**
  * `prepareInputs` — signature-driven input preparation. Resolves the target
  * pipe's declared inputs via the explicit inputs template, interprets the
- * caller's compact inputs top-down against it, uploads the file-bearing values,
- * and returns rewritten inputs (canonical content carrying `pipelex-storage://`
- * in `url`) plus one upload record per prepared asset.
+ * caller's inputs top-down against it, uploads the file-bearing values, and
+ * returns rewritten inputs (canonical content carrying `pipelex-storage://` in
+ * `url`) plus one upload record per prepared asset.
+ *
+ * Per input, the caller may submit EITHER the **compact** value (a bare source /
+ * canonical `{url}` content) OR the explicit `{ concept, content }` envelope that
+ * `buildInputs({ explicit: true })` hands back — its `content` is interpreted
+ * exactly as the compact value would be, and the envelope is preserved on output
+ * (the `concept` annotation rides through; the runtime accepts it — see
+ * `pipelex`'s `input_shaper.py` `_is_explicit` / `input_normalizer.py`).
  *
  * The classification mirrors the runtime: `pipelex`'s `input_normalizer` walks
  * Image/Document contents (recognized by their `url`-bearing shape, incl. nested
@@ -88,6 +95,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 /** A canonical Image/Document content is a plain object carrying a `url` key. */
 function isFileContent(node: unknown): node is Record<string, unknown> {
   return isPlainObject(node) && "url" in node;
+}
+
+/**
+ * The explicit-template envelope: a plain object whose keys are EXACTLY `concept`
+ * and `content` — the shape `buildInputs({ explicit: true })` returns per input.
+ * Matches the runtime's `_is_explicit` (`pipelex`'s `input_shaper.py`): exact
+ * keys, not a superset, so a structured-content input that merely happens to carry
+ * both fields is not misread as an envelope.
+ */
+function isExplicitEnvelope(value: unknown): value is { concept: unknown; content: unknown } {
+  if (!isPlainObject(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === 2 && "concept" in value && "content" in value;
 }
 
 /** Decode a `data:` URL into bytes plus its MIME type. */
@@ -314,7 +334,15 @@ export async function prepareInputs(
       // Not a declared input (or an unexpected envelope) — pass through untouched.
       continue;
     }
-    rewritten[name] = await resolveNode(ctx, entry.content, callerValue);
+    if (isExplicitEnvelope(callerValue)) {
+      // The caller filled the explicit `{ concept, content }` template: walk the
+      // inner content against the compact signature, then re-wrap so the concept
+      // annotation rides through to the run (the runtime accepts the envelope).
+      const walked = await resolveNode(ctx, entry.content, callerValue.content);
+      rewritten[name] = { ...callerValue, content: walked };
+    } else {
+      rewritten[name] = await resolveNode(ctx, entry.content, callerValue);
+    }
   }
 
   return { inputs: rewritten, uploads: ctx.uploads };
