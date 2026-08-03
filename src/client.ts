@@ -731,6 +731,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * All of these are inference-free, so they default to the management-call timeout.
    * `build/runner` is the exception — it dry-run-sweeps the closure — and overrides it
    * via `timeoutMs`.
+   *
+   * **The static routes deliberately expose no `timeoutMs` / `signal`, and that is not
+   * an oversight to be "fixed" per route.** Automated reviewers have proposed adding
+   * them to whichever route was newest more than once; the reasons they are absent are:
+   *
+   * 1. The split tracks the **dry-run sweep**, not the age of the route. `build/runner`
+   *    is slow because it sweeps (the whole closure when `pipe_ref` is omitted); every
+   *    other extension route rides the static core (`crate_ops.py` is explicit that
+   *    `build/runner` "is the exception — it needs the dry-run sweep"). Giving one
+   *    static route an override while its siblings lack one is the inconsistency.
+   * 2. The input is **bounded server-side** — `pipelex-api/api/limits.py` caps a request
+   *    at 16 `.mthds` files of 1 MiB each — and none of these routes runs inference.
+   * 3. On the hosted path an override would be **inert**: the gateway caps responses at
+   *    ~30s (see `POLL_REQUEST_TIMEOUT_MS` above), so raising `timeoutMs` would still be
+   *    cut off upstream, just with a less honest error.
+   *
+   * If a static route ever genuinely needs longer, give the WHOLE static family one
+   * uniform transport-options parameter in a single pass — do not bolt it onto one
+   * route.
    */
   private async requestExtension<T>(
     endpoint: string,
@@ -784,6 +803,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // not a crate. Point `baseUrl` at a runner (e.g. `http://localhost:8081`) until
   // the hosted surface catches up — the same gap `lint`/`format` have today,
   // tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
+  //
+  // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
+  // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding
+  // one here.
 
   /**
    * Resolve a closure into its normalized library crate — `POST /v1/resolve`.
@@ -909,8 +932,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *
    * Because of that sweep it is the one extension route that can legitimately run
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
-   * routes use. Override it per call with `options.timeoutMs`; a caller that stops
-   * caring mid-sweep can cancel via `options.signal` instead of waiting it out.
+   * routes use, and it is the ONLY extension route that takes transport options at all
+   * (the policy note on `requestExtension` says why the static ones do not). Override it
+   * per call with `options.timeoutMs`; a caller that stops caring mid-sweep can cancel
+   * via `options.signal` instead of waiting it out.
    */
   async buildRunner(
     request: BuildRunnerRequest,
