@@ -25,6 +25,8 @@ import type {
   BuildOutputResponse,
   BuildRunnerRequest,
   BuildRunnerResponse,
+  CodegenRequest,
+  CodegenResponse,
   ConceptRequest,
   ConceptResponse,
   DictPipeOutput,
@@ -36,6 +38,8 @@ import type {
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexValidationResult,
+  ResolveRequest,
+  ResolveResponse,
   ValidationErrorItem,
 } from "./models.js";
 import {
@@ -182,6 +186,8 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
+ * - **crate extensions** (`/v1/resolve`, `/v1/codegen`) — the normalized library crate
+ *   and the stamped typed artifacts projected from it.
  * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
  *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
@@ -711,14 +717,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   /**
-   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`) and
-   * the build projections (`build/*`). Their non-2xx bodies are RFC 7807 problems,
-   * mapped to the typed `ApiResponseError` like the product routes.
+   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`), the
+   * crate routes (`resolve`, `codegen`), and the build projections (`build/*`). Their
+   * non-2xx bodies are RFC 7807 problems, mapped to the typed `ApiResponseError` like
+   * the product routes.
    *
-   * The mapping is what makes their no-verdict arms usable: a build route answers
-   * `422` for an unresolvable pipe selector (unknown `pipe_ref`; or an omitted one
-   * on a closure declaring no `main_pipe`, or several) and `501` for the reserved
-   * `method_ref`. A caller branches on `ApiResponseError.status`, never on a message.
+   * The mapping is what makes their no-verdict arms usable: a crate-family route
+   * answers `422` for a request it cannot act on (an unresolvable pipe selector on the
+   * build routes; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
+   * `types` kind, on `codegen`) and `501` for the reserved `method_ref`. A caller
+   * branches on `ApiResponseError.status`, never on a message.
    *
    * All of these are inference-free, so they default to the management-call timeout.
    * `build/runner` is the exception — it dry-run-sweeps the closure — and overrides it
@@ -764,6 +772,48 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       this.throwApiResponseError("GET", "version", res);
     }
     return JSON.parse(res.body) as VersionInfo;
+  }
+
+  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
+
+  /**
+   * Resolve a closure into its normalized library crate — `POST /v1/resolve`.
+   *
+   * Resolution is a first-class language operation alongside validation: the closure is
+   * loaded and statically validated, then emitted as the **normalized library crate**
+   * (fully qualified refs, refinement flattened, natives materialized, fingerprint set)
+   * — the MTHDS standard's Library Crate Format. It runs NO dry-run sweep, so a valid
+   * verdict here says the library resolves, never that it runs; that is `validate`'s
+   * vocabulary.
+   *
+   * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — a
+   * closure that does not parse/load/validate comes back as `is_valid: false` with
+   * `validation_errors[]`, not as a thrown error. Only a no-verdict condition throws
+   * `ApiResponseError`: a malformed selector (neither or both of `files`/`method_ref`)
+   * is a 422, and the reserved `method_ref` is a `501` until the server-side method
+   * registry lands. To resolve a STORED method today, expand it first:
+   * `resolve({ files: await client.getMethodClosure(methodId) })`.
+   */
+  async resolve(request: ResolveRequest): Promise<ResolveResponse> {
+    return this.requestExtension("resolve", request);
+  }
+
+  /**
+   * Project a closure's crate into stamped typed artifacts — `POST /v1/codegen`.
+   *
+   * Resolves the closure exactly like {@link resolve}, then projects the crate through
+   * the two explicit axes — `kind` (`types` today) × `target` (`ts-zod` for TypeScript
+   * consumers, `python-pydantic`, `python-structures`) — and returns the artifact set
+   * plus its `codegen.lock`. Write both verbatim and the tree is byte-identical to a
+   * local `pipelex codegen types` run, so the offline `pipelex codegen check` passes on
+   * it; the SDK deliberately does not write files for you.
+   *
+   * Same 200-verdict discipline as {@link resolve}. Only a no-verdict condition throws
+   * `ApiResponseError`: an unknown `kind`/`target`, a `pipe_ref` on the concept-set-wide
+   * `types` kind, or a malformed selector is a 422; `method_ref` is a `501`.
+   */
+  async codegen(request: CodegenRequest): Promise<CodegenResponse> {
+    return this.requestExtension("codegen", request);
   }
 
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────

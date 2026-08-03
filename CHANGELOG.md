@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.10.0] - 2026-08-03
+
+### Added
+
+- **`resolve()` and `codegen()` on `PipelexApiClient` — the crate routes.** `client.resolve({ files })` returns the **normalized library crate** (`POST /v1/resolve`): the MTHDS standard's Library Crate Format, fully qualified refs, refinement flattened, natives materialized, with `fingerprint` and `mthds_version` riding **inside** the crate payload. `client.codegen({ files, kind: "types", target: "ts-zod" })` projects that crate into **stamped typed artifacts** plus their `codegen.lock` (`POST /v1/codegen`), through two explicit axes — `kind` (`types`) × `target` (`ts-zod` / `python-pydantic` / `python-structures`). Writing every artifact at its `path` and the `lock` content as `lock_filename`, both verbatim, reproduces a local `pipelex codegen types` run byte-for-byte, so the offline `pipelex codegen check` passes on the written tree; the SDK stays transport-only and does not write files. Both are Pipelex API extensions (not `x-mthds-protocol`) and follow the build routes' verdict discipline: a produced verdict is a **200** discriminated on `is_valid`, with the shared `CrateInvalidReport` as the invalid arm, while a no-verdict condition throws the typed `ApiResponseError` (request shape — including a `pipe_ref` on the concept-set-wide `types` kind — is a `422`; the reserved `method_ref` is a `501`). New exported types: `CrateRequestBase`, `ResolveRequest`, `ResolveValidReport`, `ResolveResponse`, `CodegenKind`, `CodegenTarget`, `CodegenRequest`, `CodegenValidReport`, `CodegenResponse`. See [`docs/crate-routes.md`](./docs/crate-routes.md).
+
+### Changed
+
+- **`BuildRequestBase` now extends the new `CrateRequestBase`** instead of restating the `files` / `method_ref` closure selector, mirroring the server's own `MthdsPipeRequest(MthdsFilesRequest)` hierarchy so the three route families cannot drift on the envelope. Structurally identical for consumers — the build request shape is unchanged.
+
 ## [v0.9.0] - 2026-07-24
 
 ### Fixed

@@ -36,7 +36,7 @@ export { PipelexExecuteResult } from "./execute-result.js";
 export type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
 export type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 
-// ── Wire models (Dict concretes, validate surface, tools + build routes) ─────
+// ── Wire models (Dict concretes, validate surface, tools + build + crate routes) ──
 export type {
   DiagnosticKind,
   DiagnosticRange,
@@ -57,6 +57,7 @@ export type {
   ConceptRepresentationFormat,
   InputsTemplateFormat,
   MthdsFileItem,
+  CrateRequestBase,
   BuildRequestBase,
   BuildInputsRequest,
   BuildOutputRequest,
@@ -74,6 +75,14 @@ export type {
   BuildRunnerResponse,
   ConceptResponse,
   PipeSpecResponse,
+  ResolveRequest,
+  ResolveValidReport,
+  ResolveResponse,
+  CodegenKind,
+  CodegenTarget,
+  CodegenRequest,
+  CodegenValidReport,
+  CodegenResponse,
 } from "./models.js";
 
 // ── Pipelex product surface (hosted management routes) ───────────────

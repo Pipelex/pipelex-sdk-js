@@ -241,15 +241,28 @@ export interface MthdsFileItem {
 }
 
 /**
- * The closure + pipe selector every `/v1/build/*` route shares.
+ * The closure selector every crate-family route shares — `/v1/resolve`, `/v1/codegen`,
+ * and `/v1/build/*` (mirror of the server's `MthdsFilesRequest`).
  *
  * Supply the closure EITHER as inline `files` OR as a `method_ref` into the method
- * registry — never both. `method_ref` is reserved: the registry does not exist yet,
- * so the server answers `501` for it today.
+ * registry — never both, and never neither (both arms are a request-shape `422`).
+ * `method_ref` is reserved: the registry does not exist yet, so the server answers
+ * `501` for it today.
+ *
+ * The XOR is a server-side invariant, not a type-level one: expressing it as a union
+ * here would make the common `{ files }` call site pick a branch for no gain, and the
+ * server rejects the two illegal shapes with a typed `ApiResponseError` either way.
  */
-export interface BuildRequestBase {
+export interface CrateRequestBase {
   files?: MthdsFileItem[];
   method_ref?: string;
+}
+
+/**
+ * The crate envelope plus the pipe selector the `/v1/build/*` projections add
+ * (mirror of the server's `MthdsPipeRequest`).
+ */
+export interface BuildRequestBase extends CrateRequestBase {
   /**
    * The pipe to project, as a QUALIFIED `domain.pipe_code` ref. Omit it to default
    * to the closure's declared `main_pipe` — which fails (422) when the closure
@@ -297,13 +310,16 @@ export interface PipeSpecRequest {
 }
 
 /**
- * The `is_valid: false` arm shared by every `/v1/build/*` route.
+ * The `is_valid: false` arm shared by every crate-family route — `/v1/build/*`,
+ * `/v1/resolve`, and `/v1/codegen` (mirror of the server's one `CrateInvalidReport`).
  *
- * The build routes follow `/validate`'s discipline: an unresolvable closure is the
+ * They all follow `/validate`'s discipline: an unresolvable closure is the
  * *successful product* of the call (the request was well-formed, the library was
  * not), so it rides a **200** discriminated on `is_valid` — never a 4xx. Only a
- * no-verdict condition (an unknown `pipe_ref`, `method_ref`, auth, a server fault)
- * throws `ApiResponseError`. Branch on `is_valid`, never on the transport.
+ * no-verdict condition throws `ApiResponseError`: a request the route cannot act on
+ * (an unknown `pipe_ref` on the build routes, an unknown `kind`/`target` on codegen),
+ * the reserved `method_ref`, auth, a server fault. Branch on `is_valid`, never on the
+ * transport.
  */
 export interface CrateInvalidReport {
   is_valid: false;
@@ -371,7 +387,11 @@ export type BuildOutputValidReport = BuildOutputObjectReport | BuildOutputPython
 
 export type BuildOutputResponse = BuildOutputValidReport | CrateInvalidReport;
 
-/** One stamped generated file in the structures projection. */
+/**
+ * One stamped generated file — shared by `/v1/build/runner`'s structures projection
+ * and `/v1/codegen`'s artifact set. `path` is relative to the output root the client
+ * chooses; `content` is complete, stamp header included, and is written verbatim.
+ */
 export interface GeneratedArtifact {
   path: string;
   content: string;
@@ -408,3 +428,95 @@ export interface PipeSpecResponse {
   pipe_type: string;
   toml: string;
 }
+
+// ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ───────
+//
+// The second crate-family surface: `/v1/resolve` emits the normalized library crate,
+// `/v1/codegen` projects that crate into stamped typed artifacts plus their lock.
+// Both are Pipelex API extensions (NOT `x-mthds-protocol`) over the standard-owned
+// artifact, so their wire fields stay brand-neutral. Same envelope and same verdict
+// discipline as the build routes: a produced verdict is a 200 discriminated on
+// `is_valid`, with `CrateInvalidReport` as the shared invalid arm.
+
+/** `POST /v1/resolve` request — the bare crate envelope, no projection axes. */
+export type ResolveRequest = CrateRequestBase;
+
+/**
+ * The `/v1/resolve` valid arm — the normalized library crate.
+ *
+ * `crate` is the canonical JSON encoding of the MTHDS **Library Crate Format**: fully
+ * qualified refs, refinement flattened, natives materialized, top-level maps key-sorted,
+ * non-semantic provenance dropped. Its `fingerprint` and `mthds_version` ride INSIDE the
+ * payload, not beside it, so a fingerprint computed from this object agrees with one
+ * computed from `pipelex resolve --format json`.
+ *
+ * Typed as opaque transport (`Record<string, unknown>`): the crate schema is owned by the
+ * MTHDS standard, not by this SDK, and restating it here would be a second source of truth
+ * free to drift from the one the server emits.
+ */
+export interface ResolveValidReport {
+  is_valid: true;
+  crate: Record<string, unknown>;
+  message: string;
+}
+
+/** The `POST /v1/resolve` 200 response — pattern-match `is_valid` before reading the arm. */
+export type ResolveResponse = ResolveValidReport | CrateInvalidReport;
+
+/**
+ * What `/v1/codegen` projects — the `kind` axis. `types` (the crate's whole concept set
+ * projected into typed models) is the only kind served today; the future per-pipe kinds
+ * (`docs`, `tools`, `tests`) join it and select their pipe via `pipe_ref`. Input templates
+ * are deliberately NOT a kind here — they are user-editable scaffolds, never stamped or
+ * locked, and ride `POST /v1/build/inputs` instead.
+ */
+export type CodegenKind = "types";
+
+/**
+ * For whom `/v1/codegen` projects — the `target` axis, mirroring pipelex's `CodegenTarget`.
+ * `ts-zod` (zod schemas + inferred types) is the natural target for TypeScript consumers;
+ * `python-pydantic` emits self-contained BaseModels; `python-structures` emits runtime
+ * StructuredContent classes for a Pipelex host.
+ */
+export type CodegenTarget = "ts-zod" | "python-pydantic" | "python-structures";
+
+/** `POST /v1/codegen` request — the crate envelope plus the two explicit projection axes. */
+export interface CodegenRequest extends CrateRequestBase {
+  kind: CodegenKind;
+  target: CodegenTarget;
+  /**
+   * Pipe selector for per-pipe projection kinds. `kind: "types"` is concept-set-wide and
+   * REJECTS it with a request-shape `422` rather than silently ignoring it — the field
+   * exists for the future per-pipe kinds.
+   */
+  pipe_ref?: string;
+}
+
+/**
+ * The `/v1/codegen` valid arm — the stamped artifact set plus its lock.
+ *
+ * The trust chain: write every `artifacts[]` entry at its `path` and the `lock` content as
+ * `lock_filename`, both verbatim, and the tree is byte-identical to what a local `pipelex
+ * codegen types` run produces — same stamps, same lock — so the offline `pipelex codegen
+ * check` passes on it. Editing an artifact (or re-serializing the lock) breaks that chain;
+ * there is deliberately no server-side check route, because the check is offline by design.
+ */
+export interface CodegenValidReport {
+  is_valid: true;
+  /** Echo of the request's projection axes. */
+  kind: CodegenKind;
+  target: CodegenTarget;
+  /** Fingerprint of the normalized crate the artifacts were generated from. */
+  crate_fingerprint: string;
+  /** The pipelex engine version that generated them. */
+  engine_version: string;
+  artifacts: GeneratedArtifact[];
+  /** The lock file's TOML content — write verbatim beside the artifacts. */
+  lock: string;
+  /** The filename `lock` must be written as (`codegen.lock`). */
+  lock_filename: string;
+  message: string;
+}
+
+/** The `POST /v1/codegen` 200 response — pattern-match `is_valid` before reading the arm. */
+export type CodegenResponse = CodegenValidReport | CrateInvalidReport;

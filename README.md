@@ -6,7 +6,7 @@ TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage 
 
 ## Status
 
-Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update).
+Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the crate routes (`resolve` / `codegen`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update).
 
 ## Install
 
