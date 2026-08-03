@@ -49,6 +49,23 @@ Server references: `pipelex-api/api/routes/pipelex/resolve.py`, `pipelex-api/api
 
 **Checkpoint 2** — ✅ `make check` + `make test` green (all unit suites), and `make test-e2e` green against a live local `pipelex-api` — all e2e tests pass, including the new crate suite. The live run is what pins the `kind`/`target` vocabulary against the server's Python `StrEnum`.
 
+## Review outcomes (PR [#24](https://github.com/Pipelex/pipelex-sdk-js/pull/24))
+
+CI green (Quality Checks, gate-dev); Greptile 5/5 and cubic pass on HEAD; no unresolved threads. (`CLAAssistant` fails, but it fails identically on the pre-existing PR #18 — a GitHub App installation fault in the repo, not this change.)
+
+Findings that landed as fixes:
+
+- The `requestExtension` TSDoc still enumerated only tools + build routes — widened, with the `CrateInvalidReport` no-verdict list corrected at the same time (it named an unknown `pipe_ref`, which `/v1/resolve` has no concept of).
+- **The crate routes are not reachable on `api.pipelex.com`** — verified against the gateway authorizer's allowlist and the platform tooling proxy. Documented at the call sites; cross-repo fix tracked in `wip/`.
+- **The fingerprint documentation was wrong** — it is a property of the logical crate (hashes `{concepts, pipes, domains}` with `source` stripped), and the route's compact JSON is not the CLI's pretty-printed bytes. Corrected in the TSDoc and the doc.
+- **`python-structures` was declared but never called live** — the e2e suite now covers all three `CodegenTarget` members exhaustively.
+- A stale `wip/` handoff doc invited coding from a superset `{concept, content}` predicate the shipped `isExplicitEnvelope` deliberately rejects — archived and annotated.
+
+Findings dismissed, with the reasoning recorded so they do not recur:
+
+- **Bump `package.json` / `SDK_VERSION` alongside the changelog** (Codex + cubic) — the `/release` skill owns the bump on a `release/vX.Y.Z` branch, `d32fd9c` is direct precedent, publishing only triggers on `main`, and the change would fail `tests/index.test.ts`.
+- **Add `timeoutMs` / `signal` to `resolve` / `codegen`** (raised twice, independently) — the transport-options split tracks the dry-run sweep, not the age of the route; input is bounded server-side; the hosted gateway caps responses at ~30s so an override would be inert. Now recorded as a policy note on `requestExtension` (the shared chokepoint, so it covers the whole static family) with pointers from the crate-extensions header and `buildRunner`'s TSDoc.
+
 ## Out of scope / follow-ups (tracked, not done here)
 
 - [ ] `mthds-js/src/agent/commands/api-commands.ts:474` still hard-errors "the Pipelex API has no codegen routes yet" — stale now; fix belongs in `mthds-js`, in its own change.
