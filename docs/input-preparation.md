@@ -1,6 +1,6 @@
 # Input preparation (`uploadFile` / `prepareInputs`)
 
-> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace, tracked in `TODOS.md`). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
+> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
 > **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source) **or** as a stored catalog `method_id`, resolved client-side to its closure before anything hits the wire (see "[Closure from a stored `method_id`](#closure-from-a-stored-method_id)" below). One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
