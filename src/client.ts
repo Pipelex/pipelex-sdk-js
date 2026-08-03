@@ -795,14 +795,18 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
   //
-  // NOT YET REACHABLE ON THE HOSTED DEFAULT. Both routes are served by any
-  // `pipelex-api` runner, but `api.pipelex.com` does not expose them yet — the
+  // NOT YET REACHABLE ON ANY HOSTED ENVIRONMENT. Both routes are served by any
+  // `pipelex-api` runner, but no `*.pipelex.com` deployment exposes them — the
   // gateway's API-key allowlist and the platform's tooling proxy both enumerate
   // routes explicitly (`validate`, `models`, `build/*`, …), and neither lists
-  // `resolve` or `codegen`. Against the hosted default base URL they answer 403,
-  // not a crate. Point `baseUrl` at a runner (e.g. `http://localhost:8081`) until
-  // the hosted surface catches up — the same gap `lint`/`format` have today,
-  // tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
+  // `resolve` or `codegen`. They answer a gateway `403 {"message":"Forbidden"}`
+  // — refused before any service sees them, so not even an RFC 7807 problem body.
+  // Confirmed empirically against BOTH prod and `api-dev.pipelex.com`: on the same
+  // origin, with the same key, `validate` and `build/inputs` succeed while these
+  // two 403. Dev is not a workaround. Point `baseUrl` at a runner (e.g.
+  // `http://localhost:8081`) until the hosted surface catches up — the same gap
+  // `lint`/`format` have today, tracked in
+  // `wip/hosted-exposure-crate-and-tools-routes.md`.
   //
   // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
   // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding

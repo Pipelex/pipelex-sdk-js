@@ -2,7 +2,9 @@
 
 Two routes project a **closure** of MTHDS files into the artifacts downstream tooling actually consumes: `resolve` emits the **normalized library crate**, and `codegen` projects that crate into **stamped typed artifacts** plus their lock. Like the [build routes](./build-routes.md), they are Pipelex API extensions rather than MTHDS Protocol operations — but note the ownership split: the _crate_ is standard-owned (the MTHDS Library Crate Format), while the HTTP surface serving it, and every type projection on top of it, are ours.
 
-> **Not yet reachable on `api.pipelex.com`.** Any `pipelex-api` runner serves these routes, but the hosted surface does not expose them yet: the gateway's API-key allowlist and the platform's tooling proxy each enumerate routes explicitly, and neither lists `resolve` or `codegen`. Against the SDK's default base URL they answer `403`, not a crate — so point `baseUrl` at a runner (`http://localhost:8081`, or your own deployment) for now. `lint` / `format` have the same gap; both are tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
+> **Not yet reachable on any hosted environment — dev included.** Any `pipelex-api` runner serves these routes, but no `*.pipelex.com` deployment exposes them: the gateway's API-key allowlist and the platform's tooling proxy each enumerate routes explicitly, and neither lists `resolve` or `codegen`. They answer a gateway `403 {"message":"Forbidden"}` — refused before any service sees the request, so not even an RFC 7807 problem body.
+>
+> This was checked against **both** prod and `api-dev.pipelex.com`: on the same origin, with the same API key, in the same run, `validate` and `buildInputs` return `is_valid: true` while `resolve` and `codegen` 403. **Pointing at dev is not a workaround.** Use a runner (`http://localhost:8081`, or your own deployment) for now. `lint` / `format` have the same gap; all four are tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
 
 ## The shared envelope
 
