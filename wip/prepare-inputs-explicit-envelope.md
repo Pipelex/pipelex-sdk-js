@@ -3,7 +3,7 @@
 **Filed:** 2026-07-24, from the `pipelex-mcp` side (branch `feature/Use-new-sdk-for-uploads`, PR [Pipelex/pipelex-mcp#15](https://github.com/Pipelex/pipelex-mcp/pull/15)).
 **Found by:** a Codex review comment on that PR ("Handle explicit input envelopes in hosted prepare"), then reproduced and root-caused against `@pipelex/sdk@0.7.0`.
 **Owner requested:** fix in `@pipelex/sdk` (`src/prepare-inputs.ts`), not worked around in the MCP.
-**Status: READY / turnkey (re-verified against SDK 0.8.0 `dev`).** All code references below are exact against the current source; the one open question (does `/v1/start` accept the envelope?) is **resolved** by reading the `pipelex` runtime — see the ✅ RESOLVED section. The decision is settled: **Option A, re-wrap on output.** No open questions remain; an implementer can code straight from the recommended snippet + acceptance criteria.
+**Archived — shipped in [v0.9.0](../CHANGELOG.md#v090---2026-07-24).** Option A landed as `isExplicitEnvelope` in `src/prepare-inputs.ts`; kept for historical context only. Do NOT code from the snippet below — see the note under Option A for how the shipped predicate differs. Its sibling [`prepare-inputs-explicit-envelope-todos.md`](./prepare-inputs-explicit-envelope-todos.md) tracks the phases that delivered it.
 
 ## TL;DR
 
@@ -102,6 +102,8 @@ const valueToWalk = isEnvelope ? (callerValue as { content: unknown }).content :
 const walked = await resolveNode(ctx, entry.content, valueToWalk);
 rewritten[name] = isEnvelope ? { ...(callerValue as object), content: walked } : walked;
 ```
+
+> **What actually shipped differs here, deliberately.** The snippet's superset match (`isPlainObject && "concept" in && "content" in`) would misread a *structured content* input that merely happens to carry both fields as an envelope. `isExplicitEnvelope` in `src/prepare-inputs.ts` therefore requires the keys to be **exactly** `concept` + `content` (`keys.length === 2`), matching the runtime's `_is_explicit`. Read the shipped predicate, not this sketch.
 
 Rationale: the explicit template is a first-class output of `buildInputs({ explicit: true })`; an agent that fills what the SDK gave it should be able to hand it straight back. This keeps the round-trip closed and fixes every consumer (the MCP, `pipelex-app`, anything else) at once. It is the fix the MCP owner asked for.
 
