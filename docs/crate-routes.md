@@ -2,6 +2,8 @@
 
 Two routes project a **closure** of MTHDS files into the artifacts downstream tooling actually consumes: `resolve` emits the **normalized library crate**, and `codegen` projects that crate into **stamped typed artifacts** plus their lock. Like the [build routes](./build-routes.md), they are Pipelex API extensions rather than MTHDS Protocol operations — but note the ownership split: the _crate_ is standard-owned (the MTHDS Library Crate Format), while the HTTP surface serving it, and every type projection on top of it, are ours.
 
+> **Not yet reachable on `api.pipelex.com`.** Any `pipelex-api` runner serves these routes, but the hosted surface does not expose them yet: the gateway's API-key allowlist and the platform's tooling proxy each enumerate routes explicitly, and neither lists `resolve` or `codegen`. Against the SDK's default base URL they answer `403`, not a crate — so point `baseUrl` at a runner (`http://localhost:8081`, or your own deployment) for now. `lint` / `format` have the same gap; both are tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
+
 ## The shared envelope
 
 Both take the same closure selector — inline `files` **or** a `method_ref`, exactly one:
@@ -40,7 +42,8 @@ console.log(result.crate.fingerprint); // rides INSIDE the crate, not beside it
 
 Two things to internalize:
 
-- **`fingerprint` and `mthds_version` are crate members**, not siblings of `crate`. The payload is the canonical JSON encoding — the same bytes `pipelex resolve --format json` prints — so a fingerprint computed from either surface agrees.
+- **`fingerprint` and `mthds_version` are crate members**, not siblings of `crate`.
+- **Compare `fingerprint` values; never hash the crate yourself.** The fingerprint is a property of the _logical_ crate, not of an encoding: the server hashes `{concepts, pipes, domains}` with provenance `source` stripped, excluding `source_map`, `mthds_version` and `fingerprint` itself. And these are not the bytes `pipelex resolve --format json` prints — the CLI pretty-prints, the route answers compact JSON. Same logical crate, different serialization. Hashing `JSON.stringify(result.crate)` and comparing it against `result.crate.fingerprint` will mismatch on every call, and will look like tampering.
 - **`crate` is typed as opaque transport** (`Record<string, unknown>`). Its schema belongs to the MTHDS standard; restating it here would be a second source of truth, free to drift from the one the server emits.
 
 `resolve` runs **no dry-run sweep**. A valid verdict says the library resolves, never that it runs — runnability is `validate`'s vocabulary.

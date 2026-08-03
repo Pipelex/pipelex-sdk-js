@@ -55,6 +55,8 @@ Server references: `pipelex-api/api/routes/pipelex/resolve.py`, `pipelex-api/api
 - [ ] `pipelex-sdk-python` parity (`resolve`/`codegen` on `PipelexAPIClient`) — separate repo, separate change.
 - [ ] Consider a convenience helper that writes `artifacts` + lock to disk — deliberately **not** in this change; the SDK stays transport-only for now.
 - [ ] By-id (`method_id`) sugar on `resolve`/`codegen` — deferred, see [`wip/crate-routes-method-id-sugar.md`](./wip/crate-routes-method-id-sugar.md).
+- [ ] **Expose `/v1/resolve`, `/v1/codegen` (and the pre-existing `/v1/lint`, `/v1/format`) on `api.pipelex.com`** — cross-repo (`pipelex-api-infra` allowlist + `pipelex-platform` tooling proxy). The routes work on any runner but the hosted default base URL answers 403; documented at the call sites and tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](./wip/hosted-exposure-crate-and-tools-routes.md).
+- [ ] **`ValidationErrorItem` is missing `missing_pipe_code` + `suggested_fix`** — pre-existing drift on the shared invalid arm, so it now touches these routes too. Deferred because closing it properly means porting the `SuggestedFix`/`FixOp`/`FixSafety` family; see [`wip/validation-error-item-drift.md`](./wip/validation-error-item-drift.md).
 
 ## Decisions log
 

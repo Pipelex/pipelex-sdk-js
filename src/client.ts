@@ -775,6 +775,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
+  //
+  // NOT YET REACHABLE ON THE HOSTED DEFAULT. Both routes are served by any
+  // `pipelex-api` runner, but `api.pipelex.com` does not expose them yet — the
+  // gateway's API-key allowlist and the platform's tooling proxy both enumerate
+  // routes explicitly (`validate`, `models`, `build/*`, …), and neither lists
+  // `resolve` or `codegen`. Against the hosted default base URL they answer 403,
+  // not a crate. Point `baseUrl` at a runner (e.g. `http://localhost:8081`) until
+  // the hosted surface catches up — the same gap `lint`/`format` have today,
+  // tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
 
   /**
    * Resolve a closure into its normalized library crate — `POST /v1/resolve`.

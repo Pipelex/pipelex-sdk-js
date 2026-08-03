@@ -24,6 +24,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { PipelexApiClient } from "../../src/client.js";
 import { ApiResponseError } from "../../src/errors.js";
 import type {
+  CodegenTarget,
   CodegenValidReport,
   CrateInvalidReport,
   ResolveValidReport,
@@ -136,6 +137,27 @@ describe("e2e codegen (/v1/codegen)", () => {
     expect(report.lock.length).toBeGreaterThan(0);
     expect(report.lock_filename).toBe("codegen.lock");
   });
+
+  // Every declared `CodegenTarget` gets a live call. The type is a hand-written mirror
+  // of a Python StrEnum in another repo, so a member the server no longer serves is
+  // invisible to the type-checker and to every mocked test — this loop is the only
+  // thing that would go red. Kept exhaustive on purpose: covering two of three would
+  // leave exactly the untested member free to rot.
+  it.each<CodegenTarget>(["ts-zod", "python-pydantic", "python-structures"])(
+    "serves the %s target",
+    async (target) => {
+      const result = await client.codegen({
+        files: [{ content: VALID_BUNDLE }],
+        kind: "types",
+        target,
+      });
+
+      expect(result.is_valid).toBe(true);
+      const report = result as CodegenValidReport;
+      expect(report.target).toBe(target);
+      expect(report.artifacts.length).toBeGreaterThan(0);
+    },
+  );
 
   it("agrees with resolve on the crate fingerprint for the same closure", async () => {
     const files = [{ content: VALID_BUNDLE, source: "smoke.mthds" }];

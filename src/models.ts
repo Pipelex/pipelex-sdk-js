@@ -444,11 +444,17 @@ export type ResolveRequest = CrateRequestBase;
 /**
  * The `/v1/resolve` valid arm — the normalized library crate.
  *
- * `crate` is the canonical JSON encoding of the MTHDS **Library Crate Format**: fully
- * qualified refs, refinement flattened, natives materialized, top-level maps key-sorted,
- * non-semantic provenance dropped. Its `fingerprint` and `mthds_version` ride INSIDE the
- * payload, not beside it, so a fingerprint computed from this object agrees with one
- * computed from `pipelex resolve --format json`.
+ * `crate` is the MTHDS **Library Crate Format**: fully qualified refs, refinement
+ * flattened, natives materialized, top-level maps key-sorted, non-semantic provenance
+ * dropped. Its `fingerprint` and `mthds_version` ride INSIDE the payload, not beside it.
+ *
+ * **Do not recompute the fingerprint by hashing this object.** It is a property of the
+ * logical crate, not of any particular encoding: the server hashes `{concepts, pipes,
+ * domains}` with each object's provenance `source` stripped, excluding `source_map`,
+ * `mthds_version`, and `fingerprint` itself. Nor are these the same *bytes* the CLI
+ * prints — `pipelex resolve --format json` pretty-prints, while this rides a compact
+ * JSON response. Same logical crate, different serialization; compare `fingerprint`
+ * values, never serialized bytes.
  *
  * Typed as opaque transport (`Record<string, unknown>`): the crate schema is owned by the
  * MTHDS standard, not by this SDK, and restating it here would be a second source of truth
