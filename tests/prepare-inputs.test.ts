@@ -341,6 +341,194 @@ describe("prepareInputs", () => {
   });
 });
 
+describe("prepareInputs with the explicit { concept, content } envelope", () => {
+  // The caller may hand back the SAME shape `buildInputs({ explicit: true })` produces:
+  // a `{ concept, content }` envelope per input. Preparation unwraps `.content`, runs the
+  // compact walk, then re-wraps — preserving the concept annotation for the run.
+
+  it("uploads an envelope Image whose content is bytes and re-wraps the rewritten content", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: { photo: { concept: "demo.Photo", content: new Uint8Array([1, 2, 3]) } },
+    });
+
+    expect(prepared.inputs).toEqual({
+      photo: { concept: "demo.Photo", content: { url: "pipelex-storage://user/assets/1.bin" } },
+    });
+    expect(prepared.uploads).toHaveLength(1);
+    expect(client.uploadCalls).toHaveLength(1);
+  });
+
+  it("passes an envelope http(s) URL through unchanged with no upload", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: {
+        photo: { concept: "demo.Photo", content: { url: "https://example.com/real.png" } },
+      },
+    });
+
+    expect(prepared.inputs).toEqual({
+      photo: { concept: "demo.Photo", content: { url: "https://example.com/real.png" } },
+    });
+    expect(prepared.uploads).toHaveLength(0);
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
+  it("passes an envelope with an existing pipelex-storage:// URI through unchanged", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: {
+        photo: {
+          concept: "demo.Photo",
+          content: { url: "pipelex-storage://user/assets/already.png" },
+        },
+      },
+    });
+
+    expect(prepared.inputs).toEqual({
+      photo: {
+        concept: "demo.Photo",
+        content: { url: "pipelex-storage://user/assets/already.png" },
+      },
+    });
+    expect(prepared.uploads).toHaveLength(0);
+  });
+
+  it("decodes and uploads an envelope data: URL", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: { photo: { concept: "demo.Photo", content: "data:image/png;base64,AQIDBA==" } },
+    });
+
+    expect(prepared.inputs).toEqual({
+      photo: { concept: "demo.Photo", content: { url: "pipelex-storage://user/assets/1.bin" } },
+    });
+    expect(client.uploadCalls).toHaveLength(1);
+    expect(client.uploadCalls[0]?.content_type).toBe("image/png");
+  });
+
+  it("leaves an envelope Text input untouched — no upload", async () => {
+    const client = makeClient({ question: entry("demo.Question", { text: "text_value" }) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: { question: { concept: "native.Text", content: "What is in the photo?" } },
+    });
+
+    expect(prepared.inputs).toEqual({
+      question: { concept: "native.Text", content: "What is in the photo?" },
+    });
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
+  it("uploads each element of an envelope list-of-Documents and re-wraps the list", async () => {
+    const client = makeClient({ exhibits: entry("demo.Exhibit", [{ url: "https://mock/d.pdf" }]) });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: {
+        exhibits: { concept: "demo.Exhibit", content: [new Uint8Array([1]), new Uint8Array([2])] },
+      },
+    });
+
+    expect(prepared.inputs).toEqual({
+      exhibits: {
+        concept: "demo.Exhibit",
+        content: [
+          { url: "pipelex-storage://user/assets/1.bin" },
+          { url: "pipelex-storage://user/assets/2.bin" },
+        ],
+      },
+    });
+    expect(prepared.uploads).toHaveLength(2);
+  });
+
+  it("uploads only the nested Image field of an envelope structured content, leaving siblings untouched", async () => {
+    const client = makeClient({
+      dossier: entry("demo.Dossier", {
+        title: "title_value",
+        cover: { url: "https://mock/c.png", mime_type: "image/png" },
+      }),
+    });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: {
+        dossier: {
+          concept: "demo.Dossier",
+          content: { title: "Q3 report", cover: new Uint8Array([7, 7]) },
+        },
+      },
+    });
+
+    expect(prepared.inputs).toEqual({
+      dossier: {
+        concept: "demo.Dossier",
+        content: { title: "Q3 report", cover: { url: "pipelex-storage://user/assets/1.bin" } },
+      },
+    });
+    expect(prepared.uploads).toHaveLength(1);
+  });
+
+  it("handles a mix of compact and envelope inputs in one call", async () => {
+    const client = makeClient({
+      photo: entry("demo.Photo", { url: "https://mock/p.png" }),
+      question: entry("demo.Question", { text: "text_value" }),
+    });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: {
+        photo: { concept: "demo.Photo", content: new Uint8Array([1, 2, 3]) },
+        question: "What is in the photo?",
+      },
+    });
+
+    expect(prepared.inputs).toEqual({
+      photo: { concept: "demo.Photo", content: { url: "pipelex-storage://user/assets/1.bin" } },
+      question: "What is in the photo?",
+    });
+    expect(prepared.uploads).toHaveLength(1);
+  });
+
+  it("is copy-on-write: neither the caller's envelope nor its inner content is mutated", async () => {
+    const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
+    const bytes = new Uint8Array([1, 2, 3]);
+    const original = { photo: { concept: "demo.Photo", content: bytes } };
+
+    await prepareInputs(client, { files: FILES, inputs: original });
+
+    expect(original.photo.content).toBe(bytes);
+    expect(original.photo).toEqual({ concept: "demo.Photo", content: bytes });
+  });
+
+  it("produces the same rewritten content as the compact call, plus the concept wrapper", async () => {
+    const template = { photo: entry("demo.Photo", { url: "https://mock/p.png" }) };
+
+    const compact = await prepareInputs(makeClient(template), {
+      files: FILES,
+      inputs: { photo: "https://example.com/real.png" },
+    });
+    const envelope = await prepareInputs(makeClient(template), {
+      files: FILES,
+      inputs: {
+        photo: { concept: "demo.Photo", content: { url: "https://example.com/real.png" } },
+      },
+    });
+
+    expect((envelope.inputs.photo as { content: unknown }).content).toEqual(compact.inputs.photo);
+    expect(envelope.uploads).toEqual(compact.uploads);
+  });
+});
+
 describe("prepareInputs by method_id", () => {
   it("resolves a stored method's closure and produces the same result as the inline-files call", async () => {
     const template = { photo: entry("demo.Photo", { url: "https://mock/p.png" }) };
