@@ -106,6 +106,7 @@ export type {
   ListRunsQuery,
   PipelineRun,
   RunDetail,
+  RunErrorReport,
   RunPage,
   UpdateRunInput,
 } from "./product-models.js";

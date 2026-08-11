@@ -219,16 +219,38 @@ export interface UploadedFile {
 /** Per-pipe progress marker surfaced in a run's `pipe_statuses` map. */
 export type PipeStatus = "scheduled" | "running" | "succeeded" | "failed" | "skipped";
 
+/**
+ * The runner's structured failure report, as stored on a terminal-failed run.
+ *
+ * The wire payload carries the full VERBOSE `ErrorReport`; these are the two
+ * fields a consumer can rely on. Optional throughout: the shape is owned by the
+ * runner, and a failure whose callback carried no report has none of it.
+ */
+export interface RunErrorReport {
+  message?: string;
+  error_type?: string;
+  [key: string]: unknown;
+}
+
 export interface PipelineRun {
   pipeline_run_id: string;
+  /** Absent on an ad-hoc run — one started from an inline bundle belongs to no
+   *  stored method, and is reachable only by id. */
   method_id: string;
   pipe_code: string;
+  org_id?: string;
+  /** Who started it — denormalised so attribution needs no extra lookup. */
+  created_by_user_id?: string;
   workflow_id?: string | null;
   status: RunStatus;
   result_url?: string | null;
   pipe_statuses?: Record<string, PipeStatus> | null;
   created_at: string;
   finished_at?: string | null;
+  /** Present only on a failed run whose completion callback carried a report.
+   *  This is how a consumer tells the user WHY a run failed rather than showing
+   *  a generic message. */
+  error?: RunErrorReport | null;
 }
 
 /**
