@@ -231,6 +231,50 @@ export interface PipelineRun {
   finished_at?: string | null;
 }
 
+/**
+ * A single run, whole — `GET /v1/runs/{id}`.
+ *
+ * `mthds_contents` is what the run ACTUALLY executed, and it is the only record
+ * of that: a caller may run an editor buffer that was never saved, so the stored
+ * method can have moved on since — or never existed, for an ad-hoc run. It is
+ * deliberately absent from the list and from the polled status read, because it
+ * is the whole `.mthds` bundle (tens of KB).
+ */
+export interface RunDetail extends PipelineRun {
+  mthds_contents?: string[] | null;
+  inputs?: Record<string, unknown> | null;
+}
+
+/** Query for one page of run history. */
+export interface ListRunsQuery {
+  /**
+   * Only runs created at or after this INSTANT — ISO-8601 with a UTC offset
+   * (`2026-06-02T00:00:00+09:00`). Inclusive. A bare `YYYY-MM-DD` or a naive
+   * timestamp is rejected by the API: only the caller knows which timezone's
+   * day it means, so convert your own day boundaries to instants.
+   */
+  createdFrom?: string;
+  /** Only runs created at or before this instant. Same rules as `createdFrom`. */
+  createdTo?: string;
+  /** Page size. The API defaults to 50 and caps at 200. */
+  limit?: number;
+  /** Opaque `nextCursor` from the previous page. */
+  cursor?: string;
+}
+
+/**
+ * One page of run history, newest first.
+ *
+ * `nextCursor` is opaque — pass it straight back to `listRuns` to continue;
+ * `null` means this was the last page. There is deliberately no total: counting
+ * would mean reading the whole history, which is the cost paging exists to
+ * avoid.
+ */
+export interface RunPage {
+  items: PipelineRun[];
+  nextCursor: string | null;
+}
+
 /** The admin/manual run-status patch — `status` is a free string here. */
 export interface UpdateRunInput {
   status: string;

@@ -103,7 +103,10 @@ export type {
   UploadInput,
   UploadedFile,
   PipeStatus,
+  ListRunsQuery,
   PipelineRun,
+  RunDetail,
+  RunPage,
   UpdateRunInput,
 } from "./product-models.js";
 

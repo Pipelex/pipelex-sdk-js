@@ -60,7 +60,10 @@ import type {
   OnboardingSubmission,
   PipelexApiKeyCreated,
   PipelexApiKeyList,
+  ListRunsQuery,
   PipelineRun,
+  RunDetail,
+  RunPage,
   PlanView,
   ResolvedStorageUrl,
   SubscriptionResponse,
@@ -1214,9 +1217,71 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return prepareInputsImpl(this, request);
   }
 
-  /** List a method's runs — `GET /v1/runs?method_id={methodId}`. */
-  async listRuns(methodId: string): Promise<PipelineRun[]> {
-    return this.requestProduct("GET", `runs?method_id=${encodeURIComponent(methodId)}`);
+  /**
+   * One PAGE of a method's runs, newest first — `GET /v1/runs?method_id=`.
+   *
+   * **This returns a page, not the whole history.** The API serves it from a
+   * time-ordered index, so its cost is the page size rather than the size of
+   * the history; a method with 100k runs answers as fast as one with 50. To
+   * read further, pass the previous response's `nextCursor` back as
+   * `query.cursor` until it comes back `null`.
+   *
+   * Breaking in v0.10.0: this used to return `PipelineRun[]` — the complete
+   * history in one array. Code that rendered that array directly should now
+   * either read `page.items` (accepting the first page) or follow the cursor.
+   * `listAllRuns` does the latter for you.
+   *
+   * `createdFrom` / `createdTo` are applied server-side as index key
+   * conditions, so a bounded page genuinely reads less. They are INSTANTS,
+   * not days — see `ListRunsQuery`.
+   */
+  async listRuns(methodId: string, query: ListRunsQuery = {}): Promise<RunPage> {
+    const params = new URLSearchParams({ method_id: methodId });
+    if (query.createdFrom) params.set("created_from", query.createdFrom);
+    if (query.createdTo) params.set("created_to", query.createdTo);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.cursor) params.set("cursor", query.cursor);
+    const page = await this.requestProduct<{ items: PipelineRun[]; next_cursor: string | null }>(
+      "GET",
+      `runs?${params.toString()}`,
+    );
+    return { items: page.items, nextCursor: page.next_cursor };
+  }
+
+  /**
+   * Every run of a method, following the cursor to exhaustion.
+   *
+   * The convenience wrapper for callers that genuinely want the whole history
+   * (an export, a report). **Prefer `listRuns`** for anything user-facing: this
+   * is O(history) by construction and will make as many round trips as the data
+   * demands. `maxPages` is a safety stop, not a paging control — hitting it
+   * returns a truncated list rather than looping forever.
+   */
+  async listAllRuns(
+    methodId: string,
+    query: Omit<ListRunsQuery, "cursor"> = {},
+    maxPages = 100,
+  ): Promise<PipelineRun[]> {
+    const all: PipelineRun[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const result: RunPage = await this.listRuns(methodId, { ...query, cursor });
+      all.push(...result.items);
+      if (result.nextCursor === null) return all;
+      cursor = result.nextCursor;
+    }
+    return all;
+  }
+
+  /**
+   * The whole record for one run — `GET /v1/runs/{id}`.
+   *
+   * The ONLY call that returns `mthds_contents` (what the run actually
+   * executed) and `inputs`. Kept off the status read, which pollers hit every
+   * few seconds.
+   */
+  async getRunDetail(runId: string): Promise<RunDetail> {
+    return this.requestProduct("GET", `runs/${encodeURIComponent(runId)}`);
   }
 
   /** Patch a run's status (admin/manual) — `PUT /v1/runs/{id}`. */

@@ -451,15 +451,101 @@ describe("storage", () => {
 });
 
 describe("runs list / update", () => {
-  it("GETs /v1/runs?method_id={id} with an encoded query value", async () => {
+  const RUN_ROW = { pipeline_run_id: "r1", method_id: "m/1", pipe_code: "p", status: "RUNNING" };
+
+  it("GETs /v1/runs?method_id={id} with an encoded query value and unwraps the page", async () => {
     const client = makeClient();
-    const runs = [{ pipeline_run_id: "r1", method_id: "m/1", pipe_code: "p", status: "RUNNING" }];
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, runs));
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [RUN_ROW], next_cursor: "nxt" }));
 
     const result = await client.listRuns("m/1");
 
     expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/runs?method_id=m%2F1");
-    expect(result).toEqual(runs);
+    expect(result.items).toEqual([RUN_ROW]);
+    // snake_case on the wire, camelCase in the SDK surface.
+    expect(result.nextCursor).toBe("nxt");
+  });
+
+  it("forwards the instant bounds and paging params", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1", {
+      createdFrom: "2026-06-02T00:00:00+09:00",
+      createdTo: "2026-06-02T23:59:59+09:00",
+      limit: 10,
+      cursor: "abc",
+    });
+
+    const url = new URL(lastRequest(spy).url);
+    // These are server-side index KEY CONDITIONS; dropping them turns a bounded
+    // page back into "read everything".
+    expect(url.searchParams.get("created_from")).toBe("2026-06-02T00:00:00+09:00");
+    expect(url.searchParams.get("created_to")).toBe("2026-06-02T23:59:59+09:00");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("cursor")).toBe("abc");
+  });
+
+  it("omits optional params entirely when unset", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1");
+
+    const url = new URL(lastRequest(spy).url);
+    // An empty `created_from=` is a 400 from the API's instant parse.
+    expect(url.searchParams.has("created_from")).toBe(false);
+    expect(url.searchParams.has("cursor")).toBe(false);
+  });
+
+  it("listAllRuns follows the cursor to exhaustion", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { items: [RUN_ROW], next_cursor: "c1" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { items: [{ ...RUN_ROW, pipeline_run_id: "r2" }], next_cursor: null }),
+      );
+
+    const all = await client.listAllRuns("m1");
+
+    expect(all.map((run) => run.pipeline_run_id)).toEqual(["r1", "r2"]);
+    expect(spy).toHaveBeenCalledTimes(2);
+    // Index the SECOND call explicitly — `lastRequest` reads `calls[0]`.
+    const secondUrl = new URL((spy.mock.calls[1] as [string, RequestInit])[0]);
+    expect(secondUrl.searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("listAllRuns stops at maxPages rather than looping forever", async () => {
+    const client = makeClient();
+    // A server that always claims one more page must not hang the caller.
+    // A fresh Response per call: a body can only be consumed once.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "always" })),
+      );
+
+    const all = await client.listAllRuns("m1", {}, 3);
+
+    expect(all).toHaveLength(3);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it("GETs /v1/runs/{id} for the whole record, bundle included", async () => {
+    const client = makeClient();
+    const detail = { ...RUN_ROW, mthds_contents: ['domain = "x"'], inputs: { name: "Ada" } };
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, detail));
+
+    const result = await client.getRunDetail("r1");
+
+    expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/runs/r1");
+    expect(result.mthds_contents).toEqual(['domain = "x"']);
   });
 
   it("PUTs /v1/runs/{id} and tolerates an empty body", async () => {

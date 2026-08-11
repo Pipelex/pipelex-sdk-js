@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.10.0] - 2026-08-11
+
+> Skips `v0.9.0`: that version is already published to npm carrying the v0.8.0 client (the release never landed on `dev`), and npm versions are immutable.
+
+### Changed
+
+- **Breaking: `listRuns` returns one PAGE, not the whole history.** The signature is now `listRuns(methodId, query?) -> RunPage` (`{items, nextCursor}`) instead of `listRuns(methodId) -> PipelineRun[]`, matching the platform's reshaped `GET /v1/runs`. The old call read the method's entire run history on every invocation — the API paged a DynamoDB partition to exhaustion and sorted in memory, which cost ~150 sequential round trips at 5,000 runs and would not complete at 100k. The endpoint is now served from a time-ordered index, so a page costs the same whether the method has 50 runs or 100,000.
+
+  **Migrating:** code that rendered the returned array directly should read `page.items` (accepting the first 50) or follow `page.nextCursor`. Callers that genuinely want everything — an export, a report — can use the new `listAllRuns`, but it is O(history) by construction and should not back a user-facing list.
+
+  `query.createdFrom` / `query.createdTo` filter server-side as index key conditions, so a bounded page genuinely reads less. They are **instants, not days**: ISO-8601 with a UTC offset, and a naive timestamp is a 400. Only the caller knows which timezone's day it means — it is the one rendering the rows — so it converts its own day boundaries rather than having the API guess, which is what made a bare `YYYY-MM-DD` ambiguous.
+
+### Added
+
+- **`listAllRuns(methodId, query?, maxPages?)`** — follows the cursor to exhaustion for callers that want the complete history. `maxPages` is a safety stop, not a paging control: a server that always claims one more page returns a truncated list rather than hanging the caller.
+- **`getRunDetail(runId)` — `GET /v1/runs/{id}`**, the only call that returns `mthds_contents` (what the run actually executed) and `inputs`. It is deliberately not on the status read, which pollers hit every few seconds, nor on the list, where the bundle would be multiplied by the page size. The bundle matters because a run is not reproducible from its `method_id`: a caller may run an editor buffer that was never saved.
+- `RunPage`, `RunDetail` and `ListRunsQuery` are exported.
+
 ## [v0.8.0] - 2026-07-24
 
 ### Added
