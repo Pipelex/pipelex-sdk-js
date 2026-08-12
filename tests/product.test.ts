@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
 import { ApiResponseError } from "../src/errors.js";
+import type { PipelineRun } from "../src/product-models.js";
 
 const BASE_URL = "http://localhost:8081";
 
@@ -503,7 +504,7 @@ describe("runs list / update", () => {
     expect(url.searchParams.has("cursor")).toBe(false);
   });
 
-  it("listAllRuns follows the cursor to exhaustion", async () => {
+  it("iterateRuns follows the cursor to exhaustion", async () => {
     const client = makeClient();
     const spy = vi
       .spyOn(globalThis, "fetch")
@@ -512,29 +513,51 @@ describe("runs list / update", () => {
         jsonResponse(200, { items: [{ ...RUN_ROW, pipeline_run_id: "r2" }], next_cursor: null }),
       );
 
-    const all = await client.listAllRuns("m1");
+    const seen: string[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run.pipeline_run_id);
 
-    expect(all.map((run) => run.pipeline_run_id)).toEqual(["r1", "r2"]);
+    expect(seen).toEqual(["r1", "r2"]);
     expect(spy).toHaveBeenCalledTimes(2);
     // Index the SECOND call explicitly — `lastRequest` reads `calls[0]`.
     const secondUrl = new URL((spy.mock.calls[1] as [string, RequestInit])[0]);
     expect(secondUrl.searchParams.get("cursor")).toBe("c1");
   });
 
-  it("listAllRuns stops at maxPages rather than looping forever", async () => {
+  it("iterateRuns fetches lazily — breaking early stops the requests", async () => {
     const client = makeClient();
-    // A server that always claims one more page must not hang the caller.
-    // A fresh Response per call: a body can only be consumed once.
+    // The property an all-at-once helper cannot have: the caller decides when
+    // to stop, so a search that finds its run on page one never pays for page
+    // two. A fresh Response per call — a body can only be consumed once.
     const spy = vi
       .spyOn(globalThis, "fetch")
       .mockImplementation(() =>
-        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "always" })),
+        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "more" })),
       );
 
-    const all = await client.listAllRuns("m1", {}, 3);
+    for await (const run of client.iterateRuns("m1")) {
+      expect(run.pipeline_run_id).toBe("r1");
+      break;
+    }
 
-    expect(all).toHaveLength(3);
-    expect(spy).toHaveBeenCalledTimes(3);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("iterateRuns terminates on a cursor that yields nothing", async () => {
+    const client = makeClient();
+    // A server claiming another page but returning no rows would spin forever
+    // producing nothing. This is a liveness guard, NOT a page cap: it can only
+    // fire on an empty page, so it can never truncate a live stream.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [], next_cursor: "always" })),
+      );
+
+    const seen: PipelineRun[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run);
+
+    expect(seen).toEqual([]);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it("GETs /v1/runs/{id} for the whole record, bundle included", async () => {

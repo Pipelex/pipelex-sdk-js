@@ -1249,28 +1249,42 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   /**
-   * Every run of a method, following the cursor to exhaustion.
+   * Every run of a method, streamed — follows the cursor for you.
    *
-   * The convenience wrapper for callers that genuinely want the whole history
-   * (an export, a report). **Prefer `listRuns`** for anything user-facing: this
-   * is O(history) by construction and will make as many round trips as the data
-   * demands. `maxPages` is a safety stop, not a paging control — hitting it
-   * returns a truncated list rather than looping forever.
+   * ```ts
+   * for await (const run of client.iterateRuns(methodId)) {
+   *   if (isTheOne(run)) break;   // stop whenever you like
+   * }
+   * ```
+   *
+   * **Prefer `listRuns`** for anything user-facing: this is O(history) by
+   * construction and makes as many round trips as the data demands.
+   *
+   * An iterator rather than a `listAllRuns(): Promise<PipelineRun[]>`, and that
+   * is not stylistic. An all-at-once helper needs a page cap so a misbehaving
+   * server cannot spin it forever — and a cap means it returns a TRUNCATED list
+   * with no error and no flag, a method with 6,000 runs quietly yielding 5,000.
+   * Silently returning less than everything, from a method called "all", is the
+   * exact failure mode paging was introduced to remove. Streaming has no such
+   * cliff: it yields until the server says there is no more, the caller decides
+   * when to stop, and only one page is ever in memory. If you truly want an
+   * array, `Array.fromAsync` makes that your explicit choice.
    */
-  async listAllRuns(
+  async *iterateRuns(
     methodId: string,
     query: Omit<ListRunsQuery, "cursor"> = {},
-    maxPages = 100,
-  ): Promise<PipelineRun[]> {
-    const all: PipelineRun[] = [];
+  ): AsyncGenerator<PipelineRun, void, undefined> {
     let cursor: string | undefined;
-    for (let page = 0; page < maxPages; page += 1) {
-      const result: RunPage = await this.listRuns(methodId, { ...query, cursor });
-      all.push(...result.items);
-      if (result.nextCursor === null) return all;
-      cursor = result.nextCursor;
+    for (;;) {
+      const page: RunPage = await this.listRuns(methodId, { ...query, cursor });
+      for (const run of page.items) yield run;
+      // A cursor pointing at an empty page would loop forever while yielding
+      // nothing, so that terminates too: no rows means nothing left to iterate,
+      // whatever the server claims. A liveness guard, not a page cap — it can
+      // never cut a stream that is still producing runs.
+      if (page.nextCursor === null || page.items.length === 0) return;
+      cursor = page.nextCursor;
     }
-    return all;
   }
 
   /**
