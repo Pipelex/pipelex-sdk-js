@@ -490,6 +490,22 @@ describe("runs list / update", () => {
     expect(url.searchParams.get("cursor")).toBe("abc");
   });
 
+  it("forwards an EXPLICIT empty instant instead of silently dropping the filter", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1", { createdFrom: "" });
+
+    // Dropping it would turn a broken date into an UNFILTERED query that
+    // returns every run and looks like it worked. Forwarded, it reaches the
+    // API's instant parse and comes back a 400 saying what is wrong.
+    const url = new URL(lastRequest(spy).url);
+    expect(url.searchParams.has("created_from")).toBe(true);
+    expect(url.searchParams.get("created_from")).toBe("");
+  });
+
   it("omits optional params entirely when unset", async () => {
     const client = makeClient();
     const spy = vi
@@ -540,6 +556,27 @@ describe("runs list / update", () => {
     }
 
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("iterateRuns terminates on a cursor that never advances", async () => {
+    const client = makeClient();
+    // The other misbehaving shape: NON-empty pages whose cursor is echoed back
+    // unchanged. The empty-page guard does not catch this one, so a caller
+    // draining to completion would yield the same page forever. Stopping on a
+    // repeated cursor cannot truncate a healthy stream — a real cursor encodes
+    // the last row read, so it always moves.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "stuck" })),
+      );
+
+    const seen: string[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run.pipeline_run_id);
+
+    // One page yielded, then the repeat is detected on the second response.
+    expect(seen).toEqual(["r1", "r1"]);
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 
   it("iterateRuns terminates on a cursor that yields nothing", async () => {

@@ -1229,7 +1229,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Breaking in v0.10.0: this used to return `PipelineRun[]` — the complete
    * history in one array. Code that rendered that array directly should now
    * either read `page.items` (accepting the first page) or follow the cursor.
-   * `listAllRuns` does the latter for you.
+   * `iterateRuns` does the latter for you.
    *
    * `createdFrom` / `createdTo` are applied server-side as index key
    * conditions, so a bounded page genuinely reads less. They are INSTANTS,
@@ -1237,10 +1237,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    */
   async listRuns(methodId: string, query: ListRunsQuery = {}): Promise<RunPage> {
     const params = new URLSearchParams({ method_id: methodId });
-    if (query.createdFrom) params.set("created_from", query.createdFrom);
-    if (query.createdTo) params.set("created_to", query.createdTo);
+    // `!== undefined`, not truthiness: omission means "the caller did not ask
+    // for this bound". An explicitly supplied empty string is not omission, it
+    // is bad input — dropping it turned a broken date into a silently
+    // UNFILTERED query returning every run, which reads as working. Forwarded,
+    // it reaches the API's instant parse and comes back a 400 saying so.
+    if (query.createdFrom !== undefined) params.set("created_from", query.createdFrom);
+    if (query.createdTo !== undefined) params.set("created_to", query.createdTo);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
-    if (query.cursor) params.set("cursor", query.cursor);
+    if (query.cursor !== undefined) params.set("cursor", query.cursor);
     const page = await this.requestProduct<{ items: PipelineRun[]; next_cursor: string | null }>(
       "GET",
       `runs?${params.toString()}`,
@@ -1278,11 +1283,19 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     for (;;) {
       const page: RunPage = await this.listRuns(methodId, { ...query, cursor });
       for (const run of page.items) yield run;
-      // A cursor pointing at an empty page would loop forever while yielding
-      // nothing, so that terminates too: no rows means nothing left to iterate,
-      // whatever the server claims. A liveness guard, not a page cap — it can
-      // never cut a stream that is still producing runs.
+
+      // Two liveness guards, neither of which is a page cap: both fire only on
+      // a server that is not making progress, so neither can cut a healthy
+      // stream short the way a `maxPages` limit silently did.
+      //
+      //   - an EMPTY page carrying a cursor would loop forever yielding
+      //     nothing;
+      //   - a cursor identical to the one just sent means the server is
+      //     echoing rather than advancing, so the next request would return
+      //     this same page again, forever. A real cursor always moves: it
+      //     encodes the last row read.
       if (page.nextCursor === null || page.items.length === 0) return;
+      if (page.nextCursor === cursor) return;
       cursor = page.nextCursor;
     }
   }

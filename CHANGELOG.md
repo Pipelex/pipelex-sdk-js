@@ -14,7 +14,8 @@
 
 - **`iterateRuns(methodId, query?)`** — an async iterator that follows the cursor, for callers that genuinely want the whole history: `for await (const run of client.iterateRuns(id))`. Deliberately **not** a `listAllRuns(): Promise<PipelineRun[]>`. An all-at-once helper needs a page cap so a misbehaving server cannot spin it forever, and a cap means silently returning a truncated list — 6,000 runs quietly yielding 5,000, from a method called "all". That is the same failure paging was introduced to remove. Streaming has no cliff: it yields until the server says there is no more, the caller `break`s whenever it likes (a search that hits on page one never fetches page two), and only one page is ever in memory. `Array.fromAsync` makes materialising the lot an explicit choice.
 - **`getRunDetail(runId)` — `GET /v1/runs/{id}`**, the only call that returns `mthds_contents` (what the run actually executed) and `inputs`. It is deliberately not on the status read, which pollers hit every few seconds, nor on the list, where the bundle would be multiplied by the page size. The bundle matters because a run is not reproducible from its `method_id`: a caller may run an editor buffer that was never saved.
-- `RunPage`, `RunDetail` and `ListRunsQuery` are exported.
+- `RunPage`, `RunDetail`, `RunErrorReport` and `ListRunsQuery` are exported.
+- **Breaking (types): `PipelineRun.method_id` and `.pipe_code` are now `string | null`.** Both are `str | None` on the API and both really are null in practice — an ad-hoc run (started from an inline bundle) belongs to no stored method, and `pipe_code` is null when the runner resolved the pipe from the bundle's `main_pipe`. The old required types could not represent a real response, so consumers narrow instead of trusting a promise the wire never made.
 
 ## [v0.9.0] - 2026-07-24
 

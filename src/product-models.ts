@@ -234,10 +234,13 @@ export interface RunErrorReport {
 
 export interface PipelineRun {
   pipeline_run_id: string;
-  /** Absent on an ad-hoc run — one started from an inline bundle belongs to no
-   *  stored method, and is reachable only by id. */
-  method_id: string;
-  pipe_code: string;
+  /** `null` on an ad-hoc run — one started from an inline bundle belongs to no
+   *  stored method, and is reachable only by id. The API models this as
+   *  `str | None`, so narrow it before using it as a key. */
+  method_id: string | null;
+  /** `null` when the runner resolved the pipe from the bundle's `main_pipe`
+   *  rather than being told which one to run. */
+  pipe_code: string | null;
   org_id?: string;
   /** Who started it — denormalised so attribution needs no extra lookup. */
   created_by_user_id?: string;
@@ -258,12 +261,18 @@ export interface PipelineRun {
  *
  * `mthds_contents` is what the run ACTUALLY executed, and it is the only record
  * of that: a caller may run an editor buffer that was never saved, so the stored
- * method can have moved on since — or never existed, for an ad-hoc run. It is
- * deliberately absent from the list and from the polled status read, because it
- * is the whole `.mthds` bundle (tens of KB).
+ * method can have moved on since — or never existed, for an ad-hoc run.
+ *
+ * Both fields are deliberately absent from the list and from the polled status
+ * read: together they are the run's whole source, tens of KB, which would be
+ * multiplied by the page size on one and by the poll rate on the other.
  */
 export interface RunDetail extends PipelineRun {
+  /** One entry PER `.mthds` FILE, not one bundle string — the same array shape
+   *  the protocol's validate call takes and echoes back. A single-file method
+   *  is an array of one. */
   mthds_contents?: string[] | null;
+  /** The inputs the run was started with, as sent. */
   inputs?: Record<string, unknown> | null;
 }
 
