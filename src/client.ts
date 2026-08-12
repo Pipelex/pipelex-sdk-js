@@ -60,7 +60,10 @@ import type {
   OnboardingSubmission,
   PipelexApiKeyCreated,
   PipelexApiKeyList,
+  ListRunsQuery,
   PipelineRun,
+  RunDetail,
+  RunPage,
   PlanView,
   ResolvedStorageUrl,
   SubscriptionResponse,
@@ -1214,9 +1217,103 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return prepareInputsImpl(this, request);
   }
 
-  /** List a method's runs — `GET /v1/runs?method_id={methodId}`. */
-  async listRuns(methodId: string): Promise<PipelineRun[]> {
-    return this.requestProduct("GET", `runs?method_id=${encodeURIComponent(methodId)}`);
+  /**
+   * One PAGE of a method's runs, newest first — `GET /v1/runs?method_id=`.
+   *
+   * **This returns a page, not the whole history.** The API serves it from a
+   * time-ordered index, so its cost is the page size rather than the size of
+   * the history; a method with 100k runs answers as fast as one with 50. To
+   * read further, pass the previous response's `nextCursor` back as
+   * `query.cursor` until it comes back `null`.
+   *
+   * Breaking in v0.10.0: this used to return `PipelineRun[]` — the complete
+   * history in one array. Code that rendered that array directly should now
+   * either read `page.items` (accepting the first page) or follow the cursor.
+   * `iterateRuns` does the latter for you.
+   *
+   * `createdFrom` / `createdTo` are applied server-side as index key
+   * conditions, so a bounded page genuinely reads less. They are INSTANTS,
+   * not days — see `ListRunsQuery`.
+   */
+  async listRuns(methodId: string, query: ListRunsQuery = {}): Promise<RunPage> {
+    const params = new URLSearchParams({ method_id: methodId });
+    // `!== undefined`, not truthiness: omission means "the caller did not ask
+    // for this bound". An explicitly supplied empty string is not omission, it
+    // is bad input — dropping it turned a broken date into a silently
+    // UNFILTERED query returning every run, which reads as working. Forwarded,
+    // it reaches the API's instant parse and comes back a 400 saying so.
+    if (query.createdFrom !== undefined) params.set("created_from", query.createdFrom);
+    if (query.createdTo !== undefined) params.set("created_to", query.createdTo);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.cursor !== undefined) params.set("cursor", query.cursor);
+    const page = await this.requestProduct<{ items: PipelineRun[]; next_cursor: string | null }>(
+      "GET",
+      `runs?${params.toString()}`,
+    );
+    return { items: page.items, nextCursor: page.next_cursor };
+  }
+
+  /**
+   * Every run of a method, streamed — follows the cursor for you.
+   *
+   * ```ts
+   * for await (const run of client.iterateRuns(methodId)) {
+   *   if (isTheOne(run)) break;   // stop whenever you like
+   * }
+   * ```
+   *
+   * **Prefer `listRuns`** for anything user-facing: this is O(history) by
+   * construction and makes as many round trips as the data demands.
+   *
+   * An iterator rather than a `listAllRuns(): Promise<PipelineRun[]>`, and that
+   * is not stylistic. An all-at-once helper needs a page cap so a misbehaving
+   * server cannot spin it forever — and a cap means it returns a TRUNCATED list
+   * with no error and no flag, a method with 6,000 runs quietly yielding 5,000.
+   * Silently returning less than everything, from a method called "all", is the
+   * exact failure mode paging was introduced to remove. Streaming has no such
+   * cliff: it yields until the server says there is no more, the caller decides
+   * when to stop, and only one page is ever in memory. If you truly want an
+   * array, `Array.fromAsync` makes that your explicit choice.
+   */
+  async *iterateRuns(
+    methodId: string,
+    query: Omit<ListRunsQuery, "cursor"> = {},
+  ): AsyncGenerator<PipelineRun, void, undefined> {
+    let cursor: string | undefined;
+    for (;;) {
+      const page: RunPage = await this.listRuns(methodId, { ...query, cursor });
+
+      // Checked BEFORE yielding. A server handing back the very cursor we sent
+      // has not advanced, so this page repeats rows already emitted — yielding
+      // first and stopping after would silently double-count them for anyone
+      // aggregating the stream (summing cost, counting runs). Cannot fire on
+      // the first request, where `cursor` is undefined.
+      if (cursor !== undefined && page.nextCursor === cursor) return;
+
+      for (const run of page.items) yield run;
+
+      // Checked AFTER: `nextCursor === null` is the NORMAL end of the history
+      // and that page is real data, so it has to be emitted first. The empty
+      // page catches a server that keeps minting fresh cursors while returning
+      // nothing, which would otherwise spin forever yielding nothing.
+      //
+      // Neither of these is a page cap. Both fire only on a server that is not
+      // making progress, so neither can truncate a healthy stream the way a
+      // `maxPages` limit silently did.
+      if (page.nextCursor === null || page.items.length === 0) return;
+      cursor = page.nextCursor;
+    }
+  }
+
+  /**
+   * The whole record for one run — `GET /v1/runs/{id}`.
+   *
+   * The ONLY call that returns `mthds_contents` (what the run actually
+   * executed) and `inputs`. Kept off the status read, which pollers hit every
+   * few seconds.
+   */
+  async getRunDetail(runId: string): Promise<RunDetail> {
+    return this.requestProduct("GET", `runs/${encodeURIComponent(runId)}`);
   }
 
   /** Patch a run's status (admin/manual) — `PUT /v1/runs/{id}`. */

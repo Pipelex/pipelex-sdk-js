@@ -219,16 +219,91 @@ export interface UploadedFile {
 /** Per-pipe progress marker surfaced in a run's `pipe_statuses` map. */
 export type PipeStatus = "scheduled" | "running" | "succeeded" | "failed" | "skipped";
 
+/**
+ * The runner's structured failure report, as stored on a terminal-failed run.
+ *
+ * The wire payload carries the full VERBOSE `ErrorReport`; these are the two
+ * fields a consumer can rely on. Optional throughout: the shape is owned by the
+ * runner, and a failure whose callback carried no report has none of it.
+ */
+export interface RunErrorReport {
+  message?: string;
+  error_type?: string;
+  [key: string]: unknown;
+}
+
 export interface PipelineRun {
   pipeline_run_id: string;
-  method_id: string;
-  pipe_code: string;
+  /** `null` on an ad-hoc run — one started from an inline bundle belongs to no
+   *  stored method, and is reachable only by id. The API models this as
+   *  `str | None`, so narrow it before using it as a key. */
+  method_id: string | null;
+  /** `null` when the runner resolved the pipe from the bundle's `main_pipe`
+   *  rather than being told which one to run. */
+  pipe_code: string | null;
+  org_id?: string;
+  /** Who started it — denormalised so attribution needs no extra lookup. */
+  created_by_user_id?: string;
   workflow_id?: string | null;
   status: RunStatus;
   result_url?: string | null;
   pipe_statuses?: Record<string, PipeStatus> | null;
   created_at: string;
   finished_at?: string | null;
+  /** Present only on a failed run whose completion callback carried a report.
+   *  This is how a consumer tells the user WHY a run failed rather than showing
+   *  a generic message. */
+  error?: RunErrorReport | null;
+}
+
+/**
+ * A single run, whole — `GET /v1/runs/{id}`.
+ *
+ * `mthds_contents` is what the run ACTUALLY executed, and it is the only record
+ * of that: a caller may run an editor buffer that was never saved, so the stored
+ * method can have moved on since — or never existed, for an ad-hoc run.
+ *
+ * Both fields are deliberately absent from the list and from the polled status
+ * read: together they are the run's whole source, tens of KB, which would be
+ * multiplied by the page size on one and by the poll rate on the other.
+ */
+export interface RunDetail extends PipelineRun {
+  /** One entry PER `.mthds` FILE, not one bundle string — the same array shape
+   *  the protocol's validate call takes and echoes back. A single-file method
+   *  is an array of one. */
+  mthds_contents?: string[] | null;
+  /** The inputs the run was started with, as sent. */
+  inputs?: Record<string, unknown> | null;
+}
+
+/** Query for one page of run history. */
+export interface ListRunsQuery {
+  /**
+   * Only runs created at or after this INSTANT — ISO-8601 with a UTC offset
+   * (`2026-06-02T00:00:00+09:00`). Inclusive. A bare `YYYY-MM-DD` or a naive
+   * timestamp is rejected by the API: only the caller knows which timezone's
+   * day it means, so convert your own day boundaries to instants.
+   */
+  createdFrom?: string;
+  /** Only runs created at or before this instant. Same rules as `createdFrom`. */
+  createdTo?: string;
+  /** Page size. The API defaults to 50 and caps at 200. */
+  limit?: number;
+  /** Opaque `nextCursor` from the previous page. */
+  cursor?: string;
+}
+
+/**
+ * One page of run history, newest first.
+ *
+ * `nextCursor` is opaque — pass it straight back to `listRuns` to continue;
+ * `null` means this was the last page. There is deliberately no total: counting
+ * would mean reading the whole history, which is the cost paging exists to
+ * avoid.
+ */
+export interface RunPage {
+  items: PipelineRun[];
+  nextCursor: string | null;
 }
 
 /** The admin/manual run-status patch — `status` is a free string here. */

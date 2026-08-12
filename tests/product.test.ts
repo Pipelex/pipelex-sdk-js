@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
 import { ApiResponseError } from "../src/errors.js";
+import type { PipelineRun } from "../src/product-models.js";
 
 const BASE_URL = "http://localhost:8081";
 
@@ -451,15 +452,164 @@ describe("storage", () => {
 });
 
 describe("runs list / update", () => {
-  it("GETs /v1/runs?method_id={id} with an encoded query value", async () => {
+  const RUN_ROW = { pipeline_run_id: "r1", method_id: "m/1", pipe_code: "p", status: "RUNNING" };
+
+  it("GETs /v1/runs?method_id={id} with an encoded query value and unwraps the page", async () => {
     const client = makeClient();
-    const runs = [{ pipeline_run_id: "r1", method_id: "m/1", pipe_code: "p", status: "RUNNING" }];
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, runs));
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [RUN_ROW], next_cursor: "nxt" }));
 
     const result = await client.listRuns("m/1");
 
     expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/runs?method_id=m%2F1");
-    expect(result).toEqual(runs);
+    expect(result.items).toEqual([RUN_ROW]);
+    // snake_case on the wire, camelCase in the SDK surface.
+    expect(result.nextCursor).toBe("nxt");
+  });
+
+  it("forwards the instant bounds and paging params", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1", {
+      createdFrom: "2026-06-02T00:00:00+09:00",
+      createdTo: "2026-06-02T23:59:59+09:00",
+      limit: 10,
+      cursor: "abc",
+    });
+
+    const url = new URL(lastRequest(spy).url);
+    // These are server-side index KEY CONDITIONS; dropping them turns a bounded
+    // page back into "read everything".
+    expect(url.searchParams.get("created_from")).toBe("2026-06-02T00:00:00+09:00");
+    expect(url.searchParams.get("created_to")).toBe("2026-06-02T23:59:59+09:00");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("cursor")).toBe("abc");
+  });
+
+  it("forwards an EXPLICIT empty instant instead of silently dropping the filter", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1", { createdFrom: "" });
+
+    // Dropping it would turn a broken date into an UNFILTERED query that
+    // returns every run and looks like it worked. Forwarded, it reaches the
+    // API's instant parse and comes back a 400 saying what is wrong.
+    const url = new URL(lastRequest(spy).url);
+    expect(url.searchParams.has("created_from")).toBe(true);
+    expect(url.searchParams.get("created_from")).toBe("");
+  });
+
+  it("omits optional params entirely when unset", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listRuns("m1");
+
+    const url = new URL(lastRequest(spy).url);
+    // An empty `created_from=` is a 400 from the API's instant parse.
+    expect(url.searchParams.has("created_from")).toBe(false);
+    expect(url.searchParams.has("cursor")).toBe(false);
+  });
+
+  it("iterateRuns follows the cursor to exhaustion", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { items: [RUN_ROW], next_cursor: "c1" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, { items: [{ ...RUN_ROW, pipeline_run_id: "r2" }], next_cursor: null }),
+      );
+
+    const seen: string[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run.pipeline_run_id);
+
+    expect(seen).toEqual(["r1", "r2"]);
+    expect(spy).toHaveBeenCalledTimes(2);
+    // Index the SECOND call explicitly — `lastRequest` reads `calls[0]`.
+    const secondUrl = new URL((spy.mock.calls[1] as [string, RequestInit])[0]);
+    expect(secondUrl.searchParams.get("cursor")).toBe("c1");
+  });
+
+  it("iterateRuns fetches lazily — breaking early stops the requests", async () => {
+    const client = makeClient();
+    // The property an all-at-once helper cannot have: the caller decides when
+    // to stop, so a search that finds its run on page one never pays for page
+    // two. A fresh Response per call — a body can only be consumed once.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "more" })),
+      );
+
+    for await (const run of client.iterateRuns("m1")) {
+      expect(run.pipeline_run_id).toBe("r1");
+      break;
+    }
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("iterateRuns terminates on a cursor that never advances", async () => {
+    const client = makeClient();
+    // The other misbehaving shape: NON-empty pages whose cursor is echoed back
+    // unchanged. The empty-page guard does not catch this one, so a caller
+    // draining to completion would yield the same page forever. Stopping on a
+    // repeated cursor cannot truncate a healthy stream — a real cursor encodes
+    // the last row read, so it always moves.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [RUN_ROW], next_cursor: "stuck" })),
+      );
+
+    const seen: string[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run.pipeline_run_id);
+
+    // Each run is yielded EXACTLY ONCE. The repeat is caught before the second
+    // page is emitted, not after — otherwise a caller aggregating the stream
+    // (summing cost, counting runs) would double-count the rows it already saw.
+    expect(seen).toEqual(["r1"]);
+    // The second request still happens: a repeat is only detectable from the
+    // response to it.
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("iterateRuns terminates on a cursor that yields nothing", async () => {
+    const client = makeClient();
+    // A server claiming another page but returning no rows would spin forever
+    // producing nothing. This is a liveness guard, NOT a page cap: it can only
+    // fire on an empty page, so it can never truncate a live stream.
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(() =>
+        Promise.resolve(jsonResponse(200, { items: [], next_cursor: "always" })),
+      );
+
+    const seen: PipelineRun[] = [];
+    for await (const run of client.iterateRuns("m1")) seen.push(run);
+
+    expect(seen).toEqual([]);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("GETs /v1/runs/{id} for the whole record, bundle included", async () => {
+    const client = makeClient();
+    const detail = { ...RUN_ROW, mthds_contents: ['domain = "x"'], inputs: { name: "Ada" } };
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, detail));
+
+    const result = await client.getRunDetail("r1");
+
+    expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/runs/r1");
+    expect(result.mthds_contents).toEqual(['domain = "x"']);
   });
 
   it("PUTs /v1/runs/{id} and tolerates an empty body", async () => {
