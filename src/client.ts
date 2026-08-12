@@ -1282,20 +1282,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     let cursor: string | undefined;
     for (;;) {
       const page: RunPage = await this.listRuns(methodId, { ...query, cursor });
+
+      // Checked BEFORE yielding. A server handing back the very cursor we sent
+      // has not advanced, so this page repeats rows already emitted — yielding
+      // first and stopping after would silently double-count them for anyone
+      // aggregating the stream (summing cost, counting runs). Cannot fire on
+      // the first request, where `cursor` is undefined.
+      if (cursor !== undefined && page.nextCursor === cursor) return;
+
       for (const run of page.items) yield run;
 
-      // Two liveness guards, neither of which is a page cap: both fire only on
-      // a server that is not making progress, so neither can cut a healthy
-      // stream short the way a `maxPages` limit silently did.
+      // Checked AFTER: `nextCursor === null` is the NORMAL end of the history
+      // and that page is real data, so it has to be emitted first. The empty
+      // page catches a server that keeps minting fresh cursors while returning
+      // nothing, which would otherwise spin forever yielding nothing.
       //
-      //   - an EMPTY page carrying a cursor would loop forever yielding
-      //     nothing;
-      //   - a cursor identical to the one just sent means the server is
-      //     echoing rather than advancing, so the next request would return
-      //     this same page again, forever. A real cursor always moves: it
-      //     encodes the last row read.
+      // Neither of these is a page cap. Both fire only on a server that is not
+      // making progress, so neither can truncate a healthy stream the way a
+      // `maxPages` limit silently did.
       if (page.nextCursor === null || page.items.length === 0) return;
-      if (page.nextCursor === cursor) return;
       cursor = page.nextCursor;
     }
   }

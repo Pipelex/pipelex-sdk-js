@@ -574,8 +574,12 @@ describe("runs list / update", () => {
     const seen: string[] = [];
     for await (const run of client.iterateRuns("m1")) seen.push(run.pipeline_run_id);
 
-    // One page yielded, then the repeat is detected on the second response.
-    expect(seen).toEqual(["r1", "r1"]);
+    // Each run is yielded EXACTLY ONCE. The repeat is caught before the second
+    // page is emitted, not after — otherwise a caller aggregating the stream
+    // (summing cost, counting runs) would double-count the rows it already saw.
+    expect(seen).toEqual(["r1"]);
+    // The second request still happens: a repeat is only detectable from the
+    // response to it.
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
