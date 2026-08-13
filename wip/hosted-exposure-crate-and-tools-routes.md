@@ -1,21 +1,27 @@
 # Deferred (cross-repo) — expose the crate + tools routes on `api.pipelex.com`
 
-**Status:** open. Found while landing `resolve()` / `codegen()` in `@pipelex/sdk` (PR #24). Not a bug in this SDK — the client is correct and works against any `pipelex-api` runner. The gap is that the hosted surface does not route these paths, so the SDK's own default base URL cannot reach them.
+**Status: PARTIALLY SHIPPED (2026-08-13).** The two crate routes were allowlisted and are live on `api-dev.pipelex.com` (`pipelex-hosted@0.2.8`). **`lint` and `format` were not included** and still 403 everywhere; prod is still on `0.2.6` and still 403 on all four. Found while landing `resolve()` / `codegen()` in `@pipelex/sdk` (PR #24). Never a bug in this SDK — the client is correct and works against any `pipelex-api` runner.
 
-## The gap
+## Current state — measured 2026-08-13, same key, same run
 
-`DEFAULT_API_BASE_URL` is `https://api.pipelex.com` (`src/client.ts`). On that origin, four SDK methods are unreachable today:
+| Method | Path | On a runner | `api-dev.pipelex.com` (`0.2.8`) | `api.pipelex.com` (`0.2.6`) |
+| --- | --- | --- | --- | --- |
+| `resolve` | `POST /v1/resolve` | yes | **yes** ✅ | **no** — 403 |
+| `codegen` | `POST /v1/codegen` | yes | **yes** ✅ | **no** — 403 |
+| `lint` | `POST /v1/lint` | yes | **no** — 403 | **no** — 403 |
+| `format` | `POST /v1/format` | yes | **no** — 403 | **no** — 403 |
 
-| Method | Path | Reachable on a runner | Reachable on `api.pipelex.com` |
-| --- | --- | --- | --- |
-| `resolve` | `POST /v1/resolve` | yes | **no** |
-| `codegen` | `POST /v1/codegen` | yes | **no** |
-| `lint` | `POST /v1/lint` | yes | **no** (pre-existing) |
-| `format` | `POST /v1/format` | yes | **no** (pre-existing) |
+On dev the crate routes are not merely reachable — the whole contract survives the gateway and the platform proxy: the happy path across all three codegen targets, `resolve`/`codegen` fingerprint agreement, and every non-2xx arm (`200` `is_valid: false` on an unresolvable closure, `501` on the reserved `method_ref`, `422` on a `pipe_ref` with the `types` kind). Prod therefore needs only the deploy, not another code change.
 
-A consumer that constructs `new PipelexApiClient({ apiKey })` with no `baseUrl` and calls any of them gets a bare `403` `ApiResponseError` that says nothing about the route being unexposed.
+**The "fix all four at once" warning below was not heeded, and the predicted trap is now set.** `lint` / `format` are in exactly the position `resolve` / `codegen` were in on 2026-08-03: correct in the SDK, refused by the gateway, with the next consumer to reach for them getting a bare 403. That is the remaining work here.
 
-**Dev is not a workaround.** The first instinct on hitting this is to point `PIPELEX_BASE_URL` at `https://api-dev.pipelex.com`; that fails identically, because dev and prod share the allowlist. Measured 2026-08-03 against `api-dev.pipelex.com` (`pipelex-hosted@0.2.6rc7`) through the SDK, same key, same run:
+## The gap (as originally found)
+
+`DEFAULT_API_BASE_URL` is `https://api.pipelex.com` (`src/client.ts`), so a consumer who constructs `new PipelexApiClient({ apiKey })` with no `baseUrl` still cannot reach any of the four.
+
+Calling an unexposed one gets a bare `403` `ApiResponseError` that says nothing about the route being unexposed.
+
+**Dev was not a workaround — and for `lint` / `format` it still isn't.** The first instinct on hitting this was to point `PIPELEX_BASE_URL` at `https://api-dev.pipelex.com`; that failed identically, because dev and prod shared the allowlist. That has since diverged **for the crate routes only**: dev was allowlisted on 2026-08-13 and prod was not. For `lint` / `format` the original finding stands unchanged on both origins. Measured 2026-08-03 against `api-dev.pipelex.com` (`pipelex-hosted@0.2.6rc7`) through the SDK, same key, same run:
 
 | Call | Result |
 | --- | --- |
