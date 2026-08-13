@@ -45,7 +45,7 @@ Two repos, one change each, shipped together:
 - `pipelex-api-infra` — add `/v1/resolve`, `/v1/codegen`, `/v1/lint`, `/v1/format` to `_API_KEY_ALLOWED_PREFIXES`.
 - `pipelex-platform` — add the matching `_proxy` handlers in `tooling_proxy.py`, alongside the existing `build/*` ones.
 
-Then drop the caveat from `src/client.ts`'s crate-extensions section header, `docs/crate-routes.md`, and the `v0.10.0` CHANGELOG entry.
+Then drop the caveat from `src/client.ts`'s crate-extensions section header, `docs/crate-routes.md`, and the `[Unreleased]` CHANGELOG entry.
 
 **Do all four routes at once.** `lint` / `format` have carried this gap since they landed; fixing only the two new ones would leave the same trap set for the next consumer.
 

@@ -21,7 +21,7 @@ The one open thread is **not in this repo**: hosted exposure, a two-repo infra c
 | Unit tests (`tests/crate-routes.test.ts`) | Passing |
 | E2E tests (`tests/e2e/crate.e2e.ts`) | Passing against a **local** runner |
 | Docs (`docs/crate-routes.md` + 3 updated) | Written |
-| `CHANGELOG.md` `v0.10.0` entry | Written |
+| `CHANGELOG.md` `[Unreleased]` entry | Written |
 | CI (Quality Checks, gate-dev) | Green |
 | Greptile / cubic / Codex | All pass, zero unresolved threads |
 | PR #24 | **Open, mergeable, not merged** |
@@ -162,7 +162,7 @@ Run it with `set -a; . ./.env; set +a` first, and after `make build` so `dist/` 
 | --- | --- |
 | `src/client.ts` | The `NOT YET REACHABLE ON ANY HOSTED ENVIRONMENT` block in the `── Crate extensions ──` section header |
 | `docs/crate-routes.md` | The two-paragraph blockquote under the intro |
-| `CHANGELOG.md` | The `**Note:**` sentence inside the `v0.10.0` Added entry |
+| `CHANGELOG.md` | The `**Note:**` sentence inside the `[Unreleased]` Added entry |
 | `wip/hosted-exposure-crate-and-tools-routes.md` | The whole note — delete it, or mark it shipped |
 
 Also remove the follow-up line from `TODOS.md` → "Out of scope / follow-ups".
@@ -195,7 +195,7 @@ Two Pipelex API extension routes (not `x-mthds-protocol`), sharing the build rou
 - **No `method_id` sugar** on these methods (unlike `buildInputs`). The workaround is one line and is exactly what the sugar would do internally: `resolve({ files: await client.getMethodClosure(id) })`. See [`crate-routes-method-id-sugar.md`](./crate-routes-method-id-sugar.md) for the trigger that would change the answer.
 - **No `timeoutMs` / `signal`** on either method. Raised twice by independent reviewers and dismissed twice, so the reasoning now lives on `requestExtension`'s TSDoc — the shared chokepoint, so it covers the whole static family rather than whichever route is newest. Reasons: the transport-options split tracks the **dry-run sweep** (only `buildRunner` sweeps), input is bounded server-side (16 files × 1 MiB, no inference), and on the hosted path an override is inert because the gateway caps responses at ~30s.
 - **One PR, not a stack.** Splitting at the checkpoint boundary would have put the new public surface in a PR with no tests and stale docs.
-- **Version files deliberately not bumped.** `CHANGELOG.md` carries a `v0.10.0` heading while `package.json` / `SDK_VERSION` stay `0.9.0`. That is this repo's convention: `.claude/skills/release/SKILL.md` bumps on a `release/vX.Y.Z` branch and explicitly handles a pre-existing heading; `d32fd9c` is direct precedent ("Version bump deferred to /release"). Bumping `SDK_VERSION` alone would fail `tests/index.test.ts`, which asserts `SDK_VERSION === pkg.version`. Both Codex and cubic flagged this; both were answered and resolved.
+- **Version files deliberately not bumped — and the branch's pre-claimed heading did not survive.** The crate entries originally sat under a `v0.10.0` heading while `package.json` / `SDK_VERSION` stayed `0.9.0`, on the reasoning that `/release` bumps on a `release/vX.Y.Z` branch and handles a pre-existing heading (`d32fd9c` as precedent). `dev` then actually published `v0.10.0` for the run-history paging work, so that heading was taken and the merge moved these entries under `## [Unreleased]` — which is both the workspace rule ("a version number is a receipt for a published artifact") and this repo's older pattern (`1ed1dac` landed under `[Unreleased]`; the release commit converted it). `package.json` / `SDK_VERSION` are now `0.10.0`, inherited from dev's release rather than set here. Bumping `SDK_VERSION` alone would still fail `tests/index.test.ts`, which asserts `SDK_VERSION === pkg.version`. Both Codex and cubic flagged the original pre-claim; both were answered and resolved at the time.
 
 ### Still deferred (each has its own wip note)
 

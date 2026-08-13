@@ -213,7 +213,7 @@
             <tr><td>Unit tests (<code>tests/crate-routes.test.ts</code>)</td><td><span class="pill ok">Passing</span></td></tr>
             <tr><td>E2E tests (<code>tests/e2e/crate.e2e.ts</code>)</td><td><span class="pill ok">Passing</span> against a <strong>local</strong> runner</td></tr>
             <tr><td>Docs — <code>docs/crate-routes.md</code> + 3 updated</td><td><span class="pill ok">Written</span></td></tr>
-            <tr><td><code>CHANGELOG.md</code> <code>v0.10.0</code> entry</td><td><span class="pill ok">Written</span></td></tr>
+            <tr><td><code>CHANGELOG.md</code> <code>[Unreleased]</code> entry</td><td><span class="pill ok">Written</span></td></tr>
             <tr><td>CI — Quality Checks, gate-dev</td><td><span class="pill ok">Green</span></td></tr>
             <tr><td>Greptile / cubic / Codex</td><td><span class="pill ok">All pass</span> · zero unresolved threads</td></tr>
             <tr><td>PR #24</td><td><span class="pill hold">Open, not merged</span></td></tr>
@@ -462,7 +462,7 @@ b40be9c  Add resolve() and codegen() to PipelexApiClient — the crate routes
               <tbody>
                 <tr><td><code>src/client.ts</code></td><td>The <code>NOT YET REACHABLE…</code> block in the <code>── Crate extensions ──</code> section header</td></tr>
                 <tr><td><code>docs/crate-routes.md</code></td><td>The two-paragraph blockquote under the intro</td></tr>
-                <tr><td><code>CHANGELOG.md</code></td><td>The <code>**Note:**</code> sentence inside the <code>v0.10.0</code> Added entry</td></tr>
+                <tr><td><code>CHANGELOG.md</code></td><td>The <code>**Note:**</code> sentence inside the <code>[Unreleased]</code> Added entry</td></tr>
                 <tr><td><code>wip/hosted-exposure-crate-and-tools-routes.md</code></td><td>The whole note — delete, or mark shipped</td></tr>
               </tbody>
             </table>
@@ -525,7 +525,7 @@ b40be9c  Add resolve() and codegen() to PipelexApiClient — the crate routes
         <li><strong>No <code>method_id</code> sugar.</strong> The workaround is one line: <code>resolve({ files: await client.getMethodClosure(id) })</code>.</li>
         <li><strong>No <code>timeoutMs</code> / <code>signal</code>.</strong> Raised twice by independent reviewers, dismissed twice — so the reasoning now lives on <code>requestExtension</code>’s TSDoc, covering the whole static family. The split tracks the <em>dry-run sweep</em> (only <code>buildRunner</code> sweeps), input is bounded server-side (16 files × 1 MiB, no inference), and on the hosted path an override is inert because the gateway caps responses at ~30s.</li>
         <li><strong>One PR, not a stack.</strong> Splitting at the checkpoint boundary would have put the new public surface in a PR with no tests and stale docs.</li>
-        <li><strong>Version files deliberately not bumped.</strong> <code>CHANGELOG.md</code> carries a <code>v0.10.0</code> heading while <code>package.json</code> / <code>SDK_VERSION</code> stay <code>0.9.0</code> — this repo’s convention (<code>/release</code> bumps on a <code>release/vX.Y.Z</code> branch; <code>d32fd9c</code> is precedent). Bumping <code>SDK_VERSION</code> alone would fail <code>tests/index.test.ts</code>. Both Codex and cubic flagged it; both were answered and resolved.</li>
+        <li><strong>Version files deliberately not bumped — and the branch’s pre-claimed heading did not survive.</strong> The crate entries originally sat under a <code>v0.10.0</code> heading while <code>package.json</code> / <code>SDK_VERSION</code> stayed <code>0.9.0</code> (<code>/release</code> bumps on a <code>release/vX.Y.Z</code> branch; <code>d32fd9c</code> was the precedent). <code>dev</code> then actually published <code>v0.10.0</code> for the run-history paging work, so that heading was taken and the merge moved these entries under <code>## [Unreleased]</code> — the workspace rule and this repo’s older pattern (<code>1ed1dac</code>). <code>package.json</code> / <code>SDK_VERSION</code> are now <code>0.10.0</code>, inherited from dev’s release rather than set here. Bumping <code>SDK_VERSION</code> alone would still fail <code>tests/index.test.ts</code>. Both Codex and cubic flagged the original pre-claim; both were answered and resolved at the time.</li>
       </ul>
 
       <h3>Still deferred — each has its own wip note</h3>

@@ -44,7 +44,7 @@ Server references: `pipelex-api/api/routes/pipelex/resolve.py`, `pipelex-api/api
 
 - [x] New [`docs/crate-routes.md`](./docs/crate-routes.md): the shared envelope, the verdict discipline, the codegen trust chain, `ts-zod` for TS consumers, the `pipe_ref`-is-rejected-not-ignored rule, and the `getMethodClosure` line for stored methods.
 - [x] `docs/architecture.md` — surface list, the `models.ts` module description, and the E2E paragraph.
-- [x] `CHANGELOG.md` — `v0.10.0` Added (`resolve()` / `codegen()` + the new exported types) and Changed (`BuildRequestBase extends CrateRequestBase`).
+- [x] `CHANGELOG.md` — `[Unreleased]` Added (`resolve()` / `codegen()` + the new exported types) and Changed (`BuildRequestBase extends CrateRequestBase`).
 - [x] `README.md` status line now names the crate routes.
 
 **Checkpoint 2** — ✅ `make check` + `make test` green (all unit suites), and `make test-e2e` green against a live local `pipelex-api` — all e2e tests pass, including the new crate suite. The live run is what pins the `kind`/`target` vocabulary against the server's Python `StrEnum`.
