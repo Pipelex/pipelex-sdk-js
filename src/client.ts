@@ -92,6 +92,14 @@ import { prepareInputs as prepareInputsImpl, resolveFilesOrMethodId } from "./pr
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
+// How many CONSECUTIVE empty pages `iterateMethods` will follow before giving
+// up. An empty page with a live cursor is legitimate — the platform applies
+// `q` as a post-read filter over a bounded slice of the index per request — so
+// this cannot be small. It exists only to stop a server that advances its
+// cursor forever while returning nothing; at the platform's own bound that is
+// already several hundred index pages of genuinely unmatched rows.
+const MAX_CONSECUTIVE_EMPTY_PAGES = 50;
+
 export interface MthdsFile {
   /** File contents to validate. */
   content: string;
@@ -1085,6 +1093,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     query: Omit<ListMethodsQuery, "cursor"> = {},
   ): AsyncGenerator<MethodSummary, void, undefined> {
     let cursor: string | undefined;
+    let emptyPages = 0;
     for (;;) {
       const page: MethodPage = await this.listMethods({ ...query, cursor });
 
@@ -1095,12 +1104,30 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
       for (const method of page.items) yield method;
 
-      // Checked AFTER: `nextCursor === null` is the NORMAL end of the catalog
-      // and that page is real data, so it has to be emitted first. The empty
-      // page catches a server minting fresh cursors while returning nothing.
-      // Neither of these is a page cap — both fire only on a server that is not
-      // making progress, so neither can truncate a healthy stream.
-      if (page.nextCursor === null || page.items.length === 0) return;
+      // `nextCursor === null` is the NORMAL end of the catalog, and that page
+      // is real data, so it has to be emitted before this fires.
+      if (page.nextCursor === null) return;
+
+      // An EMPTY page is NOT the end, and treating it as one was a bug. The
+      // platform applies `q` as a post-read filter over a bounded number of
+      // index pages per request, so a sparse match legitimately returns
+      // `{items: [], nextCursor: "…"}` — "nothing matched in the slice I just
+      // read, keep going". Returning here dropped every later match silently,
+      // which is the exact truncation this pagination work exists to remove.
+      // (`iterateRuns` can stop on an empty page because its date bounds are
+      // index KEY conditions, so a run page is never empty-with-a-cursor. The
+      // difference is the server, not the client.)
+      emptyPages = page.items.length === 0 ? emptyPages + 1 : 0;
+      if (emptyPages > MAX_CONSECUTIVE_EMPTY_PAGES) {
+        // THROW, do not return. A caller that asked for every method and got a
+        // partial answer with no error is back to the original bug one layer
+        // up; an error is the only honest response to "the server will not stop
+        // handing me nothing".
+        throw new Error(
+          `listMethods returned ${MAX_CONSECUTIVE_EMPTY_PAGES + 1} consecutive empty pages while still ` +
+            `advancing its cursor; refusing to keep paging. This is a server-side fault, not a client limit.`,
+        );
+      }
       cursor = page.nextCursor;
     }
   }

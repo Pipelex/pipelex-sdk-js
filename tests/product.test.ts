@@ -136,6 +136,50 @@ describe("methods catalog", () => {
     expect(seen).toEqual(["m1", "m2"]);
   });
 
+  it("iterateMethods follows a cursor past an EMPTY page", async () => {
+    // A filtered page can legitimately be empty WITH a continuation cursor:
+    // the platform applies `q` as a post-read filter and walks a bounded
+    // number of index pages per request, so a sparse match returns
+    // `{items: [], next_cursor: "..."}` meaning "nothing here yet, keep going".
+    // Stopping on the empty page silently drops every later match — the exact
+    // truncation this pagination work exists to remove.
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { items: [], next_cursor: "c1" }))
+      .mockResolvedValueOnce(jsonResponse(200, { items: [], next_cursor: "c2" }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          items: [{ method_id: "m1", name: "Needle", created_at: "t" }],
+          next_cursor: null,
+        }),
+      );
+
+    const seen: string[] = [];
+    for await (const method of client.iterateMethods({ q: "needle" })) seen.push(method.method_id);
+
+    expect(seen).toEqual(["m1"]);
+  });
+
+  it("iterateMethods gives up on a server that only ever returns empty pages", async () => {
+    // The bound that replaces the old empty-page stop. It must NOT silently
+    // truncate: a caller that asked for every method and got a partial answer
+    // with no error would be back to the original bug, one layer up.
+    const client = makeClient();
+    // A genuinely FRESH cursor every time — a repeating one would trip the
+    // no-progress guard instead, which is a different code path.
+    let n = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      n += 1;
+      return Promise.resolve(jsonResponse(200, { items: [], next_cursor: `c${n}` }));
+    });
+
+    await expect(async () => {
+      for await (const _ of client.iterateMethods()) {
+        // no-op
+      }
+    }).rejects.toThrow(/empty pages/i);
+  });
+
   it("iterateMethods stops when the server stops advancing the cursor", async () => {
     // A server repeating our own cursor has not advanced; yielding first and
     // stopping after would double-count rows for anyone aggregating the stream.
