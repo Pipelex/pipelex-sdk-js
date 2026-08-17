@@ -55,7 +55,10 @@ import type {
   InvoiceView,
   Membership,
   MembershipsResponse,
+  ListMethodsQuery,
   MethodData,
+  MethodPage,
+  MethodSummary,
   MethodWriteInput,
   OnboardingSubmission,
   PipelexApiKeyCreated,
@@ -88,6 +91,21 @@ import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.
 import { prepareInputs as prepareInputsImpl, resolveFilesOrMethodId } from "./prepare-inputs.js";
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
+
+// A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
+//
+// It counts TOTAL pages, not empty ones. An earlier version capped consecutive
+// empty pages, which is the wrong axis: an empty page whose cursor ADVANCED is
+// real progress through the index — the platform applies `q` as a post-read
+// filter over a bounded slice per request, so a sparse match legitimately
+// yields runs of empty pages — and capping them turns a valid sparse search
+// into a thrown error. The stuck case is already caught by the no-progress
+// check (the server handing back the cursor we sent).
+//
+// At the platform's 200-row maximum page size this is 2,000,000 methods, so it
+// cannot fire on real data; it exists only so a server minting fresh cursors
+// forever cannot hang a caller indefinitely.
+const MAX_PAGES = 10_000;
 
 export interface MthdsFile {
   /** File contents to validate. */
@@ -1026,10 +1044,99 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestProduct("GET", "me");
   }
 
-  /** List the caller's saved methods — `GET /v1/methods`. */
-  async listMethods(): Promise<MethodData[]> {
-    const wire = await this.requestProduct<MethodDataWire[]>("GET", "methods");
-    return wire.map(methodDataFromWire);
+  /**
+   * One page of the org's method catalog, newest first — `GET /v1/methods`.
+   *
+   * **This returns a page, not an array.** It used to be
+   * `Promise<MethodData[]>` — the whole catalog, every method carrying its full
+   * `.mthds` bundle. That response hit DynamoDB's 1 MB page cap at a couple
+   * hundred methods and came back TRUNCATED, with no error and no flag, so
+   * methods simply disappeared from the UI. Code that rendered that array
+   * directly should now either read `page.items` (accepting the first page) or
+   * follow the cursor — `iterateMethods` does the latter for you.
+   *
+   * Rows are `MethodSummary`: no `mthds`, no `python`, no `updated_at`. Reach
+   * for `getMethod(id)` when you need a method's source.
+   *
+   * `q` is applied server-side over the whole catalog, not over the page.
+   */
+  async listMethods(query: ListMethodsQuery = {}): Promise<MethodPage> {
+    const params = new URLSearchParams();
+    // `!== undefined`, not truthiness — mirroring `listRuns`. Omission means
+    // "the caller did not ask"; an explicit empty string is bad input and the
+    // API should say so, rather than being silently dropped into an unfiltered
+    // query that returns everything and reads as working.
+    if (query.q !== undefined) params.set("q", query.q);
+    if (query.limit !== undefined) params.set("limit", String(query.limit));
+    if (query.cursor !== undefined) params.set("cursor", query.cursor);
+    const suffix = params.toString();
+    const page = await this.requestProduct<{
+      items: MethodSummary[];
+      next_cursor: string | null;
+    }>("GET", suffix ? `methods?${suffix}` : "methods");
+    return { items: page.items, nextCursor: page.next_cursor };
+  }
+
+  /**
+   * Every method in the catalog, streamed — follows the cursor for you.
+   *
+   * ```ts
+   * for await (const method of client.iterateMethods()) {
+   *   if (isTheOne(method)) break;   // stop whenever you like
+   * }
+   * ```
+   *
+   * **Prefer `listMethods`** for anything user-facing: this is O(catalog) by
+   * construction and makes as many round trips as the data demands.
+   *
+   * An iterator rather than a `listAllMethods(): Promise<MethodSummary[]>`, for
+   * the same reason `iterateRuns` is one: an all-at-once helper needs a page cap
+   * so a misbehaving server cannot spin it forever, and a cap means it returns a
+   * TRUNCATED list with no error — precisely the bug paging was introduced to
+   * remove. If you truly want an array, `Array.fromAsync` makes that your
+   * explicit choice.
+   */
+  async *iterateMethods(
+    query: Omit<ListMethodsQuery, "cursor"> = {},
+  ): AsyncGenerator<MethodSummary, void, undefined> {
+    let cursor: string | undefined;
+    let pages = 0;
+    for (;;) {
+      const page: MethodPage = await this.listMethods({ ...query, cursor });
+
+      // Checked BEFORE yielding: a server handing back the very cursor we sent
+      // has not advanced, so this page repeats rows already emitted. Cannot
+      // fire on the first request, where `cursor` is undefined.
+      if (cursor !== undefined && page.nextCursor === cursor) return;
+
+      for (const method of page.items) yield method;
+
+      // `nextCursor === null` is the NORMAL end of the catalog, and that page
+      // is real data, so it has to be emitted before this fires.
+      if (page.nextCursor === null) return;
+
+      // An EMPTY page is NOT the end, and treating it as one was a bug. The
+      // platform applies `q` as a post-read filter over a bounded number of
+      // index pages per request, so a sparse match legitimately returns
+      // `{items: [], nextCursor: "…"}` — "nothing matched in the slice I just
+      // read, keep going". Returning here dropped every later match silently,
+      // which is the exact truncation this pagination work exists to remove.
+      // (`iterateRuns` can stop on an empty page because its date bounds are
+      // index KEY conditions, so a run page is never empty-with-a-cursor. The
+      // difference is the server, not the client.)
+      pages += 1;
+      if (pages >= MAX_PAGES) {
+        // THROW, do not return. A caller that asked for every method and got a
+        // partial answer with no error is back to the original bug one layer
+        // up; an error is the only honest response to a server that will not
+        // finish. Unreachable on real data — see MAX_PAGES.
+        throw new Error(
+          `listMethods did not terminate after ${MAX_PAGES} pages; refusing to keep paging. ` +
+            `This is a server-side fault, not a coverage limit.`,
+        );
+      }
+      cursor = page.nextCursor;
+    }
   }
 
   /** Fetch one method by id — `GET /v1/methods/{id}`. */
