@@ -1,5 +1,25 @@
 # Changelog
 
+## [v0.11.0] - 2026-08-18
+
+### Changed
+
+- **Breaking: `listMethods` returns one PAGE of summaries, not the whole catalog.** The signature is now `listMethods(query?) -> MethodPage` (`{items, nextCursor}`) instead of `listMethods() -> MethodData[]`, matching the platform's reshaped `GET /v1/methods`.
+
+  This one is a **data-loss fix**, not a scaling improvement. The old endpoint issued a single DynamoDB query with no `LastEvaluatedKey` loop, and every row carried the method's whole `.mthds` bundle plus its generated Python. DynamoDB caps a query page at 1 MB, so the response stopped at roughly 200–300 methods — and stopped *silently*: no error, no truncation flag, just a shorter array than the org actually owned. Methods disappeared from the UI and nothing said so. The endpoint is now served from a narrow index projection, so a page costs the same whether the org has 50 methods or 100,000.
+
+  **Migrating:** code that rendered the returned array directly should read `page.items` (accepting the first 50) or follow `page.nextCursor`. Callers that genuinely want everything can drain the new `iterateMethods`, but it is O(catalog) by construction and should not back a user-facing list.
+
+  `query.q` searches server-side over name + description across the whole catalog — filtering a single page client-side would be searching 50 of 10,000 and calling it a search.
+
+- **Breaking (types): list rows are `MethodSummary`, not `MethodData`.** `mthds`, `python` and `updated_at` are absent, because none of them is in the index projection — and putting `mthds` back is what restored the truncation bug. Use `getMethod(id)` when you need a method's source. `updated_at`'s absence is deliberate too: the catalog is ordered by `created_at` (immutable — over a mutable sort key a cursor duplicates and skips rows), and displaying a timestamp other than the one it sorts by makes "newest first" unreadable.
+
+### Added
+
+- **`iterateMethods(query?)`** — an async iterator that follows the cursor **past empty pages**. A filtered page can legitimately come back empty with a live cursor: the platform applies `q` as a post-read filter over a bounded slice of the index per request, so `{items: [], next_cursor: "…"}` means "nothing matched in the slice I just read, keep going". Stopping there would silently drop every later match. It gives up only when the server stops advancing its cursor — a runaway ceiling on total pages exists but sits far beyond any real catalog, and **throws** rather than returning, because a caller that asked for everything and got a partial answer with no error is the very bug this release removes. (`iterateRuns` may stop on an empty page: its date bounds are index key conditions, so a run page is never empty-with-a-cursor. The difference is the server, not the client.) It is an iterator, for callers that genuinely want the whole catalog: `for await (const m of client.iterateMethods())`. Deliberately **not** a `listAllMethods(): Promise<MethodSummary[]>`, for the same reason `iterateRuns` is an iterator: an all-at-once helper needs a page cap, and a cap means silently returning a truncated list — the exact failure paging exists to remove.
+- `MethodSummary`, `MethodPage`, `ListMethodsQuery` and `MethodDeletionState` are exported.
+- **`MethodSummary.deletion_state`** is surfaced on list rows. It was already on the wire but missing from the SDK's types, so consumers were relying on structural assignment to reach it. A method mid-erasure stays in the list — so the UI can render it as "Deleting…" — while `getMethod` refuses it with a 409.
+
 ## [v0.10.0] - 2026-08-12
 
 ### Changed
