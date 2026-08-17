@@ -92,13 +92,20 @@ import { prepareInputs as prepareInputsImpl, resolveFilesOrMethodId } from "./pr
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
-// How many CONSECUTIVE empty pages `iterateMethods` will follow before giving
-// up. An empty page with a live cursor is legitimate — the platform applies
-// `q` as a post-read filter over a bounded slice of the index per request — so
-// this cannot be small. It exists only to stop a server that advances its
-// cursor forever while returning nothing; at the platform's own bound that is
-// already several hundred index pages of genuinely unmatched rows.
-const MAX_CONSECUTIVE_EMPTY_PAGES = 50;
+// A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
+//
+// It counts TOTAL pages, not empty ones. An earlier version capped consecutive
+// empty pages, which is the wrong axis: an empty page whose cursor ADVANCED is
+// real progress through the index — the platform applies `q` as a post-read
+// filter over a bounded slice per request, so a sparse match legitimately
+// yields runs of empty pages — and capping them turns a valid sparse search
+// into a thrown error. The stuck case is already caught by the no-progress
+// check (the server handing back the cursor we sent).
+//
+// At the platform's 200-row maximum page size this is 2,000,000 methods, so it
+// cannot fire on real data; it exists only so a server minting fresh cursors
+// forever cannot hang a caller indefinitely.
+const MAX_PAGES = 10_000;
 
 export interface MthdsFile {
   /** File contents to validate. */
@@ -1093,7 +1100,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     query: Omit<ListMethodsQuery, "cursor"> = {},
   ): AsyncGenerator<MethodSummary, void, undefined> {
     let cursor: string | undefined;
-    let emptyPages = 0;
+    let pages = 0;
     for (;;) {
       const page: MethodPage = await this.listMethods({ ...query, cursor });
 
@@ -1117,15 +1124,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       // (`iterateRuns` can stop on an empty page because its date bounds are
       // index KEY conditions, so a run page is never empty-with-a-cursor. The
       // difference is the server, not the client.)
-      emptyPages = page.items.length === 0 ? emptyPages + 1 : 0;
-      if (emptyPages > MAX_CONSECUTIVE_EMPTY_PAGES) {
+      pages += 1;
+      if (pages >= MAX_PAGES) {
         // THROW, do not return. A caller that asked for every method and got a
         // partial answer with no error is back to the original bug one layer
-        // up; an error is the only honest response to "the server will not stop
-        // handing me nothing".
+        // up; an error is the only honest response to a server that will not
+        // finish. Unreachable on real data — see MAX_PAGES.
         throw new Error(
-          `listMethods returned ${MAX_CONSECUTIVE_EMPTY_PAGES + 1} consecutive empty pages while still ` +
-            `advancing its cursor; refusing to keep paging. This is a server-side fault, not a client limit.`,
+          `listMethods did not terminate after ${MAX_PAGES} pages; refusing to keep paging. ` +
+            `This is a server-side fault, not a coverage limit.`,
         );
       }
       cursor = page.nextCursor;

@@ -160,10 +160,12 @@ describe("methods catalog", () => {
     expect(seen).toEqual(["m1"]);
   });
 
-  it("iterateMethods gives up on a server that only ever returns empty pages", async () => {
-    // The bound that replaces the old empty-page stop. It must NOT silently
+  it("iterateMethods refuses to page forever against a server that never finishes", async () => {
+    // A pure runaway guard, unreachable on real data. It must NOT silently
     // truncate: a caller that asked for every method and got a partial answer
-    // with no error would be back to the original bug, one layer up.
+    // with no error would be back to the original bug, one layer up. Note it
+    // counts TOTAL pages, not empty ones — an empty page whose cursor advanced
+    // is real progress and must never trip a limit (see the test above).
     const client = makeClient();
     // A genuinely FRESH cursor every time — a repeating one would trip the
     // no-progress guard instead, which is a different code path.
@@ -177,7 +179,7 @@ describe("methods catalog", () => {
       for await (const _ of client.iterateMethods()) {
         // no-op
       }
-    }).rejects.toThrow(/empty pages/i);
+    }).rejects.toThrow(/did not terminate/i);
   });
 
   it("iterateMethods stops when the server stops advancing the cursor", async () => {
