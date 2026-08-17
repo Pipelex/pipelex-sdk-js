@@ -79,7 +79,11 @@ export type {
 // ── Pipelex product surface (hosted management routes) ───────────────
 export type {
   UserProfile,
+  ListMethodsQuery,
   MethodData,
+  MethodDeletionState,
+  MethodPage,
+  MethodSummary,
   MethodWriteInput,
   Membership,
   MembershipsResponse,

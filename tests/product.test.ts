@@ -67,25 +67,91 @@ describe("user profile", () => {
 });
 
 describe("methods catalog", () => {
-  it("GETs /v1/methods (list)", async () => {
+  it("GETs /v1/methods and maps the page envelope", async () => {
     const client = makeClient();
-    const methods = [
-      {
-        method_id: "m1",
-        org_id: "o1",
-        created_by_user_id: "u1",
-        name: "M",
-        mthds: "...",
-        created_at: "t",
-        updated_at: "t",
-      },
-    ];
-    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, methods));
+    const items = [{ method_id: "m1", name: "M", description: null, created_at: "t" }];
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items, next_cursor: "c1" }));
 
     const result = await client.listMethods();
 
     expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/methods");
-    expect(result).toEqual(methods);
+    // snake_case on the wire -> camelCase on the surface, same as listRuns.
+    expect(result).toEqual({ items, nextCursor: "c1" });
+  });
+
+  it("forwards q / limit / cursor as query params", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listMethods({ q: "invoice", limit: 10, cursor: "abc" });
+
+    const url = new URL(lastRequest(spy).url);
+    expect(url.pathname).toBe("/v1/methods");
+    expect(url.searchParams.get("q")).toBe("invoice");
+    expect(url.searchParams.get("limit")).toBe("10");
+    expect(url.searchParams.get("cursor")).toBe("abc");
+  });
+
+  it("sends a bare /v1/methods when no query is given", async () => {
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listMethods({});
+
+    // No trailing "?" — the URL must stay identical to the no-arg call.
+    expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/methods");
+  });
+
+  it("forwards an explicit empty q rather than dropping it", async () => {
+    // Omission means "did not ask"; an explicit "" is bad input the API should
+    // reject. Dropping it would turn a broken search into a silently UNFILTERED
+    // query returning the whole catalog, which reads as working.
+    const client = makeClient();
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { items: [], next_cursor: null }));
+
+    await client.listMethods({ q: "" });
+
+    expect(new URL(lastRequest(spy).url).searchParams.has("q")).toBe(true);
+  });
+
+  it("iterateMethods follows the cursor across pages", async () => {
+    const client = makeClient();
+    const page1 = { items: [{ method_id: "m1", name: "A", created_at: "t" }], next_cursor: "c1" };
+    const page2 = { items: [{ method_id: "m2", name: "B", created_at: "t" }], next_cursor: null };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, page1))
+      .mockResolvedValueOnce(jsonResponse(200, page2));
+
+    const seen: string[] = [];
+    for await (const method of client.iterateMethods()) seen.push(method.method_id);
+
+    expect(seen).toEqual(["m1", "m2"]);
+  });
+
+  it("iterateMethods stops when the server stops advancing the cursor", async () => {
+    // A server repeating our own cursor has not advanced; yielding first and
+    // stopping after would double-count rows for anyone aggregating the stream.
+    const client = makeClient();
+    const stuck = { items: [{ method_id: "m1", name: "A", created_at: "t" }], next_cursor: "c1" };
+    // A fresh Response per call: a single mocked Response body can only be
+    // read once, and the guard necessarily makes a SECOND request — detecting
+    // a repeated cursor is what that request is for.
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(jsonResponse(200, stuck)),
+    );
+
+    const seen: string[] = [];
+    for await (const method of client.iterateMethods()) seen.push(method.method_id);
+
+    expect(seen).toEqual(["m1"]);
   });
 
   it("GETs /v1/methods/{id} with an encoded id", async () => {

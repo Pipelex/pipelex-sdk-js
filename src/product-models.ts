@@ -46,12 +46,70 @@ export interface MethodData {
   /** Legacy persisted output spec; optional. */
   pipe_output?: Record<string, unknown> | null;
   /**
-   * Server-derived from the bundle's top-level `description` — read-side only,
-   * present on GET/list responses, absent from the write contract.
+   * Derived from the bundle's top-level `description`. Read-side only: the
+   * server recomputes it from the bundle on every save, so it never appears on
+   * the write contract.
    */
   description?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Where a method is in the erasure cascade; absent on a normal method. */
+export type MethodDeletionState = "pending" | "in_progress" | "failed";
+
+/**
+ * One row of the method LIST — deliberately much smaller than `MethodData`.
+ *
+ * The list is served from a narrow DynamoDB index projection, so `mthds` and
+ * `python` are **not here and never will be**. That is the whole point: the
+ * previous list returned every method's full bundle, hit DynamoDB's 1 MB page
+ * cap at a couple hundred methods and silently returned a SHORT ARRAY —
+ * methods vanished from the UI with no error at all. Use `getMethod(id)` when
+ * you need the bundle.
+ *
+ * `updated_at` is absent by design too. The catalog is ordered by `created_at`
+ * (immutable — over a mutable sort key a cursor duplicates and skips rows), and
+ * displaying a different timestamp from the one it sorts by makes "newest
+ * first" unreadable.
+ */
+export interface MethodSummary {
+  method_id: string;
+  name: string;
+  description?: string | null;
+  created_at: string;
+  /**
+   * Set while an erasure cascade is running. A method mid-deletion stays IN the
+   * list — so the UI can render it as "Deleting…" — while `getMethod` refuses
+   * it with a 409.
+   */
+  deletion_state?: MethodDeletionState | null;
+}
+
+export interface ListMethodsQuery {
+  /**
+   * Case-insensitive substring match over a method's name and description,
+   * applied SERVER-side across the whole catalog. Filtering one page
+   * client-side would be searching 50 of 10,000 and calling it a search.
+   */
+  q?: string;
+  /** Page size. The API defaults to 50 and caps at 200. */
+  limit?: number;
+  /** Opaque `nextCursor` from the previous page. */
+  cursor?: string;
+}
+
+/**
+ * One page of the method catalog, newest first.
+ *
+ * `nextCursor` is opaque — pass it straight back to `listMethods` to continue;
+ * `null` means this was the last page. There is deliberately no total:
+ * counting would mean reading the whole catalog, which is the cost paging
+ * exists to avoid.
+ */
+export interface MethodPage {
+  items: MethodSummary[];
+  nextCursor: string | null;
 }
 
 /** The create/update payload — a rename is a `PUT` with a changed `name`. */
