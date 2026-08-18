@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.10.0";
+export const SDK_VERSION = "0.11.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -88,7 +88,11 @@ export type {
 // ── Pipelex product surface (hosted management routes) ───────────────
 export type {
   UserProfile,
+  ListMethodsQuery,
   MethodData,
+  MethodDeletionState,
+  MethodPage,
+  MethodSummary,
   MethodWriteInput,
   Membership,
   MembershipsResponse,

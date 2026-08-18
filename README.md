@@ -46,7 +46,10 @@ import { PipelexApiClient, ApiResponseError } from "@pipelex/sdk";
 const client = new PipelexApiClient({ apiKey: process.env.PIPELEX_API_KEY });
 
 const me = await client.getMe(); // GET /v1/me
-const methods = await client.listMethods(); // GET /v1/methods
+const page = await client.listMethods(); // GET /v1/methods — one page: { items, nextCursor }
+for await (const method of client.iterateMethods()) {
+  // follows the cursor for callers that genuinely want the whole catalog
+}
 const created = await client.createMethod({ name: "Greeter", mthds: "domain = 'demo'" });
 
 try {
