@@ -263,11 +263,13 @@ const ORPHAN_DETAIL =
  *   with a `.gitattributes` entry (e.g. `src/generated/** -text`) is still worth doing for
  *   diff hygiene; it is simply no longer load-bearing for the verdict.
  * - **Walk the whole tree, recursively, from the lock's directory**, and pass paths
- *   relative to it. An incomplete list yields `isCurrent: true` — a false negative on
- *   precisely the drift class orphan detection exists for. Filter with
- *   {@link isStampableArtifactPath} to walk exactly what the check considers. Pruning
- *   vendor/VCS directories and skipping symlinks is walk policy and stays with the
- *   caller (moot for a per-method generated directory, which holds nothing else).
+ *   relative to it. An incomplete list yields a wrong verdict in either direction: an
+ *   omitted *locked* file is reported `missing` though it sits on disk, and an omitted
+ *   *orphan* is never seen at all — `isCurrent: true`, a false negative on precisely the
+ *   drift class orphan detection exists for. Filter with {@link isStampableArtifactPath}
+ *   to walk exactly what the check considers. Pruning vendor/VCS directories and skipping
+ *   symlinks is walk policy and stays with the caller (moot for a per-method generated
+ *   directory, which holds nothing else).
  * - **Decode the bytes yourself.** `content` is already a `string`, so pipelex's
  *   "not valid UTF-8 → hand-edited" branch is unreachable here. A file you could not
  *   decode is not generated output: report it yourself, or omit it and accept a

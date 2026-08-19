@@ -74,7 +74,7 @@ export interface CodegenCheckReport {
 /** Structurally identical to `GeneratedArtifact`, so a `codegen()` response feeds in unmapped. */
 export interface CodegenTreeFile {
   path: string; // relative to the lock's directory, forward slashes, canonical (no "./", no "..")
-  content: string; // byte-exact UTF-8 text
+  content: string; // the text as read; line endings normalized (\r\n and lone \r → \n)
 }
 
 export function runCodegenCheck(input: {
