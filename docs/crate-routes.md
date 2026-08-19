@@ -158,10 +158,24 @@ The category values are the canonical strings `pipelex codegen check` uses, and 
 
 ### Where it knowingly differs from the CLI
 
-Verdict parity is the design constraint, and the stamp-header text rules mirror Python's exactly — the line-boundary set, the strip set, and the drive-prefix rule are all matched deliberately, each pinned by a test. Two differences remain on purpose:
+Verdict parity is the design constraint, and the stamp-header text rules mirror Python's exactly — the line-boundary set, the strip set, the drive-prefix rule, and the comment-prefix gate over the header region are all matched deliberately, each pinned by a test. These differences remain:
 
 - **The projection line is shape-checked, not vocabulary-checked.** pipelex resolves `kind` and `target` against its own enums, which cannot lag its own emitter; an SDK copy can. So a stamp reading `projection: types / rust-serde` from a newer engine verifies here and would be `hand-edited` there. Tightening it would report every artifact of such a tree as a hand edit — the failure mode is worse than the gap, and it is pinned in both directions.
 - **The "not valid UTF-8" branch cannot arise.** `content` reaches the check already decoded, so the caller owns that verdict — see the decode obligation above.
+- **A TOML float is accepted as a lock version, where pipelex calls it malformed.** `lock_version = 1.0` is a float upstream and not an `int`, so the CLI refuses it; the TOML parser here decodes it to the same `1` as the integer, so this reader cannot tell them apart and reads version 1. Not deliberate so much as unavoidable, and unreachable with any emitter — the divergence is a no-verdict there against a verdict here, on a lock nothing writes.
+
+### The lock format version
+
+`codegen.lock` opens with `lock_version`, and this build reads version 1. The field exists because the reader is deliberately strict *within* a version — an unknown key is a malformed lock, not a field to ignore — and that strictness is unworkable *across* versions without it.
+
+Four rules, mirroring the CLI exactly:
+
+- **A lock with no `lock_version` key is version 1.** The field was introduced with version 1, so every lock written before it existed is already conformant and nothing on disk needs migrating.
+- **The version is read _before_ the key set is validated.** This is the load-bearing ordering. The other way round, a lock from a newer codegen is rejected over whichever new key it happens to carry — an opaque shape complaint about a key the writer was entitled to add, instead of a verdict naming the version and saying what to upgrade.
+- **A version this build does not know is refused**, with a message that names the version found and which side to upgrade. A version *greater* than the one read means the lock came from a newer codegen; anything else (`0`, negative, non-integer) is malformed rather than futuristic.
+- **Strictness within a known version stays.** An unexpected key in a version-1 lock is still a no-verdict.
+
+So the upgrade path is: publish an SDK that tolerates the new version *before* the pipelex release that starts writing it. A reader that has not learned a version yet fails loudly and actionably rather than silently guessing at a shape it was not written for.
 
 ### The caller's obligations
 
@@ -178,6 +192,6 @@ It never compares a stamp's `crate_fingerprint` against the lock's, and it never
 
 ### What the check throws
 
-`CodegenLockError`, and only for a **no-verdict** condition: a malformed lock, an unknown key in it, or a path — in the lock or in your `files` — that is not a safe canonical artifact path (absolute, drive-prefixed, backslashed, control-charactered, `..`-bearing, empty, duplicated, or, for a locked path, of a type codegen does not stamp). None of these is a drift: the check could not produce a verdict at all, which is a distinct outcome and typically a distinct exit code. It deliberately does not derive from `PipelineRequestError` — nothing was requested over the wire.
+`CodegenLockError`, and only for a **no-verdict** condition: a malformed lock, a lock format version this build cannot read, an unknown key in it, or a path — in the lock or in your `files` — that is not a safe canonical artifact path (absolute, drive-prefixed, backslashed, control-charactered, `..`-bearing, empty, duplicated, or, for a locked path, of a type codegen does not stamp). None of these is a drift: the check could not produce a verdict at all, which is a distinct outcome and typically a distinct exit code. It deliberately does not derive from `PipelineRequestError` — nothing was requested over the wire.
 
 A `"./types.ts"` spelling is worth calling out, because it is the one a hand-rolled walk produces by accident: left to resolve as-is it would report both a `missing` and an `orphan` for the same file, so it throws instead.

@@ -98,6 +98,25 @@ function parseStamped(text: string, commentPrefix: string): ParsedStamp | null {
   const headerRegion = text.slice(beginLine.length + 1, endIndex);
   const body = text.slice(endIndex + endLine.length + 2);
 
+  // Every line the emitter writes inside the fence carries the comment prefix, so anything else in
+  // there was injected by hand — and it would otherwise verify as pristine, since the hash covers
+  // only the body BELOW the fence. An executable line hiding inside a "DO NOT EDIT" block is not a
+  // valid stamp.
+  //
+  // The wide split is load-bearing here rather than incidental. U+2028 and U+2029 terminate a `//`
+  // comment in ECMAScript, so under a `\n`-only split a `.ts` header carrying a raw U+2028 followed
+  // by a statement is ONE prefixed line to this gate and TWO lines to the JavaScript engine: the
+  // check would report the file current while the engine runs the injected statement. The reference
+  // splits on the same set for the same reason (`str.splitlines()` in `parse_stamped`).
+  //
+  // Nothing legitimate is rejected — the emitter writes `<prefix> <key>: <value>` lines and nothing
+  // else, and no caller supplies the two fields that could carry arbitrary text. If either ever
+  // does, the line terminators get escaped AT THE EMITTER; this gate stays correct either way,
+  // because the emitter never writes a raw one.
+  if (pythonSplitLines(headerRegion).some((line) => !line.startsWith(commentPrefix))) {
+    return null;
+  }
+
   const fields = parseStampFields(headerRegion, commentPrefix);
   const projection = fields.get("projection");
   if (projection === undefined || !isWellFormedProjection(projection)) {
@@ -121,6 +140,27 @@ function parseStamped(text: string, commentPrefix: string): ParsedStamp | null {
 // FS/GS/RS are line boundaries to Python's `splitlines()`, so matching them is the point.
 // eslint-disable-next-line no-control-regex
 const PYTHON_LINE_BOUNDARY = /\r\n|[\n\r\v\f\u001c\u001d\u001e\u0085\u2028\u2029]/u;
+
+/**
+ * Split like Python's `str.splitlines()` — including its trailing-empty rule.
+ *
+ * `String.prototype.split` keeps a trailing empty segment when the text ends with a boundary, and
+ * yields `[""]` for the empty string, where `splitlines` drops the segment and yields `[]`. That
+ * difference is invisible to a field loop that skips lines without a `:`, but the prefix gate in
+ * `parseStamped` reads EVERY segment — so a header whose last line ends with a line boundary would
+ * be rejected here and accepted by the CLI, which is the SDK-is-stricter direction this module
+ * exists to avoid.
+ */
+function pythonSplitLines(text: string): string[] {
+  if (text === "") {
+    return [];
+  }
+  const lines = text.split(PYTHON_LINE_BOUNDARY);
+  if (lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
 
 /** The characters `str.isspace()` is true for — what Python's `str.strip()` removes. */
 const PYTHON_SPACE_CLASS =
@@ -150,10 +190,13 @@ function hasStamp(text: string, commentPrefix: string): boolean {
 
 function parseStampFields(headerRegion: string, commentPrefix: string): Map<string, string> {
   const fields = new Map<string, string>();
-  for (const rawLine of headerRegion.split(PYTHON_LINE_BOUNDARY)) {
-    const stripped = rawLine.startsWith(commentPrefix)
-      ? pythonStrip(rawLine.slice(commentPrefix.length))
-      : pythonStrip(rawLine);
+  // The same split rule as the gate in `parseStamped`, and it has to stay the same one: a narrower
+  // split here would rejoin a line the gate had already split, so a field value would swallow the
+  // injected text the gate exists to catch.
+  for (const rawLine of pythonSplitLines(headerRegion)) {
+    // `parseStamped` has already rejected every line without the prefix, so stripping it is
+    // unconditional. The tolerant fallback this replaces is what let an uncommented line through.
+    const stripped = pythonStrip(rawLine.slice(commentPrefix.length));
     const separatorIndex = stripped.indexOf(":");
     if (separatorIndex === -1) {
       continue;
@@ -323,8 +366,9 @@ const ORPHAN_DETAIL =
  * `crate_fingerprint` against the lock's, and it never re-resolves the crate. Both need
  * the engine, which is the whole point of the offline split.
  *
- * @throws {CodegenLockError} for a no-verdict condition — a malformed lock, an unsafe or
- * duplicate artifact path in the lock, or a non-canonical or duplicate path in `files`.
+ * @throws {CodegenLockError} for a no-verdict condition — a malformed lock, a lock whose
+ * `lock_version` this build cannot read, an unsafe or duplicate artifact path in the lock, or a
+ * non-canonical or duplicate path in `files`.
  */
 export async function runCodegenCheck(input: CodegenCheckInput): Promise<CodegenCheckReport> {
   const lock = parseLock(normalizeNewlines(input.lockContent));
@@ -410,7 +454,14 @@ interface ParsedCodegenLock {
   hashByPath: Map<string, string>;
 }
 
-const LOCK_KEYS = new Set(["crate_fingerprint", "engine_version", "artifacts"]);
+/**
+ * The lock format version this build reads — mirrors the reference's `CODEGEN_LOCK_VERSION`.
+ *
+ * Any change to the lock's key set, or to the meaning of an existing key, bumps it on both sides.
+ */
+const CODEGEN_LOCK_VERSION = 1;
+
+const LOCK_KEYS = new Set(["lock_version", "crate_fingerprint", "engine_version", "artifacts"]);
 const LOCK_ARTIFACT_KEYS = new Set(["path", "content_hash"]);
 
 /**
@@ -431,6 +482,7 @@ function parseLock(lockContent: string): ParsedCodegenLock {
   if (!isRecord(data)) {
     throw new CodegenLockError("Malformed codegen lock: the top level is not a TOML table.");
   }
+  rejectUnknownLockVersion(data);
   rejectUnknownKeys(data, LOCK_KEYS, "codegen lock");
 
   const crateFingerprint = readString(data, "crate_fingerprint", "codegen lock");
@@ -455,6 +507,45 @@ function parseLock(lockContent: string): ParsedCodegenLock {
     hashByPath.set(path, contentHash);
   }
   return { crateFingerprint, engineVersion, hashByPath };
+}
+
+/**
+ * Refuse a lock whose format version this build cannot read, BEFORE its key set is validated.
+ *
+ * The ordering is the whole point of the field, and the easiest thing to get wrong. Run the other
+ * way round, `rejectUnknownKeys` rejects a future lock as a shape error over a key the writer was
+ * entitled to add — so the reader reports an opaque complaint about that key instead of naming the
+ * version and saying which side to upgrade, which is precisely the unactionable no-verdict the
+ * field was introduced to remove.
+ */
+function rejectUnknownLockVersion(data: Record<string, unknown>): void {
+  // No key at all means the lock was written before the field existed, which is version 1 by
+  // definition — nothing on disk needs migrating. It still faces the comparison below rather than
+  // returning early, or the day the constant moves every legacy lock would skip the gate and be
+  // validated against a schema it was never written for.
+  const rawVersion = data["lock_version"] ?? 1;
+  // `typeof` excludes a TOML boolean, which is the JavaScript shape of the reference's
+  // `bool`-is-an-`int` guard (there, `True == 1` would have read as version 1).
+  //
+  // A TOML float is NOT excluded, and cannot be: smol-toml decodes `1.0` to the same `1` as the
+  // integer, so this reader accepts a spelling the reference calls malformed. No emitter writes it,
+  // and the divergence is a no-verdict there against version 1 here.
+  const isVersionNumber = typeof rawVersion === "number" && Number.isInteger(rawVersion);
+  if (isVersionNumber && rawVersion === CODEGEN_LOCK_VERSION) {
+    return;
+  }
+  const reason =
+    isVersionNumber && rawVersion > CODEGEN_LOCK_VERSION
+      ? `it declares lock_version ${rawVersion} — upgrade @pipelex/sdk to a build that reads it`
+      : `lock_version ${describeLockVersion(rawVersion)} is not a known codegen lock format version`;
+  throw new CodegenLockError(
+    `Unsupported codegen lock version: this build reads lock_version ${CODEGEN_LOCK_VERSION}, but ${reason}.`,
+  );
+}
+
+/** Python's `!r` for the values TOML can put here, so both readers name a bad version the same way. */
+function describeLockVersion(rawVersion: unknown): string {
+  return typeof rawVersion === "string" ? `'${rawVersion}'` : String(rawVersion);
 }
 
 function rejectUnknownKeys(

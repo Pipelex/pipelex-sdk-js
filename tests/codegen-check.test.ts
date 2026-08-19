@@ -259,6 +259,64 @@ describe("runCodegenCheck — drift categories", () => {
     ]);
   });
 
+  it("reports an uncommented line inside the stamp header as `hand-edited`", async () => {
+    // The hash covers only the body BELOW the fence, so an injected line that carries no `:` used
+    // to be skipped silently and the file reported current — an executable statement sitting inside
+    // a "DO NOT EDIT" block, invisible to the check. The reference rejects it; so does this now.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace(`// ${STAMP_END}`, `throw new Error("edited");\n// ${STAMP_END}`),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
+      ["types.ts", "hand-edited"],
+    ]);
+  });
+
+  it.each([
+    ["U+2028", "\u2028"],
+    ["U+2029", "\u2029"],
+    ["U+0085", "\u0085"],
+  ])(
+    "reports a header field value carrying %s as `hand-edited` — the wide split is the gate",
+    async (_label, boundary) => {
+      // The injection whose reachability the split width decides, appended to the one header field
+      // no reader validates. Under a `\n`-only split this is ONE line that starts with `//`: the
+      // gate passes, every field still parses, the body is untouched, and the file reads as CURRENT
+      // — while the JavaScript engine, for which U+2028 ends a `//` comment, runs the statement.
+      // Splitting on Python's full set makes it two lines, the second unprefixed, so the stamp is
+      // unparseable and the file is a hand edit. Removing the gate OR narrowing the boundary set
+      // turns these rows red, which is why the two have to stay matched.
+      const input = withEdit(tsFixture(), "types.ts", (content) =>
+        content.replace(
+          `// crate_fingerprint: ${CRATE_FINGERPRINT}`,
+          `// crate_fingerprint: ${CRATE_FINGERPRINT}${boundary}globalThis.pwned = 1;`,
+        ),
+      );
+
+      const report = await runCodegenCheck(input);
+
+      expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
+        ["types.ts", "hand-edited"],
+      ]);
+    },
+  );
+
+  it("does NOT report a header whose last line merely ENDS with a line boundary", async () => {
+    // The `splitlines()` trailing-empty rule, and the reason the gate cannot use a plain `.split()`:
+    // that would leave a trailing "" segment, fail the prefix gate, and report `hand-edited` on a
+    // tree the CLI calls current — the SDK-is-stricter direction this module exists to avoid.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace(`\n// ${STAMP_END}`, `${LINE_SEP}\n// ${STAMP_END}`),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts).toEqual([]);
+    expect(report.isCurrent).toBe(true);
+  });
+
   it("reports a stamped file the lock does not track as `orphan`", async () => {
     const stray = { path: "stale.ts", content: contentOf(tsFixture(), "types.ts") };
 
@@ -576,6 +634,66 @@ describe("runCodegenCheck — no-verdict conditions", () => {
     expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
       ["stale.ts", "orphan"],
     ]);
+  });
+});
+
+// ── The lock format version ──────────────────────────────────────────────
+
+describe("runCodegenCheck — the lock format version", () => {
+  it("reads a lock with no `lock_version` key as version 1", async () => {
+    // The field was introduced WITH version 1, so every lock written before it existed is already
+    // conformant and nothing on disk needs migrating. Both vendored fixtures are such locks — real
+    // output from a pipelex that predates the key — so the pristine-tree suite pins this too.
+    const report = await runCodegenCheck({
+      lockContent: lockWith(""),
+      files: [],
+    });
+
+    expect(report.isCurrent).toBe(true);
+  });
+
+  it("accepts a lock that declares the version this build reads", async () => {
+    const report = await runCodegenCheck({
+      lockContent: lockWith("lock_version = 1\n"),
+      files: [],
+    });
+
+    expect(report.isCurrent).toBe(true);
+  });
+
+  it("refuses a newer lock version, naming it and which side to upgrade", async () => {
+    const check = runCodegenCheck({ lockContent: lockWith("lock_version = 2\n"), files: [] });
+
+    await expect(check).rejects.toThrow(CodegenLockError);
+    await expect(check).rejects.toThrow(/declares lock_version 2 — upgrade @pipelex\/sdk/);
+  });
+
+  it("refuses a newer lock version even when it carries unknown keys", async () => {
+    // The load-bearing ordering, and the whole point of the field. Move the version gate below
+    // `rejectUnknownKeys` and this goes red: the reader complains about `some_future_key` — a key
+    // the writer was entitled to add — instead of naming the version and saying what to upgrade.
+    const check = runCodegenCheck({
+      lockContent: lockWith('lock_version = 2\nsome_future_key = "surprise"\n'),
+      files: [],
+    });
+
+    await expect(check).rejects.toThrow(/declares lock_version 2/);
+    await expect(check).rejects.not.toThrow(/some_future_key/);
+  });
+
+  it.each([
+    ["zero", "0"],
+    ["negative", "-1"],
+    ["a string", '"1"'],
+    ["a boolean", "true"],
+  ])("refuses %s as a lock version — malformed, not a future version", async (_label, toml) => {
+    const check = runCodegenCheck({
+      lockContent: lockWith(`lock_version = ${toml}\n`),
+      files: [],
+    });
+
+    await expect(check).rejects.toThrow(CodegenLockError);
+    await expect(check).rejects.toThrow(/is not a known codegen lock format version/);
   });
 });
 
