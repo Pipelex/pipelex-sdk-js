@@ -12,12 +12,17 @@ interface MthdsFileItem {
   source?: string; // provenance label — threaded onto this file's diagnostics
 }
 
-interface BuildRequestBase {
+interface CrateRequestBase {
   files?: MthdsFileItem[];
   method_ref?: string; // reserved — the registry does not exist yet, so the server answers 501
+}
+
+interface BuildRequestBase extends CrateRequestBase {
   pipe_ref?: string; // QUALIFIED `domain.pipe_code`; omit to default to the closure's `main_pipe`
 }
 ```
+
+The selector half is `CrateRequestBase`, shared verbatim with the [crate routes](./crate-routes.md) (`resolve` / `codegen`) — the same split the server makes (`MthdsPipeRequest(MthdsFilesRequest)`). What the build routes add is the pipe selector.
 
 `source` is why the envelope exists. A closure is a set of files, and a diagnostic that cannot say _which_ file it came from is much harder to act on. Pass a filename (or any label) per file and, **when the engine can attribute the diagnostic to a file**, it comes back as `source` on the corresponding `validation_errors[]` item.
 

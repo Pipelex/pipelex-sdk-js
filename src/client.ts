@@ -25,6 +25,8 @@ import type {
   BuildOutputResponse,
   BuildRunnerRequest,
   BuildRunnerResponse,
+  CodegenRequest,
+  CodegenResponse,
   ConceptRequest,
   ConceptResponse,
   DictPipeOutput,
@@ -36,6 +38,8 @@ import type {
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexValidationResult,
+  ResolveRequest,
+  ResolveResponse,
   ValidationErrorItem,
 } from "./models.js";
 import {
@@ -203,6 +207,8 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
+ * - **crate extensions** (`/v1/resolve`, `/v1/codegen`) — the normalized library crate
+ *   and the stamped typed artifacts projected from it.
  * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
  *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
@@ -688,6 +694,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   // ── Tools extensions (Pipelex API — `/v1/lint`, `/v1/format`) ─────────
+  //
+  // NOT REACHABLE ON ANY HOSTED ENVIRONMENT. Both are served by any `pipelex-api`
+  // runner, but neither the gateway's API-key allowlist nor the platform's tooling
+  // proxy lists them, so every `*.pipelex.com` origin answers a gateway
+  // `403 {"message":"Forbidden"}` — refused before any service sees the request.
+  // Measured 2026-08-19 on prod AND `api-dev.pipelex.com`: on the same origin, with
+  // the same key, `validate` succeeds while these two 403. Dev is not a workaround.
+  //
+  // The crate routes (`resolve`/`codegen`) shared this gap and were allowlisted on
+  // dev — these two were NOT included in that change. Point `baseUrl` at a runner.
+  // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
 
   /**
    * Lint one `.mthds` file against the embedded MTHDS schema — `POST /v1/lint`.
@@ -732,18 +749,39 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   /**
-   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`) and
-   * the build projections (`build/*`). Their non-2xx bodies are RFC 7807 problems,
-   * mapped to the typed `ApiResponseError` like the product routes.
+   * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`), the
+   * crate routes (`resolve`, `codegen`), and the build projections (`build/*`). Their
+   * non-2xx bodies are RFC 7807 problems, mapped to the typed `ApiResponseError` like
+   * the product routes.
    *
-   * The mapping is what makes their no-verdict arms usable: a build route answers
-   * `422` for an unresolvable pipe selector (unknown `pipe_ref`; or an omitted one
-   * on a closure declaring no `main_pipe`, or several) and `501` for the reserved
-   * `method_ref`. A caller branches on `ApiResponseError.status`, never on a message.
+   * The mapping is what makes their no-verdict arms usable: a crate-family route
+   * answers `422` for a request it cannot act on (an unresolvable pipe selector on the
+   * build routes; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
+   * `types` kind, on `codegen`) and `501` for the reserved `method_ref`. A caller
+   * branches on `ApiResponseError.status`, never on a message.
    *
    * All of these are inference-free, so they default to the management-call timeout.
    * `build/runner` is the exception — it dry-run-sweeps the closure — and overrides it
    * via `timeoutMs`.
+   *
+   * **The static routes deliberately expose no `timeoutMs` / `signal`, and that is not
+   * an oversight to be "fixed" per route.** Automated reviewers have proposed adding
+   * them to whichever route was newest more than once; the reasons they are absent are:
+   *
+   * 1. The split tracks the **dry-run sweep**, not the age of the route. `build/runner`
+   *    is slow because it sweeps (the whole closure when `pipe_ref` is omitted); every
+   *    other extension route rides the static core (`crate_ops.py` is explicit that
+   *    `build/runner` "is the exception — it needs the dry-run sweep"). Giving one
+   *    static route an override while its siblings lack one is the inconsistency.
+   * 2. The input is **bounded server-side** — `pipelex-api/api/limits.py` caps a request
+   *    at 16 `.mthds` files of 1 MiB each — and none of these routes runs inference.
+   * 3. On the hosted path an override would be **inert**: the gateway caps responses at
+   *    ~30s (see `POLL_REQUEST_TIMEOUT_MS` above), so raising `timeoutMs` would still be
+   *    cut off upstream, just with a less honest error.
+   *
+   * If a static route ever genuinely needs longer, give the WHOLE static family one
+   * uniform transport-options parameter in a single pass — do not bolt it onto one
+   * route.
    */
   private async requestExtension<T>(
     endpoint: string,
@@ -785,6 +823,68 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       this.throwApiResponseError("GET", "version", res);
     }
     return JSON.parse(res.body) as VersionInfo;
+  }
+
+  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
+  //
+  // HOSTED EXPOSURE IS PARTIAL — dev yes, prod not yet. Both routes are served by
+  // any `pipelex-api` runner. On the hosted plane they must additionally be listed
+  // by the gateway's API-key allowlist and the platform's tooling proxy, which each
+  // enumerate routes explicitly (`validate`, `models`, `build/*`, …); an unlisted
+  // path answers a gateway `403 {"message":"Forbidden"}` — refused before any
+  // service sees it, so not even an RFC 7807 problem body.
+  //
+  // Measured 2026-08-19, same key, same run:
+  //   api-dev.pipelex.com  (pipelex-hosted@0.9.0)  resolve + codegen OK, full
+  //                        verdict discipline intact (200 `is_valid:false`, 501, 422)
+  //   api.pipelex.com      (pipelex-hosted@0.2.6)  both still 403
+  //
+  // So prod is waiting on the deploy, not on another code change. `lint`/`format`
+  // are still 403 on BOTH — only the crate routes were allowlisted. Tracked in
+  // `wip/hosted-exposure-crate-and-tools-routes.md`.
+  //
+  // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
+  // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding
+  // one here.
+
+  /**
+   * Resolve a closure into its normalized library crate — `POST /v1/resolve`.
+   *
+   * Resolution is a first-class language operation alongside validation: the closure is
+   * loaded and statically validated, then emitted as the **normalized library crate**
+   * (fully qualified refs, refinement flattened, natives materialized, fingerprint set)
+   * — the MTHDS standard's Library Crate Format. It runs NO dry-run sweep, so a valid
+   * verdict here says the library resolves, never that it runs; that is `validate`'s
+   * vocabulary.
+   *
+   * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — a
+   * closure that does not parse/load/validate comes back as `is_valid: false` with
+   * `validation_errors[]`, not as a thrown error. Only a no-verdict condition throws
+   * `ApiResponseError`: a malformed selector (neither or both of `files`/`method_ref`)
+   * is a 422, and the reserved `method_ref` is a `501` until the server-side method
+   * registry lands. To resolve a STORED method today, expand it first:
+   * `resolve({ files: await client.getMethodClosure(methodId) })`.
+   */
+  async resolve(request: ResolveRequest): Promise<ResolveResponse> {
+    return this.requestExtension("resolve", request);
+  }
+
+  /**
+   * Project a closure's crate into stamped typed artifacts — `POST /v1/codegen`.
+   *
+   * Resolves the closure exactly like {@link resolve}, then projects the crate through
+   * the two explicit axes — `kind` (`types` today) × `target` (`ts-zod` for TypeScript
+   * consumers, `python-pydantic`, `python-structures`) — and returns the artifact set
+   * plus its `codegen.lock`. Write both verbatim and the tree is byte-identical to a
+   * local `pipelex codegen types` run, so the offline `pipelex codegen check` passes on
+   * it; the SDK deliberately does not write files for you.
+   *
+   * Same 200-verdict discipline as {@link resolve}. Only a no-verdict condition throws
+   * `ApiResponseError`: an unknown `kind`/`target`, a `pipe_ref` on the concept-set-wide
+   * `types` kind, or a malformed selector is a 422; `method_ref` is a `501`.
+   */
+  async codegen(request: CodegenRequest): Promise<CodegenResponse> {
+    return this.requestExtension("codegen", request);
   }
 
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
@@ -871,8 +971,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *
    * Because of that sweep it is the one extension route that can legitimately run
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
-   * routes use. Override it per call with `options.timeoutMs`; a caller that stops
-   * caring mid-sweep can cancel via `options.signal` instead of waiting it out.
+   * routes use, and it is the ONLY extension route that takes transport options at all
+   * (the policy note on `requestExtension` says why the static ones do not). Override it
+   * per call with `options.timeoutMs`; a caller that stops caring mid-sweep can cancel
+   * via `options.signal` instead of waiting it out.
    */
   async buildRunner(
     request: BuildRunnerRequest,

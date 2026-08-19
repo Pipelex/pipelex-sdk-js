@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Crate routes — resume note</title>
+    <style>
+      :root {
+        --bg: #fbfbfa;
+        --surface: #ffffff;
+        --surface-2: #f4f4f2;
+        --text: #1a1a19;
+        --muted: #6b6b66;
+        --border: #e2e2de;
+        --accent: #b4530a;
+        --accent-soft: #fdf3e9;
+        --ok: #2f7d4f;
+        --ok-soft: #edf7f0;
+        --bad: #b3261e;
+        --bad-soft: #fdeeed;
+        --code-bg: #f4f4f2;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #191918;
+          --surface: #212120;
+          --surface-2: #262625;
+          --text: #ecece9;
+          --muted: #9d9d96;
+          --border: #35352f;
+          --accent: #e8935a;
+          --accent-soft: #2b2118;
+          --ok: #74c48f;
+          --ok-soft: #1b2a20;
+          --bad: #f08b84;
+          --bad-soft: #2e1c1a;
+          --code-bg: #171716;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #191918;
+        --surface: #212120;
+        --surface-2: #262625;
+        --text: #ecece9;
+        --muted: #9d9d96;
+        --border: #35352f;
+        --accent: #e8935a;
+        --accent-soft: #2b2118;
+        --ok: #74c48f;
+        --ok-soft: #1b2a20;
+        --bad: #f08b84;
+        --bad-soft: #2e1c1a;
+        --code-bg: #171716;
+      }
+      :root[data-theme="light"] {
+        --bg: #fbfbfa;
+        --surface: #ffffff;
+        --surface-2: #f4f4f2;
+        --text: #1a1a19;
+        --muted: #6b6b66;
+        --border: #e2e2de;
+        --accent: #b4530a;
+        --accent-soft: #fdf3e9;
+        --ok: #2f7d4f;
+        --ok-soft: #edf7f0;
+        --bad: #b3261e;
+        --bad-soft: #fdeeed;
+        --code-bg: #f4f4f2;
+      }
+
+      * { box-sizing: border-box; }
+      html { -webkit-text-size-adjust: 100%; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 16px/1.65 ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        overflow-x: hidden;
+      }
+      .wrap { max-width: 60rem; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+
+      header.masthead { margin-bottom: 2.5rem; }
+      .eyebrow {
+        font-size: .75rem; letter-spacing: .09em; text-transform: uppercase;
+        color: var(--accent); font-weight: 650; margin: 0 0 .6rem;
+      }
+      h1 { font-size: clamp(1.7rem, 4.5vw, 2.35rem); line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.02em; }
+      .meta { color: var(--muted); font-size: .9rem; margin: 0; }
+      .meta code { font-size: .85em; }
+
+      h2 {
+        font-size: 1.3rem; letter-spacing: -.01em; margin: 3rem 0 1rem;
+        padding-bottom: .5rem; border-bottom: 1px solid var(--border);
+      }
+      h3 { font-size: 1.02rem; margin: 2rem 0 .6rem; }
+      p { margin: 0 0 1rem; }
+      ul, ol { margin: 0 0 1rem; padding-left: 1.3rem; }
+      li { margin-bottom: .45rem; }
+      a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+
+      code {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+        font-size: .875em; background: var(--code-bg); padding: .12em .38em;
+        border-radius: 4px; border: 1px solid var(--border);
+      }
+      pre {
+        background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius);
+        padding: 1rem 1.1rem; overflow-x: auto; margin: 0 0 1.25rem; line-height: 1.55;
+      }
+      pre code { background: none; border: none; padding: 0; font-size: .82rem; }
+
+      .tldr {
+        background: var(--accent-soft); border: 1px solid var(--border);
+        border-left: 3px solid var(--accent); border-radius: var(--radius);
+        padding: 1.35rem 1.5rem; margin: 0 0 2.5rem;
+      }
+      .tldr h2 {
+        margin: 0 0 .75rem; border: none; padding: 0;
+        font-size: .78rem; letter-spacing: .1em; text-transform: uppercase; color: var(--accent);
+      }
+      .tldr p:last-child { margin-bottom: 0; }
+
+      .callout {
+        background: var(--surface-2); border: 1px solid var(--border);
+        border-left: 3px solid var(--muted); border-radius: var(--radius);
+        padding: 1rem 1.2rem; margin: 0 0 1.5rem;
+      }
+      .callout.warn { border-left-color: var(--bad); background: var(--bad-soft); }
+      .callout p:last-child { margin-bottom: 0; }
+
+      .scroll { overflow-x: auto; margin: 0 0 1.5rem; }
+      table { border-collapse: collapse; width: 100%; font-size: .92rem; min-width: 30rem; }
+      th, td { text-align: left; padding: .6rem .8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { font-weight: 620; font-size: .78rem; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+      tbody tr:last-child td { border-bottom: none; }
+      table code { font-size: .82em; }
+
+      .pill {
+        display: inline-block; font-size: .74rem; font-weight: 650; letter-spacing: .02em;
+        padding: .15rem .5rem; border-radius: 100px; white-space: nowrap;
+      }
+      .pill.ok { background: var(--ok-soft); color: var(--ok); }
+      .pill.bad { background: var(--bad-soft); color: var(--bad); }
+      .pill.hold { background: var(--accent-soft); color: var(--accent); }
+
+      figure { margin: 0 0 1.75rem; }
+      figure .scroll { margin-bottom: .6rem; }
+      figcaption { color: var(--muted); font-size: .85rem; }
+      svg { display: block; max-width: 100%; height: auto; }
+      .s-box { fill: var(--surface); stroke: var(--border); }
+      .s-label { fill: var(--text); font: 600 13px ui-sans-serif, system-ui, sans-serif; }
+      .s-sub { fill: var(--muted); font: 400 11px ui-monospace, monospace; }
+      .s-line { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+      .s-ok { stroke: var(--ok); stroke-width: 2; fill: none; }
+      .s-bad { stroke: var(--bad); stroke-width: 2; fill: none; }
+      .s-ok-t { fill: var(--ok); font: 600 12px ui-sans-serif, system-ui, sans-serif; }
+      .s-bad-t { fill: var(--bad); font: 600 12px ui-sans-serif, system-ui, sans-serif; }
+
+      .checklist { list-style: none; padding: 0; counter-reset: step; }
+      .checklist > li {
+        counter-increment: step; position: relative; padding-left: 2.4rem; margin-bottom: 1.5rem;
+      }
+      .checklist > li::before {
+        content: counter(step); position: absolute; left: 0; top: -.05rem;
+        width: 1.65rem; height: 1.65rem; border-radius: 50%;
+        background: var(--accent); color: #fff;
+        font-size: .82rem; font-weight: 680; display: grid; place-items: center;
+      }
+      .checklist h3 { margin-top: 0; }
+
+      footer { margin-top: 4rem; padding-top: 1.25rem; border-top: 1px solid var(--border); color: var(--muted); font-size: .85rem; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="masthead">
+        <p class="eyebrow">Resume note · pipelex-sdk-js</p>
+        <h1>Crate routes — <code>resolve()</code> &amp; <code>codegen()</code></h1>
+        <p class="meta">
+          Written 2026-08-03 · branch <code>feature/Codegen</code> → <code>dev</code> ·
+          <a href="https://github.com/Pipelex/pipelex-sdk-js/pull/24">PR #24</a> — open and mergeable
+        </p>
+      </header>
+
+      <section class="tldr">
+        <h2>TL;DR</h2>
+        <p>
+          The SDK work is <strong>done and verified</strong> — <code>resolve()</code> and <code>codegen()</code> are
+          implemented, tested against a live <code>pipelex-api</code>, documented, and reviewed clean by three bots plus a
+          pre-landing review. PR&nbsp;#24 is merge-ready; it was deliberately not merged.
+        </p>
+        <p>
+          The one open thread is <strong>not in this repo</strong>: hosted exposure, a two-repo infra change
+          (<code>pipelex-api-infra</code> + <code>pipelex-platform</code>).
+        </p>
+        <p>
+          <strong>As of 2026-08-13 that thread is half-closed.</strong> <code>api-dev.pipelex.com</code>
+          (<code>pipelex-hosted@0.2.8</code>) now serves <code>resolve</code> and <code>codegen</code> with the full
+          contract intact; <code>api.pipelex.com</code> is still on <code>0.2.6</code> and still 403s; and
+          <code>lint</code> / <code>format</code> were left out of the allowlist change entirely, so they 403 on both.
+          The caveats have been reworded to match. Nothing about the client code needed to change, and still doesn’t.
+        </p>
+      </section>
+
+      <h2>Where we stand</h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Item</th><th>State</th></tr></thead>
+          <tbody>
+            <tr><td><code>resolve()</code> / <code>codegen()</code> on <code>PipelexApiClient</code></td><td><span class="pill ok">Implemented</span></td></tr>
+            <tr><td>Wire models + barrel exports</td><td><span class="pill ok">Implemented</span></td></tr>
+            <tr><td>Unit tests (<code>tests/crate-routes.test.ts</code>)</td><td><span class="pill ok">Passing</span></td></tr>
+            <tr><td>E2E tests (<code>tests/e2e/crate.e2e.ts</code>)</td><td><span class="pill ok">Passing</span> against a <strong>local</strong> runner</td></tr>
+            <tr><td>Docs — <code>docs/crate-routes.md</code> + 3 updated</td><td><span class="pill ok">Written</span></td></tr>
+            <tr><td><code>CHANGELOG.md</code> <code>[Unreleased]</code> entry</td><td><span class="pill ok">Written</span></td></tr>
+            <tr><td>CI — Quality Checks, gate-dev</td><td><span class="pill ok">Green</span></td></tr>
+            <tr><td>Greptile / cubic / Codex</td><td><span class="pill ok">All pass</span> · zero unresolved threads</td></tr>
+            <tr><td>PR #24</td><td><span class="pill hold">Open, not merged</span></td></tr>
+            <tr><td>Reachable on hosted</td><td><span class="pill ok">dev YES</span> <code>0.2.8</code>, contract verified 2026-08-13 · <span class="pill bad">prod no</span> <code>0.2.6</code> · <code>lint</code>/<code>format</code> 403 on both</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p>
+          <code>CLAAssistant</code> shows as failing — <strong>ignore it</strong>. It fails identically on the
+          pre-existing PR&nbsp;#18 with <em>“There is at least one repository that does not exist or is not accessible to
+          the parent installation”</em>: a GitHub App installation fault in the repo, unrelated to this change. It is why
+          <code>mergeStateStatus</code> reads <code>UNSTABLE</code> rather than <code>CLEAN</code>.
+        </p>
+      </div>
+
+      <h3>Commits on the branch</h3>
+      <pre><code>ef9d540  Correct the hosted-exposure caveat: dev is affected too, and is not a workaround
+7306c4f  Record the PR #24 review outcomes in the plan
+278309a  Record why the static extension routes take no transport options
+ed2d451  Document the hosted-exposure gap, correct the fingerprint claim, cover every codegen target
+6d599cd  Mark the explicit-envelope handoff doc archived, and fix its wip links
+b40be9c  Add resolve() and codegen() to PipelexApiClient — the crate routes
+904e179  Fix prepareInputs to accept explicit {concept, content} envelope inputs   &lt;- pre-existing, docs-only</code></pre>
+
+      <h2>The blocker, precisely</h2>
+      <p>
+        Hosted origins gate <code>/v1/*</code> twice, and <strong>both gates enumerate routes explicitly</strong>. The
+        request never reaches a service — it dies at the first gate:
+      </p>
+
+      <figure>
+        <div class="scroll">
+          <svg viewBox="0 0 760 250" role="img" aria-label="Request path: the gateway authorizer admits validate and buildInputs but refuses resolve and codegen with a 403 before routing.">
+            <defs>
+              <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="context-stroke" />
+              </marker>
+            </defs>
+
+            <rect class="s-box" x="8" y="86" width="132" height="58" rx="8" />
+            <text class="s-label" x="74" y="110" text-anchor="middle">SDK client</text>
+            <text class="s-sub" x="74" y="128" text-anchor="middle">PipelexApiClient</text>
+
+            <rect class="s-box" x="212" y="76" width="168" height="78" rx="8" />
+            <text class="s-label" x="296" y="102" text-anchor="middle">Gateway authorizer</text>
+            <text class="s-sub" x="296" y="120" text-anchor="middle">_API_KEY_ALLOWED</text>
+            <text class="s-sub" x="296" y="134" text-anchor="middle">_PREFIXES</text>
+
+            <rect class="s-box" x="452" y="76" width="142" height="78" rx="8" />
+            <text class="s-label" x="523" y="102" text-anchor="middle">Platform proxy</text>
+            <text class="s-sub" x="523" y="120" text-anchor="middle">tooling_proxy.py</text>
+            <text class="s-sub" x="523" y="134" text-anchor="middle">(2nd allowlist)</text>
+
+            <rect class="s-box" x="648" y="86" width="104" height="58" rx="8" />
+            <text class="s-label" x="700" y="110" text-anchor="middle">Runner</text>
+            <text class="s-sub" x="700" y="128" text-anchor="middle">pipelex-api</text>
+
+            <line class="s-line" x1="140" y1="115" x2="205" y2="115" marker-end="url(#ah)" />
+            <line class="s-ok" x1="380" y1="115" x2="445" y2="115" marker-end="url(#ah)" />
+            <line class="s-ok" x1="594" y1="115" x2="641" y2="115" marker-end="url(#ah)" />
+
+            <path class="s-ok" d="M 296 76 L 296 44" marker-end="url(#ah)" />
+            <text class="s-ok-t" x="296" y="32" text-anchor="middle">validate · buildInputs — listed, pass through</text>
+
+            <path class="s-bad" d="M 296 154 L 296 190" marker-end="url(#ah)" />
+            <text class="s-bad-t" x="296" y="210" text-anchor="middle">resolve · codegen · lint · format</text>
+            <text class="s-bad-t" x="296" y="230" text-anchor="middle">403 {"message":"Forbidden"} — stops here</text>
+          </svg>
+        </div>
+        <figcaption>
+          The 403 is raised before routing, so it masks whatever is behind it — including the second allowlist and the
+          deployed runner image.
+        </figcaption>
+      </figure>
+
+      <ol>
+        <li>
+          <strong>The gateway authorizer’s API-key allowlist</strong> —
+          <code>pipelex-api-infra/src/pipelex_lambdas/authorizer/utils.py</code> →
+          <code>_API_KEY_ALLOWED_PREFIXES</code>. It lists <code>/v1/validate</code>, <code>/v1/models</code>,
+          <code>/v1/build</code>, <code>/v1/upload</code>, <code>/v1/resolve-storage-url</code>… and neither
+          <code>/v1/resolve</code> nor <code>/v1/codegen</code>. The match is
+          <code>path == prefix or path.startswith(prefix + "/")</code>, so
+          <strong><code>/v1/resolve</code> does not ride in on <code>/v1/resolve-storage-url</code></strong>. The
+          per-route listing is deliberate — the comment explains it keeps JWT-only key routes out of API-key reach — so
+          the fix adds entries, never a bare <code>/v1</code>.
+        </li>
+        <li>
+          <strong>The platform’s tooling proxy</strong> —
+          <code>pipelex-platform/…/routers/v1/tooling_proxy.py</code> declares <code>/validate</code>,
+          <code>/models</code> and the five <code>/build/*</code> routes, nothing else. The greedy
+          <code>ANY /v1/{proxy+}</code> route forwards unmatched <code>/v1/*</code> there.
+        </li>
+      </ol>
+      <p>
+        <code>lint</code> and <code>format</code> have carried the identical gap since they landed.
+        <strong>Fix all four at once</strong> — fixing only the two new ones leaves the same trap set for the next
+        consumer.
+      </p>
+
+      <h3>Evidence — measured 2026-08-03 against <code>api-dev.pipelex.com</code></h3>
+      <p>Same API key, same origin, same run, through the SDK (<code>pipelex-hosted@0.2.6rc7</code>):</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Call</th><th>Result</th></tr></thead>
+          <tbody>
+            <tr><td><code>version()</code></td><td><span class="pill ok">OK</span> <code>pipelex-hosted@0.2.6rc7</code></td></tr>
+            <tr><td><code>validate()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td></tr>
+            <tr><td><code>buildInputs()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td></tr>
+            <tr><td><code>resolve()</code></td><td><span class="pill bad">403 Forbidden</span> <code>ApiResponseError</code></td></tr>
+            <tr><td><code>codegen()</code></td><td><span class="pill bad">403 Forbidden</span> <code>ApiResponseError</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><strong>The refusal is the gateway’s, not the app’s</strong> — and that distinction is the diagnostic:</p>
+      <ul>
+        <li><code>/v1/resolve</code> → <code>content-type: application/json</code>, body <code>{"message":"Forbidden"}</code>, <strong>no</strong> <code>request_id</code>.</li>
+        <li><code>/v1/build/inputs</code> on the same origin → <code>content-type: application/problem+json</code> carrying <code>instance</code>, <code>request_id</code>, <code>error_type</code>, <code>error_domain</code>.</li>
+      </ul>
+      <div class="callout warn">
+        <p>
+          <strong>Dev was never a workaround.</strong> Dev and prod share the allowlist. The instinct on hitting the prod
+          403 is to point <code>PIPELEX_BASE_URL</code> at dev; that fails identically. This is now called out in the code
+          comment, the doc and the changelog, because the original wording named only <code>api.pipelex.com</code> and
+          invited exactly that inference.
+        </p>
+      </div>
+
+      <h3>Re-verification — 2026-08-11: still blocked</h3>
+      <p>
+        Re-ran the step-1 probe against dev <strong>and</strong> prod. Unchanged: <code>version()</code> and
+        <code>validate()</code> succeed on both origins, while <code>resolve()</code> and all three
+        <code>codegen()</code> targets answer <code>403 Forbidden</code> with <strong>no <code>request_id</code></strong>
+        — the gateway-authorizer signature, not an application refusal.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Call</th><th><code>api-dev.pipelex.com</code></th><th><code>api.pipelex.com</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>version()</code></td><td><span class="pill ok">OK</span> <code>pipelex-hosted@0.2.6</code></td><td><span class="pill ok">OK</span> <code>pipelex-hosted@0.2.6</code></td></tr>
+            <tr><td><code>validate()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td></tr>
+            <tr><td><code>resolve()</code></td><td><span class="pill bad">403 Forbidden</span></td><td><span class="pill bad">403 Forbidden</span></td></tr>
+            <tr><td><code>codegen()</code> ×3 targets</td><td><span class="pill bad">403 Forbidden</span></td><td><span class="pill bad">403 Forbidden</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        The hosted stack has moved on (<code>pipelex-hosted@0.2.6</code>, released, vs <code>0.2.6rc7</code> in August’s
+        measurement) <strong>without</strong> the allowlist being touched — which is the point: shipping hosted releases
+        does not drift this gap shut on its own. It needs the deliberate <code>pipelex-api-infra</code> +
+        <code>pipelex-platform</code> change.
+      </p>
+      <div class="callout warn">
+        <p>
+          <strong>A local runner serving the routes is not the unblock</strong>, and is easy to misread as one. Every
+          caveat already says “served by any <code>pipelex-api</code> runner” — local support has been the baseline since
+          the branch landed, so a fresh local runner answering <code>resolve</code> / <code>codegen</code> changes nothing
+          about hosted reachability. The trigger for the checklist below is a <strong>200 from a
+          <code>*.pipelex.com</code> origin</strong>, nothing less. Verified green on <code>http://localhost:8092</code>
+          (<code>pipelex-api@0.11.1</code>) the same day, including all three codegen targets and the resolve↔codegen
+          fingerprint agreement — that is the expected state, not progress.
+        </p>
+      </div>
+      <p>
+        <strong>Unrelated drift spotted while probing, worth its own look:</strong> the local runner reports
+        <code>protocol_version</code> <strong>0.6.0</strong> while both hosted environments report <strong>0.1.0</strong>.
+        Not a crate-routes issue and not chased here.
+      </p>
+
+      <h3>Update — 2026-08-13: dev SHIPPED, prod still blocked, <code>lint</code>/<code>format</code> left behind</h3>
+      <p>The allowlist change landed on dev. Measured through the SDK, same key, same run:</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Call</th><th><code>api-dev.pipelex.com</code> (<code>0.2.8</code>)</th><th><code>api.pipelex.com</code> (<code>0.2.6</code>)</th></tr></thead>
+          <tbody>
+            <tr><td><code>version()</code>, <code>validate()</code></td><td><span class="pill ok">OK</span></td><td><span class="pill ok">OK</span></td></tr>
+            <tr><td><code>resolve()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td><td><span class="pill bad">403</span></td></tr>
+            <tr><td><code>codegen()</code> — all three targets</td><td><span class="pill ok">OK</span> fingerprint agrees with <code>resolve</code></td><td><span class="pill bad">403</span></td></tr>
+            <tr><td><code>lint()</code>, <code>format()</code></td><td><span class="pill bad">403</span></td><td><span class="pill bad">403</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <strong>The contract holds on hosted, not just the happy path.</strong> Every non-2xx arm survives the gateway
+        and the platform proxy intact: an unresolvable closure returns a <code>200</code> <code>is_valid: false</code>
+        with <code>validation_errors[]</code> (both routes), the reserved <code>method_ref</code> returns
+        <code>501</code>, and a <code>pipe_ref</code> on the <code>types</code> kind returns <code>422</code>. That was
+        the open risk in pointing a consumer at hosted — a proxy that mangled non-2xx bodies would have broken the
+        verdict discipline — and it is now measured, not assumed.
+      </p>
+      <p><strong>Prod needs only the deploy.</strong> It is still on <code>0.2.6</code>; dev is on <code>0.2.8</code>. No further code change is implied.</p>
+      <div class="callout warn">
+        <p>
+          <strong><code>lint</code> / <code>format</code> were not included in the change</strong>, and now sit in exactly
+          the trap this note warned about (“Fix all four at once — fixing only the two new ones leaves the same trap set
+          for the next consumer”). They 403 on both origins. The tools-extensions section of <code>src/client.ts</code>
+          had never carried a caveat at all — that omission is now fixed as part of this update.
+        </p>
+      </div>
+      <p>
+        <strong>Caveats were reworded, not deleted.</strong> The checklist below assumed full exposure and said “delete”;
+        partial exposure makes that wrong in the opposite direction — the old wording (“not reachable on any hosted
+        environment, dev included”) would now steer a developer away from the one origin that works. Updated in
+        <code>src/client.ts</code> (both sections), <code>docs/crate-routes.md</code>, <code>CHANGELOG.md</code>,
+        <code>TODOS.md</code> and <code>hosted-exposure-crate-and-tools-routes.md</code>. <strong>When prod ships, the
+        remaining edit is small:</strong> drop the prod row from each, and keep the <code>lint</code>/<code>format</code>
+        caveat until those are allowlisted too.
+      </p>
+      <div class="callout">
+        <p>
+          <strong>Checklist step 3 was not executable when this update was written — it is now.</strong>
+          <code>PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com make test-e2e</code> used to fail before any test ran:
+          the suites’ <code>beforeAll</code> preflight called <code>client.health()</code> → <code>GET /health</code>,
+          a bare-runner endpoint the hosted gateway does not serve (<code>404</code>), so the suite aborted with “No
+          pipelex-api server reachable” against a perfectly live origin. Fixed on this branch
+          (<code>a96c211</code>): the Makefile preflight and all three suites’ <code>beforeAll</code> now probe
+          <code>version()</code> → <code>GET /v1/version</code>, the one unauthenticated route a bare runner and a
+          hosted origin both serve.
+        </p>
+      </div>
+
+      <h2>Resume checklist</h2>
+      <ol class="checklist">
+        <li>
+          <h3>Verify with a real call, per environment (dev first)</h3>
+          <p>
+            Do not infer success from the Terraform diff. <code>.env</code> already holds
+            <code>PIPELEX_BASE_URL</code> / <code>PIPELEX_API_KEY</code> (globally gitignored). Run
+            <code>make build</code>, then <code>set -a; . ./.env; set +a</code>, then <code>node</code> the probe script
+            in <a href="./crate-routes-resume.md">the Markdown version of this note</a>.
+          </p>
+          <div class="callout warn">
+            <p>
+              <strong>Watch for a <code>404</code> rather than a <code>200</code>.</strong> The 403 masks everything
+              behind it: allowlisting the paths could simply surface a 404 if the ECS runner image predates the routes.
+              Check the <code>pipelex-api</code> version pinned by <code>pipelex-api-hosted</code> for that environment
+              against the release that added <code>/v1/resolve</code> + <code>/v1/codegen</code>.
+            </p>
+          </div>
+        </li>
+        <li>
+          <h3>Drop the caveat — it appears in exactly four places</h3>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>File</th><th>What to remove</th></tr></thead>
+              <tbody>
+                <tr><td><code>src/client.ts</code></td><td>The <code>NOT YET REACHABLE…</code> block in the <code>── Crate extensions ──</code> section header</td></tr>
+                <tr><td><code>docs/crate-routes.md</code></td><td>The two-paragraph blockquote under the intro</td></tr>
+                <tr><td><code>CHANGELOG.md</code></td><td>The <code>**Note:**</code> sentence inside the <code>[Unreleased]</code> Added entry</td></tr>
+                <tr><td><code>wip/hosted-exposure-crate-and-tools-routes.md</code></td><td>The whole note — delete, or mark shipped</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>
+            Also remove the follow-up line from <code>TODOS.md</code>. Keep the caveat for <code>lint</code> /
+            <code>format</code> if only the crate routes were exposed.
+          </p>
+        </li>
+        <li>
+          <h3>Optionally point the e2e suite at hosted</h3>
+          <p>
+            <code>PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com PIPELEX_API_KEY=… make test-e2e</code> exercises the
+            same contract against the hosted stack. <strong>Do not add it to CI</strong> — CI must never require a live
+            server.
+          </p>
+        </li>
+      </ol>
+
+      <h2>What was built</h2>
+      <p>
+        Two Pipelex API extension routes (not <code>x-mthds-protocol</code>), sharing the build routes’ closure envelope
+        and verdict discipline.
+      </p>
+      <ul>
+        <li><strong><code>resolve(request)</code></strong> → <code>POST /v1/resolve</code>. Returns the normalized library crate — the MTHDS standard’s Library Crate Format. Runs no dry-run sweep.</li>
+        <li><strong><code>codegen(request)</code></strong> → <code>POST /v1/codegen</code>. Projects that crate through two explicit axes, <code>kind</code> (<code>types</code>) × <code>target</code> (<code>ts-zod</code> | <code>python-pydantic</code> | <code>python-structures</code>), returning stamped artifacts plus their <code>codegen.lock</code>.</li>
+      </ul>
+      <p>
+        <strong>Verdict discipline</strong> — the thing consumers get wrong: a produced verdict is a <strong>200</strong>
+        discriminated on <code>is_valid</code>. An unresolvable closure comes back as <code>is_valid: false</code> with
+        <code>validation_errors[]</code>, <em>not</em> a thrown error. Only a no-verdict condition throws
+        <code>ApiResponseError</code>: request-shape <code>422</code> (including a <code>pipe_ref</code> on the
+        concept-set-wide <code>types</code> kind), the reserved <code>method_ref</code> <code>501</code>, auth,
+        <code>5xx</code>. <strong>Branch on <code>is_valid</code>, never on the transport.</strong>
+      </p>
+      <p>
+        <strong>The codegen trust chain:</strong> write every artifact at its <code>path</code> and the <code>lock</code>
+        content as <code>lock_filename</code>, both verbatim, and the tree is byte-identical to a local
+        <code>pipelex codegen types</code> run — so the offline <code>pipelex codegen check</code> passes on it.
+        Reformatting an artifact or re-serializing the lock breaks the chain. The SDK stays transport-only and does not
+        write files.
+      </p>
+      <div class="callout">
+        <p>
+          <strong>Fingerprint semantics — easy to get wrong, and I did at first.</strong> The fingerprint is a property
+          of the <em>logical</em> crate, not of any encoding: the server hashes
+          <code>{concepts, pipes, domains}</code> with each object’s provenance <code>source</code> stripped, excluding
+          <code>source_map</code>, <code>mthds_version</code> and <code>fingerprint</code> itself. It <strong>cannot</strong>
+          be recomputed by hashing the returned crate object. Nor is the response the same <em>bytes</em> as
+          <code>pipelex resolve --format json</code> — the CLI pretty-prints, the route answers compact JSON. Compare
+          <code>fingerprint</code> values; never serialized bytes.
+        </p>
+      </div>
+
+      <h3>Decisions taken, so they aren’t re-litigated</h3>
+      <ul>
+        <li><strong><code>CrateRequestBase</code>, with <code>BuildRequestBase</code> extending it.</strong> The inheritance is not forced — it is exactly the server’s own hierarchy (<code>MthdsPipeRequest(MthdsFilesRequest)</code>). Structurally identical for consumers.</li>
+        <li><strong>The <code>files</code> XOR <code>method_ref</code> invariant stays server-side</strong>, not a discriminated union — the union would force the common <code>{ files }</code> call site to pick a branch for no gain.</li>
+        <li><strong>No <code>method_id</code> sugar.</strong> The workaround is one line: <code>resolve({ files: await client.getMethodClosure(id) })</code>.</li>
+        <li><strong>No <code>timeoutMs</code> / <code>signal</code>.</strong> Raised twice by independent reviewers, dismissed twice — so the reasoning now lives on <code>requestExtension</code>’s TSDoc, covering the whole static family. The split tracks the <em>dry-run sweep</em> (only <code>buildRunner</code> sweeps), input is bounded server-side (16 files × 1 MiB, no inference), and on the hosted path an override is inert because the gateway caps responses at ~30s.</li>
+        <li><strong>One PR, not a stack.</strong> Splitting at the checkpoint boundary would have put the new public surface in a PR with no tests and stale docs.</li>
+        <li><strong>Version files deliberately not bumped — and the branch’s pre-claimed heading did not survive.</strong> The crate entries originally sat under a <code>v0.10.0</code> heading while <code>package.json</code> / <code>SDK_VERSION</code> stayed <code>0.9.0</code> (<code>/release</code> bumps on a <code>release/vX.Y.Z</code> branch; <code>d32fd9c</code> was the precedent). <code>dev</code> then actually published <code>v0.10.0</code> for the run-history paging work, so that heading was taken and the merge moved these entries under <code>## [Unreleased]</code> — the workspace rule and this repo’s older pattern (<code>1ed1dac</code>). <code>package.json</code> / <code>SDK_VERSION</code> are now <code>0.10.0</code>, inherited from dev’s release rather than set here. Bumping <code>SDK_VERSION</code> alone would still fail <code>tests/index.test.ts</code>. Both Codex and cubic flagged the original pre-claim; both were answered and resolved at the time.</li>
+      </ul>
+
+      <h3>Still deferred — each has its own wip note</h3>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Item</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td>Hosted exposure of <code>resolve</code> / <code>codegen</code> / <code>lint</code> / <code>format</code></td><td><a href="./hosted-exposure-crate-and-tools-routes.md"><code>hosted-exposure-crate-and-tools-routes.md</code></a></td></tr>
+            <tr><td><code>ValidationErrorItem</code> missing <code>missing_pipe_code</code> + <code>suggested_fix</code></td><td><a href="./validation-error-item-drift.md"><code>validation-error-item-drift.md</code></a></td></tr>
+            <tr><td>By-id (<code>method_id</code>) sugar</td><td><a href="./crate-routes-method-id-sugar.md"><code>crate-routes-method-id-sugar.md</code></a></td></tr>
+            <tr><td><code>mthds-js</code> <code>api-commands.ts:474</code> still hard-errors “no codegen routes yet” — stale</td><td><code>TODOS.md</code></td></tr>
+            <tr><td><code>pipelex-sdk-python</code> parity</td><td><code>TODOS.md</code></td></tr>
+            <tr><td>A helper that writes artifacts + lock to disk</td><td><code>TODOS.md</code> — deliberately not done</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Commands &amp; file map</h2>
+      <pre><code>make check      # lint + format + typecheck + build + depcruise
+make test       # unit suites (mock the fetch boundary)
+make test-e2e   # LIVE server, PIPELEX_E2E_BASE_URL (default http://localhost:8081)
+
+# Start a local runner for the e2e suite:
+cd ../pipelex-api &amp;&amp; .venv/bin/uvicorn api.main:app --port 8081</code></pre>
+      <p>
+        The e2e suite is what pins the <code>kind</code> / <code>target</code> vocabulary: <code>CodegenTarget</code> is a
+        hand-written mirror of a Python <code>StrEnum</code> in another repo, so a member the server stops serving is
+        invisible to the type-checker <em>and</em> to every mocked test. It covers all three targets exhaustively, and
+        cross-checks that <code>codegen</code>’s <code>crate_fingerprint</code> equals the <code>fingerprint</code>
+        <code>resolve</code> returns for the same closure.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Path</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td><code>src/client.ts</code></td><td><code>resolve()</code> / <code>codegen()</code>; the transport-options policy note on <code>requestExtension</code></td></tr>
+            <tr><td><code>src/models.ts</code></td><td><code>CrateRequestBase</code>, <code>Resolve*</code>, <code>Codegen*</code>; shared <code>CrateInvalidReport</code> / <code>GeneratedArtifact</code></td></tr>
+            <tr><td><code>tests/crate-routes.test.ts</code></td><td>Unit — envelope serialization, both verdict arms, what throws</td></tr>
+            <tr><td><code>tests/e2e/crate.e2e.ts</code></td><td>E2E — live crate, all three targets, fingerprint agreement, 422/501</td></tr>
+            <tr><td><code>docs/crate-routes.md</code></td><td>The consumer-facing story</td></tr>
+            <tr><td><code>TODOS.md</code></td><td>The executed plan, decisions log, review outcomes</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Server side, for checking wire shapes:
+        <code>pipelex-api/api/routes/pipelex/{resolve,codegen,crate_ops}.py</code>,
+        <code>pipelex-api/api/schemas/models.py</code>,
+        <code>pipelex/pipelex/codegen/emitters/target.py</code>.
+      </p>
+
+      <footer>
+        Companion to <a href="./crate-routes-resume.md"><code>crate-routes-resume.md</code></a> in the same directory —
+        that one carries the full probe script.
+      </footer>
+    </div>
+  </body>
+</html>

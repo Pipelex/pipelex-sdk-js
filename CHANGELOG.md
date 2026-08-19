@@ -1,5 +1,28 @@
 # Changelog
 
+## [v0.12.0] - 2026-08-19
+
+### Added
+
+- **Crate Routes API**: Added `resolve()` and `codegen()` to `PipelexApiClient` for the new `POST /v1/resolve` and `POST /v1/codegen` endpoints. `resolve()` returns the normalized library crate (MTHDS Library Crate Format) with fully qualified refs and materialized natives; `codegen()` projects a crate into stamped typed artifacts and a `codegen.lock` file (supporting the `types` kind and `ts-zod`, `python-pydantic`, or `python-structures` targets).
+- **Crate Route Types**: Exported new TypeScript models: `CrateRequestBase`, `ResolveRequest`, `ResolveValidReport`, `ResolveResponse`, `CodegenKind`, `CodegenTarget`, `CodegenRequest`, `CodegenValidReport`, and `CodegenResponse`.
+- **Crate Route Tests**: Added unit (`tests/crate-routes.test.ts`) and E2E (`tests/e2e/crate.e2e.ts`) suites validating the new crate routes against live servers.
+- **Crate Route Documentation**: Added `docs/crate-routes.md`, covering the shared envelope, the verdict discipline, and the codegen trust chain.
+
+### Changed
+
+- **Unified Request Envelopes**: `BuildRequestBase` now extends the new `CrateRequestBase`, unifying the `files` / `method_ref` closure selector across the build and crate route families to prevent structural drift. `docs/build-routes.md` documents the split.
+- **E2E Pipeline**: `make test-e2e` now runs a fast-failing `curl` preflight probe (against `/v1/version`) before handing off to Vitest, exiting immediately with a clear one-line error if the server is unreachable. The Makefile also loads `.env` variables (`PIPELEX_E2E_BASE_URL`, `PIPELEX_API_KEY`) via standard dotenv precedence and strips trailing slashes from `PIPELEX_E2E_BASE_URL` to avoid malformed probe URLs.
+- **Documentation**: Updated `README.md` and `docs/architecture.md` for the v0.11.0 pagination API, replacing outdated array-return examples with the `MethodPage`, `iterateMethods`, `RunPage`, and `iterateRuns` patterns.
+
+### Fixed
+
+- **E2E Reachability Probe**: Moved the reachability check from the origin-level `/health` endpoint to `/v1/version`, fixing a false-negative where hosted origins (which do not serve the bare runner `/health` route) were reported as unreachable.
+
+### Removed
+
+- **Lockfile**: Removed `pnpm-lock.yaml` from the repository.
+
 ## [v0.11.0] - 2026-08-18
 
 ### Changed
