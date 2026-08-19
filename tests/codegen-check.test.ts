@@ -230,6 +230,12 @@ describe("runCodegenCheck — drift categories", () => {
       // Both halves of `normalizeNewlines`. Line coverage cannot see inside its regex, so
       // narrowing it to /\r\n/g would keep every other test green while reporting a classic-CR
       // tree as fully hand-edited.
+      //
+      // The CRLF half is what `core.autocrlf=true` does to a committed tree on a Windows
+      // checkout, and what pipelex itself writes when it runs there. `pipelex codegen check`
+      // reads through Python universal-newline translation and calls such a tree current;
+      // verified against the real CLI, which reports "up to date" for exactly this mutation.
+      // Hashing raw bytes instead would redden a consumer's CI on a tree the CLI passes.
       const input = withEdit(withEdit(tsFixture(), "types.ts", rewrite), "binder.ts", rewrite);
 
       const report = await runCodegenCheck({ ...input, lockContent: rewrite(input.lockContent) });
@@ -238,21 +244,6 @@ describe("runCodegenCheck — drift categories", () => {
       expect(report.isCurrent).toBe(true);
     },
   );
-
-  it("does NOT report a CRLF-rewritten tree — the reference reader normalizes newlines", async () => {
-    // What `core.autocrlf=true` does to a committed tree on a Windows checkout, and what
-    // pipelex itself writes when it runs there. `pipelex codegen check` reads through
-    // Python universal-newline translation and calls such a tree current; verified against
-    // the real CLI, which reports "up to date" for exactly this mutation. Hashing raw bytes
-    // instead would redden a consumer's CI on a tree the CLI passes.
-    const crlf = (content: string): string => content.replace(/\n/g, "\r\n");
-    const input = withEdit(withEdit(tsFixture(), "types.ts", crlf), "binder.ts", crlf);
-
-    const report = await runCodegenCheck({ ...input, lockContent: crlf(input.lockContent) });
-
-    expect(report.drifts).toEqual([]);
-    expect(report.isCurrent).toBe(true);
-  });
 
   it("still catches a hand edit inside a CRLF tree", async () => {
     // Normalizing line endings must not blunt the check itself: only the endings are
@@ -516,6 +507,10 @@ describe("runCodegenCheck — no-verdict conditions", () => {
     ["drive-prefixed", tomlLiteral("C:/types.ts"), /absolute paths and drive prefixes/],
     ["digit-drive-prefixed", tomlLiteral("1:types.ts"), /absolute paths and drive prefixes/],
     ["symbol-drive-prefixed", tomlLiteral("_:types.ts"), /absolute paths and drive prefixes/],
+    // A basic string again, for a real U+2028. It is a separator, not a `\p{C}` control, so it
+    // reaches the drive check un-rejected — and `.` skips line terminators unless the regex is
+    // dotAll. Reverting that flag makes this row the only thing that goes red.
+    ["line-separator-drive-prefixed", '"\\u2028:types.ts"', /absolute paths and drive prefixes/],
     ["backslashed", tomlLiteral("sub\\types.ts"), /backslashes are not allowed/],
     // A basic string here, so TOML decodes the escape into a real U+0001 in the path.
     ["control-charactered", '"ty\\u0001pes.ts"', /control characters are not allowed/],

@@ -484,8 +484,13 @@ const CONTROL_CHARACTER = /\p{C}/u;
  * A Windows drive prefix as `PureWindowsPath` sees one: ANY single leading character followed
  * by `:`, not only an ASCII letter. `1:models.py` and `_:models.py` are drives to the reference
  * and were accepted here, making this validator the permissive side of the pair.
+ *
+ * The `s` flag is load-bearing, not decoration: without it `.` skips the line terminators, and
+ * U+2028 / U+2029 are separators rather than `\p{C}` controls, so they sail past the control
+ * check above and would be the last two drive prefixes this side still accepted. (`\n` and `\r`
+ * are the other characters `.` excludes, and those the control check already rejects.)
  */
-const WINDOWS_DRIVE = /^.:/u;
+const WINDOWS_DRIVE = /^.:/su;
 
 /**
  * Validate one canonical relative path: the safety rules, without the suffix rule.
