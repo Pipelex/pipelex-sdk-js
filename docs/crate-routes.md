@@ -31,7 +31,7 @@ Supplying **neither** selector or **both** is a request-shape `422`. The SDK doe
 There is no `method_id` sugar here (unlike `buildInputs`). To work from a stored method, expand it first — one line, and it is exactly what the sugar would do internally:
 
 ```ts
-const crate = await client.resolve({ files: await client.getMethodClosure(methodId) });
+const result = await client.resolve({ files: await client.getMethodClosure(methodId) });
 ```
 
 ## `resolve` — the normalized crate

@@ -73,6 +73,14 @@ So the request dies at the authorizer *before routing*. That pins the current bl
 
 > **Dev was never a workaround.** Dev and prod share the allowlist. The instinct on hitting the prod 403 is to point `PIPELEX_BASE_URL` at dev; that fails identically. This is called out in the code comment, the doc, and the changelog, because the original wording named only `api.pipelex.com` and invited exactly that inference.
 
+### Re-verification — 2026-08-11: still blocked
+
+Re-ran the step-1 probe below against dev **and** prod. Unchanged: `version()` and `validate()` succeed on both origins, while `resolve()` and all three `codegen()` targets answer `403 Forbidden` with **no `request_id`** — the gateway-authorizer signature, not an application refusal. The hosted stack has moved on (`pipelex-hosted@0.2.6`, released, vs `0.2.6rc7` in August's measurement) **without** the allowlist being touched, which is the point: shipping hosted releases does not drift this gap shut on its own. It needs the deliberate `pipelex-api-infra` + `pipelex-platform` change.
+
+> **A local runner serving the routes is not the unblock, and is easy to misread as one.** Every caveat already says "served by any `pipelex-api` runner" — local support has been the baseline since the branch landed, so a fresh local runner answering `resolve` / `codegen` changes nothing about hosted reachability. The trigger for the checklist below is a **200 from a `*.pipelex.com` origin**, nothing less. Verified green on `http://localhost:8092` (`pipelex-api@0.11.1`) the same day, including all three codegen targets and the resolve↔codegen fingerprint agreement — that is the expected state, not progress.
+
+**Unrelated drift spotted while probing, worth its own look:** the local runner reports `protocol_version` **0.6.0** while both hosted environments report **0.1.0**. Not a crate-routes issue and not chased here.
+
 ### Update — 2026-08-13: dev SHIPPED, prod still blocked, `lint`/`format` left behind
 
 The allowlist change landed on dev. Measured through the SDK, same key, same run:
@@ -92,15 +100,7 @@ The allowlist change landed on dev. Measured through the SDK, same key, same run
 
 **Caveats were reworded, not deleted.** The checklist below assumed full exposure and said "delete"; partial exposure makes that wrong in the opposite direction — the old wording ("not reachable on any hosted environment, dev included") would now steer a developer away from the one origin that works. Updated in `src/client.ts` (both sections), `docs/crate-routes.md`, `CHANGELOG.md`, `TODOS.md` and `hosted-exposure-crate-and-tools-routes.md`. **When prod ships, the remaining edit is small: drop the prod row from each, and keep the `lint`/`format` caveat until those are allowlisted too.**
 
-**Checklist step 3 is not executable as written.** `PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com make test-e2e` fails before any test runs: the suites' `beforeAll` preflight calls `client.health()` → `GET /health`, which is a bare-runner endpoint the hosted gateway does not serve (`404`), so the suite aborts with "No pipelex-api server reachable". Pointing the e2e suite at hosted first requires changing that preflight to a route hosted actually serves (`version()`). Not done here — it is a test-infrastructure change, not part of this note's scope.
-
-### Re-verification — 2026-08-11: still blocked
-
-Re-ran the step-1 probe below against dev **and** prod. Unchanged: `version()` and `validate()` succeed on both origins, while `resolve()` and all three `codegen()` targets answer `403 Forbidden` with **no `request_id`** — the gateway-authorizer signature, not an application refusal. The hosted stack has moved on (`pipelex-hosted@0.2.6`, released, vs `0.2.6rc7` in August's measurement) **without** the allowlist being touched, which is the point: shipping hosted releases does not drift this gap shut on its own. It needs the deliberate `pipelex-api-infra` + `pipelex-platform` change.
-
-> **A local runner serving the routes is not the unblock, and is easy to misread as one.** Every caveat already says "served by any `pipelex-api` runner" — local support has been the baseline since the branch landed, so a fresh local runner answering `resolve` / `codegen` changes nothing about hosted reachability. The trigger for the checklist below is a **200 from a `*.pipelex.com` origin**, nothing less. Verified green on `http://localhost:8092` (`pipelex-api@0.11.1`) the same day, including all three codegen targets and the resolve↔codegen fingerprint agreement — that is the expected state, not progress.
-
-**Unrelated drift spotted while probing, worth its own look:** the local runner reports `protocol_version` **0.6.0** while both hosted environments report **0.1.0**. Not a crate-routes issue and not chased here.
+**Checklist step 3 was not executable when this update was written — it is now.** `PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com make test-e2e` used to fail before any test ran: the suites' `beforeAll` preflight called `client.health()` → `GET /health`, a bare-runner endpoint the hosted gateway does not serve (`404`), so the suite aborted with "No pipelex-api server reachable" against a perfectly live origin. Fixed on this branch (`a96c211`, plus the trailing-slash normalization in `49feca9`, so a `PIPELEX_E2E_BASE_URL` ending in `/` can no longer make the probe `//v1/version` and fake an outage): the Makefile preflight and all three suites' `beforeAll` now probe `version()` → `GET /v1/version`, the one unauthenticated route a bare runner and a hosted origin both serve. A hosted run still will not be fully green — `lint` / `format` 403 on both origins — so a clean sweep of all three suites still means a local runner.
 
 ---
 
