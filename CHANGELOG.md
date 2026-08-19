@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.13.0] - 2026-08-20
 
 ### Added
 
@@ -9,17 +9,18 @@
 - **Tree-walk filter**: Exported `isStampableArtifactPath` and `STAMPABLE_ARTIFACT_SUFFIXES`, mirrors of pipelex's `STAMPABLE_SUFFIXES`, so a consumer's directory walk picks up exactly the files the check considers. An incomplete walk yields a false `isCurrent`, so filtering identically is part of the contract.
 - **`codegen.lock` format version**: `runCodegenCheck` now reads the `lock_version` key pipelex writes at the head of every lock, mirroring the reference's evolution policy. A lock with no key is version 1 by definition, so every lock written before the field existed keeps working untouched; a version this build does not know is refused with a message naming the version found and which side to upgrade. The version is read **before** the key set is validated, so a lock from a newer codegen reports its version rather than an opaque complaint about whichever key it happens to carry — which is the whole reason the field exists, since the reader is otherwise strict enough to turn any added key into a hard no-verdict.
 - **Dependency**: Added `smol-toml` (`^1.6.0`) to `dependencies` for parsing `codegen.lock`. It installs no new package — `mthds` already depends on the same range, so the two dedupe to one copy.
-- **Tests**: Added `tests/codegen-check.test.ts` with vendored real codegen output under `tests/fixtures/codegen/` (artifacts and lock from an actual `pipelex codegen types` run, committed beside their source bundle), and extended `tests/e2e/crate.e2e.ts` to run the check over artifacts a live server just emitted — verbatim, then mutated once per drift category, for both a TypeScript and a Python target.
-- **Documentation**: `docs/crate-routes.md` gains an offline-check section covering the algorithm, the drift taxonomy, the caller's obligations, what the check deliberately does not verify, and the two places it knowingly differs from the CLI.
+- **Tests**: Added `tests/codegen-check.test.ts` with vendored real codegen output under `tests/fixtures/codegen/` (artifacts and lock from an actual `pipelex codegen types` run, committed beside their source bundle), and extended `tests/e2e/crate.e2e.ts` to run the check over artifacts a live server just emitted — verbatim, then mutated once per drift category, for both a TypeScript and a Python target. A `.gitattributes` rule (`tests/fixtures/** -text`) freezes those bytes: the fixtures exist to pin hashes, and a line-ending rewrite on checkout would invalidate every one of them on the platforms most likely to run CI.
+- **Documentation**: `docs/crate-routes.md` gains an offline-check section covering the algorithm, the drift taxonomy, the caller's obligations, what the check deliberately does not verify, and the two places it knowingly differs from the CLI. `docs/architecture.md` gains `codegen-check.ts` in the module map, records why the check is a standalone pure helper rather than a client method, and describes the two-layer testing strategy behind it; `README.md` points at it from the overview.
+
+### Changed
+
+- **Packaging**: `package.json` now declares `"sideEffects"`, so bundlers can tree-shake unused modules out of a consumer's client bundle. It is the array form rather than a blanket `false`, naming `./dist/hooks/claude-mthds-check.js` — the Claude Code hook entry self-executes at module scope (`main()` … `process.exit(0)`) and ships in the tarball, so a blanket `false` would be a false claim about the published package. Every module reachable from the `.` export is genuinely side-effect-free.
+- **Repository hygiene**: `.gitignore` now ignores `.env` and every `.env.*` variant, keeping `!.env.example` tracked, in place of the lone `.env.local` rule. `make test-e2e` reads `PIPELEX_E2E_BASE_URL` and `PIPELEX_API_KEY` from `.env`, so the very file the E2E loop asks you to create was one `git add -A` away from committing an API key.
 
 ### Fixed
 
 - **An uncommented line inside a stamp header is now `hand-edited`**, closing a gap where an injected statement verified as pristine. Every line the emitter writes between the stamp fences carries the comment prefix, so anything else there was injected by hand — and the content hash covers only the body *below* the fence, so such a line changed nothing the check looked at and the file reported current. The parser now rejects a header region containing any unprefixed line, matching the reference. The line-boundary set this gate splits on is load-bearing rather than incidental: U+2028 and U+2029 terminate a `//` comment in ECMAScript, so a narrower split would read an injected statement as one commented line while the JavaScript engine reads two and runs it.
 - **Stamp-header parsing now matches Python's text rules**, closing four places where `runCodegenCheck` and `pipelex codegen check` reached different verdicts on the same bytes. The header is split on the boundaries `str.splitlines()` breaks on rather than `\n` alone (a U+2028 inside a field value truncates it upstream, so the SDK used to report a tree current that the CLI reported `hand-edited`, and a header whose lines were joined by one flipped the other way); field values are stripped with Python's `str.isspace()` set rather than JavaScript's `trim()`, which strips U+FEFF where Python does not and skips U+001C-U+001F and U+0085 where Python does not; and a Windows drive prefix is now any single leading character before `:`, as `PureWindowsPath` sees one, so `1:models.py` and `_:models.py` are rejected like the reference rejects them instead of being accepted. Each is pinned by a test that fails without it.
-
-### Changed
-
-- **Packaging**: `package.json` now declares `"sideEffects"`, so bundlers can tree-shake unused modules out of a consumer's client bundle. It is the array form rather than a blanket `false`, naming `./dist/hooks/claude-mthds-check.js` — the Claude Code hook entry self-executes at module scope (`main()` … `process.exit(0)`) and ships in the tarball, so a blanket `false` would be a false claim about the published package. Every module reachable from the `.` export is genuinely side-effect-free.
 
 ## [v0.12.0] - 2026-08-19
 
