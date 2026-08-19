@@ -1,6 +1,6 @@
 # Next — pure offline codegen check (`runCodegenCheck`)
 
-Status: **built, tested, documented — release pending** (Checkpoint 2). Reviewed 2026-08-19 against the reference implementation; the review's findings are folded in below, so this section is meant to be executable from a cold start with no prior session context. Everything below the horizontal rule is the completed `resolve()`/`codegen()` plan (PR [#24](https://github.com/Pipelex/pipelex-sdk-js/pull/24)), kept for context — its decisions log and follow-ups are still the reference for this work.
+Status: **built, tested, documented — release pending** (Checkpoint 3). Reviewed 2026-08-19 against the reference implementation; the review's findings are folded in below, so this section is meant to be executable from a cold start with no prior session context. Everything below the horizontal rule is the completed `resolve()`/`codegen()` plan (PR [#24](https://github.com/Pipelex/pipelex-sdk-js/pull/24)), kept for context — its decisions log and follow-ups are still the reference for this work.
 
 ## Why
 
