@@ -1,6 +1,6 @@
 # PR #31 review triage — deferred items
 
-Triage of the unresolved `chatgpt-codex-connector` and `cubic-dev-ai` review threads on [PR #31](https://github.com/Pipelex/pipelex-sdk-js/pull/31) (the `runCodegenCheck` offline drift check). Three documentation corrections were fixed on the branch, one finding was a false positive, and items 1 and 2 are confirmed but deferred — their PR threads are deliberately left **open**. Items 3 onward were added later, by a full `/review` pass over the same branch; they have no PR thread and are introduced by their own heading below. A final section collects the follow-ups that belong to **`pipelex`** rather than to this SDK — none of them filed upstream yet, including the one item 1 has been asking for since the first round.
+Triage of the unresolved `chatgpt-codex-connector` and `cubic-dev-ai` review threads on [PR #31](https://github.com/Pipelex/pipelex-sdk-js/pull/31) (the `runCodegenCheck` offline drift check). Three documentation corrections were fixed on the branch, one finding was a false positive, and items 1 and 2 are confirmed but deferred — their PR threads are deliberately left **open**. Items 3 onward were added later, by a full `/review` pass over the same branch; they have no PR thread and are introduced by their own heading below. A final section collects the follow-ups that belong to **`pipelex`** rather than to this SDK. **Status as of 2026-08-19: all five have landed upstream** on `pipelex`'s `feature/Codegen-followups`, committed but unpushed and unreleased — see [`upstream-codegen-followups-mirror.md`](upstream-codegen-followups-mirror.md) for what each one now requires of this repo, and in which direction it travels.
 
 Both deferrals turn on the same invariant, so it is worth stating once. `src/codegen-check.ts` is a deliberate mirror of pipelex's `pipelex/codegen/`, and its module header (`src/codegen-check.ts:12-13`) makes that load-bearing: *"A verdict computed here must equal the one `pipelex codegen check` computes over the same bytes — including the drift detail strings, which are kept verbatim so a consumer switching between the CLI and this SDK reads the same report."* Where the SDK already matches the reference, tightening it unilaterally is not a fix — it makes a consumer's CI go red on `@pipelex/sdk` while the CLI calls the same tree current, which is the exact divergence the file already bends over backwards to avoid for CRLF (`src/codegen-check.ts:479-490`).
 
@@ -81,6 +81,8 @@ it("reports an uncommented line inside the stamp header as `hand-edited`", async
 ```
 
 **Next action: file the follow-up on `pipelex`, which owns the reference.** Both PR threads stay open until it lands.
+
+**Update (2026-08-19): it has landed upstream** — `parse_stamped` now rejects any header line without the comment prefix, and the `else raw_line.strip()` fallback is gone. The threads stay open one more beat, because the tightening must *ship* before this module mirrors it: a released SDK stricter than the released CLI reddens a consumer's CI on a tree `pipelex codegen check` still calls current.
 
 ## 2. Drift ordering diverges from the reference CLI
 
@@ -225,17 +227,21 @@ Low value individually; grouped so a future pass can sweep them together.
 
 # Upstream follow-ups — `pipelex` (Python), and one for `docs/specs/`
 
-Everything above is SDK-side. These are the items this branch's work surfaced that **`pipelex` owns**, collected here because that is where the analysis is — the same convention item 1 already follows by carrying a ready-to-apply `stamp.py` patch. **None of them has been filed as an issue or PR on `pipelex` yet.** Verified against `pipelex 0.46.4` (`dev` at `d28e703e3`), the same version the vendored fixtures came from.
+Everything above is SDK-side. These are the items this branch's work surfaced that **`pipelex` owns**, collected here because that is where the analysis is — the same convention item 1 already follows by carrying a ready-to-apply `stamp.py` patch. **Status (2026-08-19): all five have landed upstream**, on `pipelex`'s `feature/Codegen-followups` — committed, unpushed, unreleased. The analysis below is kept as written, because it is the record of *why* each was filed; the per-item status lines say what changed. What this repo must now do, and the release ordering that governs it, is in [`upstream-codegen-followups-mirror.md`](upstream-codegen-followups-mirror.md). Originally verified against `pipelex 0.46.4` (`dev` at `d28e703e3`), the same version the vendored fixtures came from.
 
 U3 is the one with real blast radius; the rest are correctness tidiness.
 
 ## U1. `_parse_fields` accepts uncommented lines inside the stamp header
 
-Already written up as item 1 above, including the reproduction, the reasoning for why the SDK must **not** fix it unilaterally, and the two-line patch for both repos. Restated here only so the upstream list is complete. The stated next action — file it on `pipelex`, land there, then follow in the SDK — is still outstanding, and the two PR threads stay open until it does.
+Already written up as item 1 above, including the reproduction, the reasoning for why the SDK must **not** fix it unilaterally, and the two-line patch for both repos. Restated here only so the upstream list is complete.
+
+**Landed upstream.** The gate is in, the dead fallback is gone, and the reproduction is a test at both the parser and check levels. The SDK follows *after* a pipelex release, never before. One second-order effect came with it: upstream's regenerator uses the same parse to decide whether it owns a destination, so a file with an injected header line is now unowned — the check calls it an orphan advising *remove or regenerate* while regeneration refuses to overwrite it. The refusal was kept deliberately and pinned by a test.
 
 ## U2. `run_codegen_check`'s two loops sort by different rules
 
 Written up as item 2b above. `_check_locked_artifacts` iterates `sorted(lock.hash_by_path().items())`, a plain `str` sort over the whole path; `_find_orphans` iterates `_iter_stampable_files`, a pre-order DFS doing `sorted(directory.iterdir())` at each level, which is a path-*component* sort. For a tree holding a `models/` directory beside a `models.py`, the two halves of one report are ordered by different rules. That is an inconsistency in the reference itself, not an SDK divergence, so upstream owns whether to unify it — and which way.
+
+**Resolved upstream, in this module's favour.** Both loops now use the plain full-string sort — `_find_orphans` sorts its result instead of returning walk order — and the ordering is written down as a contract: every locked-artifact drift first, then every orphan, each group by path. **Nothing to do here**, and item 2b above is closed: `models/foo.py` vs `models.py` now agrees between the two implementations with no change to this module. Only 2a (UTF-16 code units vs code points) survives, on the same deferral grounds as before.
 
 ## U3. Adding any key to `codegen.lock` is a hard break for every pinned client
 
@@ -245,6 +251,8 @@ The consequence is the part nobody has decided. Because an unknown key is a **no
 
 Upstream owns the format, so upstream owns the choice. Roughly: add a `lock_version` (or `format`) field now, while the only two readers are ours and the cost is zero; or write down that the lock is closed and additions are breaking, so a change to it is understood to require a coordinated release across `pipelex`, `@pipelex/sdk`, and any future `pipelex-sdk-python` mirror. Either is fine. Silently discovering it during a release is not.
 
+**Landed upstream, and it inverts the usual direction — this is the blocker.** Every lock now opens with `lock_version = 1`, and the reader refuses a version it does not know, reading the version *before* the key set so a future lock is diagnosed by its version rather than by whichever new key it carries first. Because this module rejects unknown lock keys, **an `@pipelex/sdk` that tolerates the key must be published before the pipelex release that writes it** — otherwise the very release that fixes U3 causes the failure U3 describes. The four rules to mirror are in [`upstream-codegen-followups-mirror.md`](upstream-codegen-followups-mirror.md).
+
 ## U4. On Windows, artifacts are written CRLF while their recorded hashes are over LF
 
 `save_text_to_path` is `path.write_text(text, encoding="utf-8")` (`pipelex/tools/misc/file_utils.py:80`). With the default `newline=None`, `write_text` translates every `\n` to `os.linesep`, so on Windows the emitted artifact is CRLF on disk — while `compute_content_hash` hashed the in-memory string, which is LF. The verdict still comes out right, because `load_text_from_path` reads back through universal-newline translation; that asymmetry is exactly what this branch discovered and why `runCodegenCheck` normalizes newlines rather than hashing raw bytes.
@@ -253,11 +261,15 @@ What it does break is a claim `apply_stamp`'s own docstring makes: *"a producer 
 
 Cheap fix if taken: pass `newline="\n"` at the write site so emitted artifacts are LF on every platform and the bytes match the hash that was recorded for them. Consumers already recommend a `.gitattributes` entry for the same tree, so this mostly removes a surprise rather than changing a contract.
 
+**Landed upstream**, and fixed globally in `save_text_to_path` rather than only at the codegen write site, so every product text artifact is LF on every platform. **Invisible to this module**, which already normalizes newlines before hashing.
+
 ## U5. `json.loads` accepts `NaN` and `Infinity` in the stamp's `options`
 
 `_parse_options` uses a bare `json.loads`, which accepts the non-standard `NaN`, `Infinity` and `-Infinity` literals. No conformant JSON parser does, JavaScript's included — so a stamp carrying one is current to `pipelex codegen check` and `hand-edited` to `runCodegenCheck`. This is the one differential where the SDK is the stricter side, and it is unreachable today because `options` is typed `dict[str, str]` and `json.dumps` will never emit those literals for string values.
 
 Worth closing anyway, since it costs one argument: `json.loads(options_raw, parse_constant=_reject)`. The stamp header is a cross-language interchange format, and it should not be able to contain something only Python can read.
+
+**Landed upstream** via `parse_constant`. **Nothing to do here** — `JSON.parse` already refuses these literals, which is what made this the one differential where the SDK was the stricter side; that gap is now closed from the other end.
 
 ## S1. The spec does not pin what a second implementation actually needs
 
