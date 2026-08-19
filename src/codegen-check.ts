@@ -196,7 +196,12 @@ export interface CodegenDrift {
 export interface CodegenTreeFile {
   /** Relative to the lock's directory, forward slashes, canonical — no `./`, no `..`. */
   path: string;
-  /** The file's text, byte-exact: no CRLF normalization, no BOM stripping, no reformatting. */
+  /**
+   * The file's text as read — no BOM stripping, no re-encoding, no reformatting.
+   *
+   * Line endings are the one thing normalized for you (`\r\n` and lone `\r` become
+   * `\n`), mirroring the reference reader — see {@link runCodegenCheck}.
+   */
   content: string;
 }
 

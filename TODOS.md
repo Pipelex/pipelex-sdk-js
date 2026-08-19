@@ -1,6 +1,6 @@
 # Next — pure offline codegen check (`runCodegenCheck`)
 
-Status: **planned, not started**. Reviewed 2026-08-19 against the reference implementation; the review's findings are folded in below, so this section is meant to be executable from a cold start with no prior session context. Everything below the horizontal rule is the completed `resolve()`/`codegen()` plan (PR [#24](https://github.com/Pipelex/pipelex-sdk-js/pull/24)), kept for context — its decisions log and follow-ups are still the reference for this work.
+Status: **built, tested, documented — release pending** (Checkpoint 2). Reviewed 2026-08-19 against the reference implementation; the review's findings are folded in below, so this section is meant to be executable from a cold start with no prior session context. Everything below the horizontal rule is the completed `resolve()`/`codegen()` plan (PR [#24](https://github.com/Pipelex/pipelex-sdk-js/pull/24)), kept for context — its decisions log and follow-ups are still the reference for this work.
 
 ## Why
 
@@ -127,16 +127,18 @@ export class CodegenLockError extends Error {}
 
 **Checkpoint 1** — ✅ `make check` + `make test` green (all unit suites, fixtures committed). The port was verified differentially against the real `pipelex codegen check` (v0.46.4) on identical trees: every drift category, the hand-edit precedence, the locked-then-orphan ordering, and the CRLF case all agree. Decisions recorded below. Phase 3 (e2e against a live `pipelex-api`) and Phase 4 (docs, changelog, release) are next.
 
-### Phase 3 — e2e
+### Phase 3 — e2e — DONE
 
-- [ ] Extend `tests/e2e/crate.e2e.ts`: call `codegen()` live, run `runCodegenCheck` over the returned `artifacts` + `lock` verbatim → current (and assert `crateFingerprint` equals the response's `crate_fingerprint`); then mutate in-memory per category. This is what pins the hash and grammar port against the server's real stamp and lock bytes, the same way the live run pinned the `kind`/`target` vocabulary.
-- [ ] Do it for a `.py` target as well as `ts-zod`, since the suite already calls all three — that pins the `#` prefix against real server bytes too.
+- [x] Extend `tests/e2e/crate.e2e.ts`: call `codegen()` live, run `runCodegenCheck` over the returned `artifacts` + `lock` verbatim → current (asserting `crateFingerprint` / `engineVersion` equal the response's `crate_fingerprint` / `engine_version`); then mutate in-memory per category. Added as a `describe.each` block, plus a property test that every artifact the server emits is one `isStampableArtifactPath` accepts — an artifact type outside that set would be invisible to a consumer's walk and silently unchecked.
+- [x] Do it for a `.py` target as well as `ts-zod` — one flavor per comment prefix, so the `#` branch is pinned against real server bytes too.
 
-### Phase 4 — docs + changelog + release
+### Phase 4 — docs + changelog — DONE (release still open)
 
-- [ ] Extend `docs/crate-routes.md` per the decision above: the algorithm, the drift taxonomy, the caller contract (unreformatted text, the complete walk, the newline-normalization rule and why it exists), and what the check deliberately does not verify. **Do not write the CRLF warning the plan originally called for — it was wrong; see the decisions log.**
-- [ ] `docs/architecture.md` surface list + the new module; `CHANGELOG.md` `[Unreleased]` Added (the helper, its types, and the new `smol-toml` dependency); README status line.
+- [x] Extend `docs/crate-routes.md`: a new "The offline check — `runCodegenCheck`" section covering the algorithm, the drift taxonomy (with the precedence and orphan-predicate properties called out as test-pinned), the caller's obligations, what the check deliberately does not verify, and what it throws. The CRLF bullet states the **corrected** story — normalization is built in, `.gitattributes` is diff hygiene, not correctness.
+- [x] `docs/architecture.md`: the `codegen-check.ts` module entry, the crate-routes surface bullet, and both testing paragraphs (the vendored-fixture rationale and what the live check pass adds). `CHANGELOG.md` `[Unreleased]` Added + Changed. README status section.
 - [ ] Release (via the `/release` skill, which owns the version bump), so `pipelex-starter-js` can pin its range to the version carrying the helper and proceed with its Phase 1.
+
+**Checkpoint 2** — ✅ `make check` + `make test` green, and `make test-e2e` green against a live local `pipelex-api` (`pipelex-api@0.14.0` on `pipelex 0.46.4`) — every e2e suite passes, including the new offline-check block. Docs, changelog and README are updated. The only thing left in the plan is the release itself, which is a deliberate hand-off: it is an outward-facing action the `/release` skill owns.
 
 ## Decisions log
 
@@ -151,6 +153,14 @@ export class CodegenLockError extends Error {}
 - **Lock shape validation is strict (`extra="forbid"` mirrored); the stamp's projection vocabulary is not.** An unknown key in the lock is a malformed lock — the lock is Pipelex-owned, written by a versioned engine, and an unrecognized shape means the two disagree about what the hashes cover. The stamp is the opposite case: pipelex validates `kind` / `target` against its own enums, which cannot lag its own emitter, while an SDK copy *can* — so the port requires the projection line to be present and well-formed but does not check its values against `CodegenKind` / `CodegenTarget`. Rejecting an unknown-but-valid future `kind` would report every artifact as `hand-edited`. For today's vocabulary the two behave identically.
 - **The suffix rule applies to lock paths only, not to supplied tree paths.** Both go through the canonical-path rules (empty / backslash / control character / absolute / drive prefix / `.` / `..`), but a tree file of a non-stampable type is legitimately present and is skipped, not rejected — that is what lets a consumer park a `sources.json` sidecar beside the lock, and the TODO's own "a non-stampable suffix is ignored" test would otherwise contradict its "run input paths through `validate_artifact_path`" line.
 - **Orphans are sorted by path string.** Upstream's order is a sorted pre-order directory walk, which differs from a plain path sort only when a directory name is a prefix of a sibling file name (`a/b.ts` vs `a.ts`). The helper takes a flat list and has no directory structure to walk, so the string sort is the honest deterministic rule.
+
+**Checkpoint 2** (Phases 3–4):
+
+- **The stamp mutators moved to `tests/helpers/codegen-stamp.ts`, shared by the unit and E2E suites.** They encode the one distinction that decides which category a mutation reaches — `handEdit` leaves the stamp claiming the old body (`hand-edited`), `regenerate` rewrites the stamp to agree with the new one (`modified`, and the only way to get there). Two private copies could drift, and the drifted copy would quietly stop exercising its category while still passing green. The helper hashes through `node:crypto` on purpose, so the suites cross-check it against the module's WebCrypto implementation.
+- **The live check block covers one target per comment prefix, not all three.** `python-structures` shares `python-pydantic`'s `#` prefix, so a third pass would re-exercise the same parser branch for another round-trip; the pre-existing exhaustive `target` loop is what guards the vocabulary, and it still calls all three.
+- **The live artifacts verify as current on the first try, for both flavors.** The lock header's `crate_fingerprint` / `engine_version` equal the fields the route reports beside it, and `codegen()`'s response feeds `runCodegenCheck` with no mapping — `GeneratedArtifact` and `CodegenTreeFile` are structurally identical, and the e2e call site is what would stop compiling if either drifted.
+- **A stale TSDoc line was corrected while writing the docs:** `CodegenTreeFile.content` still said "byte-exact: no CRLF normalization", which the implemented newline normalization contradicts. It now says "as read", with the line-ending exception named.
+- **`docs/*.md` is deliberately NOT run through Prettier.** Markdown is outside this repo's `format` globs, so `prettier --write` on a doc reflows every existing table to its own column alignment and buries a real change in cosmetic churn. Format new markdown by hand to match what is already there.
 
 ---
 

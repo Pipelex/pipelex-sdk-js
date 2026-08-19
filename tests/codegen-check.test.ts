@@ -15,7 +15,6 @@
  * fixture exists to pin.
  */
 
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -25,6 +24,13 @@ import {
   STAMPABLE_ARTIFACT_SUFFIXES,
 } from "../src/codegen-check.js";
 import type { CodegenCheckInput, CodegenTreeFile } from "../src/codegen-check.js";
+import {
+  handEdit,
+  regenerate,
+  splitStamp,
+  STAMP_BEGIN,
+  STAMP_END,
+} from "./helpers/codegen-stamp.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────
 
@@ -56,35 +62,6 @@ function pyFixture(): CodegenCheckInput {
 }
 
 // ── Tree mutators ────────────────────────────────────────────────────────
-
-const STAMP_BEGIN = ">>> pipelex-codegen-stamp >>>";
-const STAMP_END = "<<< pipelex-codegen-stamp <<<";
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-/** The stamp block (through its end-marker line) and the body it protects. */
-function splitStamp(content: string, commentPrefix = "//"): { header: string; body: string } {
-  const endLine = `${commentPrefix} ${STAMP_END}\n`;
-  const cut = content.indexOf(endLine) + endLine.length;
-  return { header: content.slice(0, cut), body: content.slice(cut) };
-}
-
-/** A hand edit: the body changes, the stamp is left behind saying otherwise. */
-function handEdit(content: string, newBody: string, commentPrefix = "//"): string {
-  return splitStamp(content, commentPrefix).header + newBody;
-}
-
-/**
- * A legitimate regeneration against a NEWER crate: body and stamp agree with each
- * other, and only the lock is stale. This is the only way to reach `modified` — a
- * plain body edit trips the stamp check first and reports `hand-edited`.
- */
-function regenerate(content: string, newBody: string, commentPrefix = "//"): string {
-  const { header } = splitStamp(content, commentPrefix);
-  return header.replace(/content_hash: [0-9a-f]+/, `content_hash: ${sha256(newBody)}`) + newBody;
-}
 
 /** The same tree with one file's content replaced. */
 function withEdit(

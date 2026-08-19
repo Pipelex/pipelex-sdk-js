@@ -78,7 +78,7 @@ await writeFile(result.lock_filename, result.lock); // "codegen.lock", beside th
 
 `crate_fingerprint` and `engine_version` say what the artifacts were generated _from_ — the crate `resolve` would have returned for the same closure, and the pipelex engine that emitted them.
 
-The SDK stays transport-only: it hands you the artifacts and does not write files for you.
+The SDK stays transport-only: it hands you the artifacts and does not write files for you. Verifying a committed tree later is the other half of the chain, and that half needs no server at all — see [the offline check](#the-offline-check--runcodegencheck) below.
 
 ### `pipe_ref` is rejected, not ignored
 
@@ -102,3 +102,75 @@ Only a **no-verdict** condition, as the typed `ApiResponseError` — branch on i
 | `5xx`         | Server fault.                                                                                               |
 
 Note the split, same as the build routes: a bad **closure** is a 200 verdict; a bad **request** throws.
+
+(The offline check below is not a route and throws its own `CodegenLockError` instead — it never reaches the network.)
+
+## The offline check — `runCodegenCheck`
+
+A consumer that commits the generated tree needs a CI gate proving it is still what the method resolves to. That gate is `runCodegenCheck`, and it is **pure**: no filesystem, no network, no API key, no `PipelexApiClient`. You walk your own tree and hand in the text; the SDK owns the verdict.
+
+The reason it is a separate, engine-free step is the same reason there is no server-side check route. Regeneration is a **dev action** — it needs the engine, so it is `codegen` above. The check is a **CI action** — it needs only a hash function. Keeping them apart is what stops an upstream template improvement from reddening a consumer's CI on a tree nobody touched.
+
+```ts
+import { isStampableArtifactPath, runCodegenCheck } from "@pipelex/sdk";
+
+const report = await runCodegenCheck({
+  lockContent: await readFile("src/generated/echo/codegen.lock", "utf8"),
+  // Every file under the lock's directory, recursively, with paths relative to it.
+  files: await readTree("src/generated/echo", isStampableArtifactPath),
+});
+
+if (!report.isCurrent) {
+  for (const drift of report.drifts) {
+    console.error(`${drift.category}: ${drift.path} — ${drift.detail}`);
+  }
+  process.exit(1);
+}
+```
+
+A `codegen()` response feeds straight in with no mapping — `GeneratedArtifact` and `CodegenTreeFile` are structurally identical on purpose, so `runCodegenCheck({ lockContent: result.lock, files: result.artifacts })` type-checks and reports `isCurrent`. That is worth doing right after a regeneration, before writing anything to disk.
+
+The function is `async` because it hashes through **WebCrypto** (`crypto.subtle`) rather than `node:crypto`, which keeps the barrel safe to import from a browser bundle. One caveat that never bites a CI script but should not surprise anyone: `crypto.subtle` is secure-context-only, so a browser page must be served over https (or localhost).
+
+### The algorithm
+
+Each locked artifact is located in the supplied tree and the hash of the body **below its stamp** is recomputed. Absent is a drift; a body that no longer hashes to what the stamp or the lock records is a drift. Then, in the other direction, a stamped file the lock does not track is a drift — the stale-artifact class a per-file stamp can never catch on its own, and the reason the lock rides along with the artifacts at all.
+
+The verdict is a structured report, never an exit code alone: `drifts` enumerates the drifting artifacts by category, and `isCurrent` is exactly `drifts.length === 0`. Drift order is deterministic — locked-artifact drifts first, then orphans, each sorted by path — so a consumer can print it, snapshot it, or diff two runs.
+
+The report also carries `crateFingerprint` and `engineVersion`, read off the lock header. The check itself never compares them against anything (that would need the engine), but surfacing them is what lets a caller ask the question the check deliberately does not: _is this committed tree even from the crate my method resolves to today?_ — a live `codegen()` response's `crate_fingerprint` is the value to compare against.
+
+### The drift taxonomy
+
+| Category      | What it means                                                                                         |
+| ------------- | ----------------------------------------------------------------------------------------------------- |
+| `missing`     | Listed in the lock, absent from the tree you handed in.                                               |
+| `modified`    | Present, stamp self-consistent, but the body no longer matches the **locked** hash — regenerate.      |
+| `hand-edited` | Present, but its stamp is gone, unparseable, or disagrees with the body below it — someone edited it. |
+| `orphan`      | A stamped file the lock does not track — yesterday's artifact, left behind. Remove or regenerate.     |
+
+Two properties of that table are load-bearing and are pinned by tests:
+
+- **At most one drift per locked path, and `hand-edited` outranks `modified`.** A hand edit trips both conditions; reporting it twice would print the same file under two contradictory categories.
+- **An orphan only has to _look_ stamped.** A stray whose stamp is corrupt below the begin-marker line still counts — using the stricter parse there would silently ignore exactly the stale file the lock exists to catch.
+
+The category values are the canonical strings `pipelex codegen check` uses, and so are the `detail` sentences, verbatim. A consumer switching between the CLI and this helper reads the same report.
+
+### The caller's obligations
+
+The pure input moves the tree-reading obligations onto you. Each one, unmet, produces a **wrong verdict** rather than an error — so none of them can be left implicit:
+
+- **Pass each file's text as read, without reformatting it.** The hash is over exact UTF-8 bytes, and the stamp parser requires the text to _start with_ the begin-marker line. Re-encoding, inserting a BOM, or running Prettier over a generated artifact all report `hand-edited`.
+- **Line endings are the one exception, and they are handled for you.** `\r\n` and lone `\r` are normalized to `\n` before anything is parsed or hashed, mirroring the universal-newline translation pipelex's own reader applies. A Windows checkout under `core.autocrlf=true` is therefore **not** a false hand-edit here, exactly as it is not one for the CLI. Committing generated artifacts with a `.gitattributes` entry (`src/generated/** -text`) is still worth doing for diff hygiene; it is not load-bearing for the verdict.
+- **Walk the whole tree, recursively, from the lock's directory**, and pass paths relative to it. An incomplete list yields `isCurrent: true` — a false negative on precisely the drift class orphan detection exists for. Filter your walk with `isStampableArtifactPath` (or `STAMPABLE_ARTIFACT_SUFFIXES`) so it picks up exactly what the check considers; a file of any other type is skipped rather than rejected, which is what lets you park a sidecar such as `sources.json` beside the lock. Pruning vendor and VCS directories and skipping symlinks is walk policy and stays with you — moot for a per-method generated directory, which holds nothing else.
+- **Decode the bytes yourself.** `content` is already a `string`, so pipelex's "not valid UTF-8, therefore not generated output" branch cannot arise here. A file you could not decode is not generated output: report it yourself, or leave it out and accept the `missing` drift.
+
+### What it deliberately does not verify
+
+It never compares a stamp's `crate_fingerprint` against the lock's, and it never re-resolves the crate. Both need the engine, which is the whole point of the offline split — and both are questions the caller can ask itself with `crateFingerprint` in hand.
+
+### What the check throws
+
+`CodegenLockError`, and only for a **no-verdict** condition: a malformed lock, an unknown key in it, or a path — in the lock or in your `files` — that is not a safe canonical artifact path (absolute, drive-prefixed, backslashed, control-charactered, `..`-bearing, empty, duplicated, or, for a locked path, of a type codegen does not stamp). None of these is a drift: the check could not produce a verdict at all, which is a distinct outcome and typically a distinct exit code. It deliberately does not derive from `PipelineRequestError` — nothing was requested over the wire.
+
+A `"./types.ts"` spelling is worth calling out, because it is the one a hand-rolled walk produces by accident: left to resolve as-is it would report both a `missing` and an `orphan` for the same file, so it throws instead.

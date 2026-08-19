@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **Offline codegen drift check**: Added `runCodegenCheck`, a pure helper that verifies a committed codegen tree still matches its `codegen.lock` — no filesystem, no network, no API key, and no `PipelexApiClient`. The caller walks its own tree and passes the lock text plus the files; the SDK returns a structured `CodegenCheckReport` (`drifts[]`, `isCurrent`, and the lock header's `crateFingerprint` / `engineVersion`). It is a port of pipelex's `codegen check`, so a verdict computed here equals the one the CLI computes over the same bytes, down to the drift `detail` sentences. This is the CI half of the codegen trust chain: regeneration needs the engine, checking needs only hashes.
+- **Codegen check types**: Exported `CodegenCheckInput`, `CodegenCheckReport`, `CodegenDrift`, `CodegenDriftCategory`, `CodegenTreeFile`, and the `CodegenLockError` raised for a no-verdict condition (a malformed lock or an unsafe artifact path). `CodegenTreeFile` is structurally identical to `GeneratedArtifact`, so a `codegen()` response's `artifacts` feed the check with no mapping.
+- **Tree-walk filter**: Exported `isStampableArtifactPath` and `STAMPABLE_ARTIFACT_SUFFIXES`, mirrors of pipelex's `STAMPABLE_SUFFIXES`, so a consumer's directory walk picks up exactly the files the check considers. An incomplete walk yields a false `isCurrent`, so filtering identically is part of the contract.
+- **Dependency**: Added `smol-toml` (`^1.6.0`) to `dependencies` for parsing `codegen.lock`. It installs no new package — `mthds` already depends on the same range, so the two dedupe to one copy.
+- **Tests**: Added `tests/codegen-check.test.ts` with vendored real codegen output under `tests/fixtures/codegen/` (artifacts and lock from an actual `pipelex codegen types` run, committed beside their source bundle), and extended `tests/e2e/crate.e2e.ts` to run the check over artifacts a live server just emitted — verbatim, then mutated once per drift category, for both a TypeScript and a Python target.
+- **Documentation**: `docs/crate-routes.md` gains an offline-check section covering the algorithm, the drift taxonomy, the caller's obligations, and what the check deliberately does not verify.
+
+### Changed
+
+- **Packaging**: `package.json` now declares `"sideEffects": false`, so bundlers can tree-shake unused modules out of a consumer's client bundle. No module in `src/` has a top-level side effect.
+
 ## [v0.12.0] - 2026-08-19
 
 ### Added
