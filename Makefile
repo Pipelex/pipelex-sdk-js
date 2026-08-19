@@ -73,8 +73,33 @@ t: test
 
 # Needs a live pipelex-api server (default http://localhost:8081, override with
 # PIPELEX_E2E_BASE_URL). Not part of `make test` / `make all` — CI has no server.
+#
+# The target and its key are resolved ONCE here and exported, so the URL this target
+# preflights is the URL the suites call. Precedence follows the dotenv convention: the
+# shell environment (or a `make test-e2e PIPELEX_E2E_BASE_URL=...` override) wins, then
+# `.env`, then a local runner. `?=` is what enforces it — it only reaches for `.env`
+# when the variable is not already set.
+DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
+test-e2e: export PIPELEX_E2E_BASE_URL ?= $(shell $(DOTENV) printf '%s' "$${PIPELEX_E2E_BASE_URL:-http://localhost:8081}")
+test-e2e: export PIPELEX_API_KEY ?= $(shell $(DOTENV) printf '%s' "$$PIPELEX_API_KEY")
+
+# Trailing slashes are stripped the way the client normalizes `baseUrl` (`src/client.ts`),
+# so a value ending in `/` cannot make the probe `//v1/version` — which a runner does not
+# route — and report a live server as unreachable. It is done here, at the point of use,
+# rather than on the assignment above: `?=` never fires for a value that arrived from the
+# shell environment or the command line, so those two sources would keep their slash.
+E2E_TARGET = $$(printf '%s' "$(PIPELEX_E2E_BASE_URL)" | sed 's:/*$$::')
+
+# `/v1/version` is the one route BOTH a bare runner and a hosted origin serve, and it
+# needs no auth — origin-level `/health` is runner-only and 404s on the hosted plane.
 test-e2e:
 	$(call PRINT_TITLE,"Running E2E Tests against live pipelex-api")
+	@target="$(E2E_TARGET)"; curl -fs --max-time 5 -o /dev/null "$$target/v1/version" || { \
+		echo "$(RED)✗ No pipelex-api reachable at $$target$(NC)"; \
+		echo "  Start one: cd ../pipelex-api && make run — or point PIPELEX_E2E_BASE_URL (shell or .env) at a running instance."; \
+		exit 1; \
+	}
+	@echo "$(YELLOW)→ target: $(E2E_TARGET)$(NC)\n"
 	@npm run test:e2e
 	@echo "$(GREEN)✓ All e2e tests passed$(NC)"
 
