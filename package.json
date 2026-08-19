@@ -8,6 +8,9 @@
     "url": "https://github.com/Pipelex/pipelex-sdk-js"
   },
   "type": "module",
+  "sideEffects": [
+    "./dist/hooks/claude-mthds-check.js"
+  ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -56,6 +59,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "mthds": "^0.22.0"
+    "mthds": "^0.22.0",
+    "smol-toml": "^1.6.0"
   }
 }

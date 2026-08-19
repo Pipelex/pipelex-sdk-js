@@ -8,6 +8,8 @@ TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage 
 
 Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the crate routes (`resolve` / `codegen`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, gateway key, onboarding, storage, runs list/update).
 
+Besides the client, the package exports `runCodegenCheck` — a **pure** offline check that verifies a committed `codegen()` tree still matches its `codegen.lock`. It needs no server, no key, and no client instance, so it fits a CI job. See [`docs/crate-routes.md`](./docs/crate-routes.md#the-offline-check--runcodegencheck).
+
 ## Install
 
 ```bash
