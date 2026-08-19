@@ -699,7 +699,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // runner, but neither the gateway's API-key allowlist nor the platform's tooling
   // proxy lists them, so every `*.pipelex.com` origin answers a gateway
   // `403 {"message":"Forbidden"}` — refused before any service sees the request.
-  // Measured 2026-08-13 on prod AND `api-dev.pipelex.com`: on the same origin, with
+  // Measured 2026-08-19 on prod AND `api-dev.pipelex.com`: on the same origin, with
   // the same key, `validate` succeeds while these two 403. Dev is not a workaround.
   //
   // The crate routes (`resolve`/`codegen`) shared this gap and were allowlisted on
@@ -834,8 +834,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // path answers a gateway `403 {"message":"Forbidden"}` — refused before any
   // service sees it, so not even an RFC 7807 problem body.
   //
-  // Measured 2026-08-13, same key, same run:
-  //   api-dev.pipelex.com  (pipelex-hosted@0.2.8)  resolve + codegen OK, full
+  // Measured 2026-08-19, same key, same run:
+  //   api-dev.pipelex.com  (pipelex-hosted@0.9.0)  resolve + codegen OK, full
   //                        verdict discipline intact (200 `is_valid:false`, 501, 422)
   //   api.pipelex.com      (pipelex-hosted@0.2.6)  both still 403
   //

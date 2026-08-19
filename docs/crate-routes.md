@@ -4,11 +4,11 @@ Two routes project a **closure** of MTHDS files into the artifacts downstream to
 
 > **Hosted exposure is partial: `api-dev.pipelex.com` yes, `api.pipelex.com` not yet.** Any `pipelex-api` runner serves these routes. Reaching them on the hosted plane additionally requires that the gateway's API-key allowlist and the platform's tooling proxy list the path — both enumerate routes explicitly — and an unlisted path answers a gateway `403 {"message":"Forbidden"}`, refused before any service sees the request, so not even an RFC 7807 problem body.
 >
-> Measured 2026-08-13, same API key, same run:
+> Measured 2026-08-19, same API key, same run (first confirmed 2026-08-13 on dev's `0.2.8`; re-verified since on `0.9.0`, so the exposure survived a redeploy):
 >
 > | Origin | `resolve` / `codegen` |
 > | --- | --- |
-> | `api-dev.pipelex.com` (`pipelex-hosted@0.2.8`) | **Available** — all three targets, and the full verdict discipline below survives the gateway intact (a `200` `is_valid: false`, the `501`, and the `422` all arrive as documented) |
+> | `api-dev.pipelex.com` (`pipelex-hosted@0.9.0`) | **Available** — all three targets, and the full verdict discipline below survives the gateway intact (a `200` `is_valid: false`, the `501`, and the `422` all arrive as documented) |
 > | `api.pipelex.com` (`pipelex-hosted@0.2.6`) | `403` — waiting on the deploy, not on a further code change |
 >
 > **`lint` / `format` are still `403` on both origins** — only the crate routes were allowlisted. Use a runner for those. Tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
