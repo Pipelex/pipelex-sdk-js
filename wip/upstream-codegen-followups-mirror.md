@@ -50,9 +50,9 @@ The wording matches the CLI's sentence structure, with one deliberate difference
 ### Upstream references
 
 - `pipelex/codegen/lock.py` — `CODEGEN_LOCK_VERSION`, the `lock_version` field, `_reject_unknown_lock_version`, and the evolution policy in the module docstring. `encode_lock` writes the key **first**, before `crate_fingerprint`; `load_lock` gates the version **before** `model_validate`.
-- `pipelex/tests/unit/pipelex/codegen/test_lock.py` — the `_LEGACY_LOCK_WITHOUT_VERSION` fixture and the version tests.
-- `pipelex/tests/unit/pipelex/codegen/test_emission.py` — regeneration over a legacy lock, and over a lock written by a newer codegen.
-- `pipelex/docs/under-the-hood/codegen-projections.md` § Lock — the policy in prose.
+- `tests/unit/pipelex/codegen/test_lock.py` — the `_LEGACY_LOCK_WITHOUT_VERSION` fixture (`:18`) and the version tests (e.g. `:110`).
+- `tests/unit/pipelex/codegen/test_emission.py` — regeneration over a legacy lock, and over a lock written by a newer codegen.
+- `docs/under-the-hood/codegen-projections.md` § Lock — the policy in prose.
 
 One upstream decision worth knowing, because it is visible behaviour: a lock whose version cannot be read is treated as *replaceable prior state* during regeneration, exactly like a corrupt one — `codegen types` overwrites it rather than failing, since the run has already rewritten every artifact with its own engine and the lock is purely derived. The cost is that pruning is skipped, so anything the newer engine emitted lingers and surfaces as an orphan on the very next check.
 
@@ -71,5 +71,5 @@ Neither is a code change on this branch.
 
 Two review threads on PR #31 belonged entirely to this repo rather than to the upstream landing. Both were fixed on 2026-08-19 and their threads are resolved; the first is recorded here because the parity reasoning behind it is worth not rediscovering.
 
-- **`WINDOWS_DRIVE` missed U+2028 / U+2029** — fixed in `62bcf15`, which took the regex to `/^.:/su` (`src/codegen-check.ts:493`). Verified against the reference while preparing this delivery: `PureWindowsPath("\u2028:models.py").drive` is `'\u2028:'`, so `validate_artifact_path` **rejects** it upstream, and U+2028 is `Zl` rather than `C` so the control-character gate does not catch it first. Without the `s` flag JavaScript's `.` excludes line terminators, so this module was accepting what the CLI rejects — a real parity divergence, with this module on the permissive side. Now pinned by the `line-separator-drive-prefixed` row of the path-rejection table (`tests/codegen-check.test.ts:513`), which is the only thing that goes red if the flag is reverted.
+- **`WINDOWS_DRIVE` missed U+2028 / U+2029** — fixed in `62bcf15`, which took the regex to `/^.:/su` (`WINDOWS_DRIVE`, `src/codegen-check.ts:584`). Verified against the reference while preparing this delivery: `PureWindowsPath("\u2028:models.py").drive` is `'\u2028:'`, so `validate_artifact_path` **rejects** it upstream, and U+2028 is `Zl` rather than `C` so the control-character gate does not catch it first. Without the `s` flag JavaScript's `.` excludes line terminators, so this module was accepting what the CLI rejects — a real parity divergence, with this module on the permissive side. Now pinned by the `line-separator-drive-prefixed` row of the path-rejection table (`tests/codegen-check.test.ts:571`, the table starting at `:563`), which is the only thing that goes red if the flag is reverted.
 - **A duplicated CRLF test row** — the standalone clean-tree CRLF test was deleted in favour of the two-row `it.each` that covers CRLF and lone CR together (`tests/codegen-check.test.ts:224`). The standalone that remains at `tests/codegen-check.test.ts:248` is a different scenario — a hand edit *inside* a CRLF tree, pinning that normalizing line endings does not blunt the check itself — so it is not a leftover duplicate.
