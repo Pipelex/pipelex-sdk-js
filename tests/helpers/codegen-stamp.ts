@@ -32,7 +32,14 @@ export function splitStamp(
   commentPrefix = "//",
 ): { header: string; body: string } {
   const endLine = `${commentPrefix} ${STAMP_END}\n`;
-  const cut = content.indexOf(endLine) + endLine.length;
+  const at = content.indexOf(endLine);
+  if (at === -1) {
+    // Without this, `cut` lands at `endLine.length - 1` and the mutators return
+    // plausible-looking nonsense — the failure then surfaces as a wrong drift
+    // category, blaming runCodegenCheck for a bad `commentPrefix` argument.
+    throw new Error(`No '${commentPrefix}' stamp end marker in the supplied content.`);
+  }
+  const cut = at + endLine.length;
   return { header: content.slice(0, cut), body: content.slice(cut) };
 }
 

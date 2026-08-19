@@ -9,11 +9,15 @@
 - **Tree-walk filter**: Exported `isStampableArtifactPath` and `STAMPABLE_ARTIFACT_SUFFIXES`, mirrors of pipelex's `STAMPABLE_SUFFIXES`, so a consumer's directory walk picks up exactly the files the check considers. An incomplete walk yields a false `isCurrent`, so filtering identically is part of the contract.
 - **Dependency**: Added `smol-toml` (`^1.6.0`) to `dependencies` for parsing `codegen.lock`. It installs no new package — `mthds` already depends on the same range, so the two dedupe to one copy.
 - **Tests**: Added `tests/codegen-check.test.ts` with vendored real codegen output under `tests/fixtures/codegen/` (artifacts and lock from an actual `pipelex codegen types` run, committed beside their source bundle), and extended `tests/e2e/crate.e2e.ts` to run the check over artifacts a live server just emitted — verbatim, then mutated once per drift category, for both a TypeScript and a Python target.
-- **Documentation**: `docs/crate-routes.md` gains an offline-check section covering the algorithm, the drift taxonomy, the caller's obligations, and what the check deliberately does not verify.
+- **Documentation**: `docs/crate-routes.md` gains an offline-check section covering the algorithm, the drift taxonomy, the caller's obligations, what the check deliberately does not verify, and the two places it knowingly differs from the CLI.
+
+### Fixed
+
+- **Stamp-header parsing now matches Python's text rules**, closing four places where `runCodegenCheck` and `pipelex codegen check` reached different verdicts on the same bytes. The header is split on the boundaries `str.splitlines()` breaks on rather than `\n` alone (a U+2028 inside a field value truncates it upstream, so the SDK used to report a tree current that the CLI reported `hand-edited`, and a header whose lines were joined by one flipped the other way); field values are stripped with Python's `str.isspace()` set rather than JavaScript's `trim()`, which strips U+FEFF where Python does not and skips U+001C-U+001F and U+0085 where Python does not; and a Windows drive prefix is now any single leading character before `:`, as `PureWindowsPath` sees one, so `1:models.py` and `_:models.py` are rejected like the reference rejects them instead of being accepted. Each is pinned by a test that fails without it.
 
 ### Changed
 
-- **Packaging**: `package.json` now declares `"sideEffects": false`, so bundlers can tree-shake unused modules out of a consumer's client bundle. No module in `src/` has a top-level side effect.
+- **Packaging**: `package.json` now declares `"sideEffects"`, so bundlers can tree-shake unused modules out of a consumer's client bundle. It is the array form rather than a blanket `false`, naming `./dist/hooks/claude-mthds-check.js` — the Claude Code hook entry self-executes at module scope (`main()` … `process.exit(0)`) and ships in the tarball, so a blanket `false` would be a false claim about the published package. Every module reachable from the `.` export is genuinely side-effect-free.
 
 ## [v0.12.0] - 2026-08-19
 

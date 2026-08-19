@@ -107,7 +107,7 @@ Note the split, same as the build routes: a bad **closure** is a 200 verdict; a 
 
 ## The offline check — `runCodegenCheck`
 
-A consumer that commits the generated tree needs a CI gate proving it is still what the method resolves to. That gate is `runCodegenCheck`, and it is **pure**: no filesystem, no network, no API key, no `PipelexApiClient`. You walk your own tree and hand in the text; the SDK owns the verdict.
+A consumer that commits the generated tree needs a CI gate over it. That gate is `runCodegenCheck`, and it is **pure**: no filesystem, no network, no API key, no `PipelexApiClient`. You walk your own tree and hand in the text; the SDK owns the verdict.
 
 The reason it is a separate, engine-free step is the same reason there is no server-side check route. Regeneration is a **dev action** — it needs the engine, so it is `codegen` above. The check is a **CI action** — it needs only a hash function. Keeping them apart is what stops an upstream template improvement from reddening a consumer's CI on a tree nobody touched.
 
@@ -130,7 +130,7 @@ if (!report.isCurrent) {
 
 A `codegen()` response feeds straight in with no mapping — `GeneratedArtifact` and `CodegenTreeFile` are structurally identical on purpose, so `runCodegenCheck({ lockContent: result.lock, files: result.artifacts })` type-checks and reports `isCurrent`. That is worth doing right after a regeneration, before writing anything to disk.
 
-The function is `async` because it hashes through **WebCrypto** (`crypto.subtle`) rather than `node:crypto`, which keeps the barrel safe to import from a browser bundle. One caveat that never bites a CI script but should not surprise anyone: `crypto.subtle` is secure-context-only, so a browser page must be served over https (or localhost).
+The function is `async` because it hashes through **WebCrypto** (`crypto.subtle`) rather than `node:crypto`, so the check adds no Node builtin to the barrel's import graph. (That is not the same as the barrel being browser-bundleable today: `upload.ts` still names `node:fs/promises`, so a browser-targeting bundler must mark `node:*` external.) One caveat that never bites a CI script but should not surprise anyone: `crypto.subtle` is secure-context-only, so a browser page must be served over https (or localhost).
 
 ### The algorithm
 
@@ -155,6 +155,13 @@ Two properties of that table are load-bearing and are pinned by tests:
 - **An orphan only has to _look_ stamped.** A stray whose stamp is corrupt below the begin-marker line still counts — using the stricter parse there would silently ignore exactly the stale file the lock exists to catch.
 
 The category values are the canonical strings `pipelex codegen check` uses, and so are the `detail` sentences, verbatim. A consumer switching between the CLI and this helper reads the same report.
+
+### Where it knowingly differs from the CLI
+
+Verdict parity is the design constraint, and the stamp-header text rules mirror Python's exactly — the line-boundary set, the strip set, and the drive-prefix rule are all matched deliberately, each pinned by a test. Two differences remain on purpose:
+
+- **The projection line is shape-checked, not vocabulary-checked.** pipelex resolves `kind` and `target` against its own enums, which cannot lag its own emitter; an SDK copy can. So a stamp reading `projection: types / rust-serde` from a newer engine verifies here and would be `hand-edited` there. Tightening it would report every artifact of such a tree as a hand edit — the failure mode is worse than the gap, and it is pinned in both directions.
+- **The "not valid UTF-8" branch cannot arise.** `content` reaches the check already decoded, so the caller owns that verdict — see the decode obligation above.
 
 ### The caller's obligations
 

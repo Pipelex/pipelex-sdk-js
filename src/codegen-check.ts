@@ -2,8 +2,11 @@
  * The offline codegen drift check — pure hashing, no engine, no network, no API key.
  *
  * `client.codegen()` returns stamped artifacts plus a `codegen.lock`; a consumer that
- * commits that tree needs a CI gate proving it is still what the method resolves to.
- * This module is that gate. It never regenerates: regeneration is a **dev action**
+ * commits that tree needs a CI gate over it. This module is that gate — it proves the tree
+ * and its lock still agree with each other. Whether the tree still matches what the METHOD
+ * resolves to is a second, separate question: answering it needs the engine, so the check
+ * cannot, and a caller closes it by comparing {@link CodegenCheckReport.crateFingerprint}
+ * against a live `codegen()` response. It never regenerates: regeneration is a **dev action**
  * (it needs the engine), the check is the **CI action** (it needs only hashes), so a
  * template improvement upstream never reddens a consumer's CI.
  *
@@ -17,9 +20,10 @@
  * **Pure by design.** No filesystem, no fetch, no Node builtins: the caller walks its
  * own tree and hands in the text; this module owns the verdict. That is the same
  * split pipelex draws between `build_stamped_projection` (pure) and
- * `write_stamped_projection` (local materialization). It also keeps the SDK barrel
- * safe to import from a browser bundle — hashing goes through WebCrypto, not
- * `node:crypto`.
+ * `write_stamped_projection` (local materialization). Hashing goes through WebCrypto rather
+ * than `node:crypto` so this module adds no Node builtin to the barrel's import graph — which
+ * is not by itself the same as the barrel being browser-bundleable, since `upload.ts` still
+ * names `node:fs/promises` and a browser-targeting bundler must mark `node:*` external.
  *
  * @see {@link runCodegenCheck} for the caller's obligations, which are load-bearing:
  * an incomplete file list or re-encoded text produces a *wrong verdict*, not an error.
@@ -105,6 +109,40 @@ function parseStamped(text: string, commentPrefix: string): ParsedStamp | null {
   return { contentHash: fields.get("content_hash") ?? "", body };
 }
 
+/**
+ * The line boundaries Python's `str.splitlines()` breaks on — deliberately not just `\n`.
+ *
+ * `normalizeNewlines` has already folded `\r\n` and `\r` away, but `splitlines` also breaks on
+ * VT, FF, FS/GS/RS, NEL and the Unicode line/paragraph separators, and those survive it.
+ * Splitting on the narrower set diverged in both directions: a header carrying U+2028 inside a
+ * field value parsed here as one long value (current) where the reference truncates it
+ * (hand-edited), and a header whose lines were JOINED by U+2028 parsed there and not here.
+ */
+// FS/GS/RS are line boundaries to Python's `splitlines()`, so matching them is the point.
+// eslint-disable-next-line no-control-regex
+const PYTHON_LINE_BOUNDARY = /\r\n|[\n\r\v\f\u001c\u001d\u001e\u0085\u2028\u2029]/u;
+
+/** The characters `str.isspace()` is true for — what Python's `str.strip()` removes. */
+const PYTHON_SPACE_CLASS =
+  "\\t\\n\\v\\f\\r\\u001c-\\u001f\\u0020\\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000";
+const PYTHON_STRIP = new RegExp(
+  "^[" + PYTHON_SPACE_CLASS + "]+|[" + PYTHON_SPACE_CLASS + "]+" + "$",
+  "gu",
+);
+
+/**
+ * Strip the whitespace Python's `str.strip()` strips — deliberately not JavaScript's `trim()`.
+ *
+ * The two sets disagree in both directions and each disagreement can flip a verdict. JS strips
+ * U+FEFF where Python does not, so a BOM planted before a recorded `content_hash` vanished here
+ * and the stamp still verified while the CLI reported `hand-edited`; Python strips U+001C-U+001F
+ * and U+0085 where JS does not. Mirroring `str.isspace()` is what keeps a parsed field value
+ * byte-identical across the two readers.
+ */
+function pythonStrip(text: string): string {
+  return text.replace(PYTHON_STRIP, "");
+}
+
 /** Whether `text` opens with a stamp block in the given comment syntax (the orphan predicate). */
 function hasStamp(text: string, commentPrefix: string): boolean {
   return text.startsWith(`${commentPrefix} ${STAMP_BEGIN_MARKER}`);
@@ -112,22 +150,25 @@ function hasStamp(text: string, commentPrefix: string): boolean {
 
 function parseStampFields(headerRegion: string, commentPrefix: string): Map<string, string> {
   const fields = new Map<string, string>();
-  for (const rawLine of headerRegion.split("\n")) {
+  for (const rawLine of headerRegion.split(PYTHON_LINE_BOUNDARY)) {
     const stripped = rawLine.startsWith(commentPrefix)
-      ? rawLine.slice(commentPrefix.length).trim()
-      : rawLine.trim();
+      ? pythonStrip(rawLine.slice(commentPrefix.length))
+      : pythonStrip(rawLine);
     const separatorIndex = stripped.indexOf(":");
     if (separatorIndex === -1) {
       continue;
     }
-    fields.set(stripped.slice(0, separatorIndex).trim(), stripped.slice(separatorIndex + 1).trim());
+    fields.set(
+      pythonStrip(stripped.slice(0, separatorIndex)),
+      pythonStrip(stripped.slice(separatorIndex + 1)),
+    );
   }
   return fields;
 }
 
 /** `<kind> / <target>` with an optional trailing ` / <pipe_ref>` for a per-pipe projection. */
 function isWellFormedProjection(projection: string): boolean {
-  const parts = projection.split("/").map((segment) => segment.trim());
+  const parts = projection.split("/").map((segment) => pythonStrip(segment));
   return parts.length >= 2 && parts[0] !== "" && parts[1] !== "";
 }
 
@@ -270,10 +311,13 @@ const ORPHAN_DETAIL =
  *   to walk exactly what the check considers. Pruning vendor/VCS directories and skipping
  *   symlinks is walk policy and stays with the caller (moot for a per-method generated
  *   directory, which holds nothing else).
- * - **Decode the bytes yourself.** `content` is already a `string`, so pipelex's
- *   "not valid UTF-8 → hand-edited" branch is unreachable here. A file you could not
- *   decode is not generated output: report it yourself, or omit it and accept a
- *   `missing` drift for it.
+ * - **Decode the bytes yourself, and decode strictly.** `content` is already a `string`, so
+ *   pipelex's "not valid UTF-8 → hand-edited" branch is unreachable here — and note the obvious
+ *   reader does not hand it back to you: `readFile(path, "utf8")` substitutes U+FFFD for invalid
+ *   bytes and never throws, so a corrupted artifact whose body legitimately contains U+FFFD can
+ *   still hash to the locked value and report current. Decode with
+ *   `new TextDecoder("utf-8", { fatal: true })` if that matters to you, and report a file you
+ *   could not decode yourself — or omit it and accept a `missing` drift for it.
  *
  * What the check deliberately does **not** do: it never compares a stamp's
  * `crate_fingerprint` against the lock's, and it never re-resolves the crate. Both need
@@ -436,7 +480,12 @@ function readString(record: Record<string, unknown>, key: string, what: string):
 // ── Path validation (mirror of `validate_artifact_path` / `validate_artifact_paths`) ──
 
 const CONTROL_CHARACTER = /\p{C}/u;
-const WINDOWS_DRIVE = /^[A-Za-z]:/;
+/**
+ * A Windows drive prefix as `PureWindowsPath` sees one: ANY single leading character followed
+ * by `:`, not only an ASCII letter. `1:models.py` and `_:models.py` are drives to the reference
+ * and were accepted here, making this validator the permissive side of the pair.
+ */
+const WINDOWS_DRIVE = /^.:/u;
 
 /**
  * Validate one canonical relative path: the safety rules, without the suffix rule.

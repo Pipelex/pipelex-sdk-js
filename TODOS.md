@@ -21,7 +21,7 @@ This does **not** reopen the "SDK stays transport-only" stance recorded in the f
 
 ## Cold-start orientation — the state of this repo
 
-- One runtime dependency: `mthds@^0.22.0`. The barrel `src/index.ts` is the single public entry (`exports` has only `"."`), and it is client-bundler-safe today (fetch-based, no Node builtins in the graph).
+- One runtime dependency: `mthds@^0.22.0`. The barrel `src/index.ts` is the single public entry (`exports` has only `"."`), and the check adds no Node builtin to its graph (the barrel is not fully client-bundler-safe today — `upload.ts` names `node:fs/promises`, which a browser-targeting bundler must mark external).
 - `make check` = `lint` (eslint over `src/ tests/`) + `format:check` (prettier over `src/**/*.ts`, `tests/**/*.ts`, `*.ts`) + `typecheck` + `typecheck:test` (`tsconfig.test.json`, which includes `tests/**/*.ts`) + `build` + `depcruise`. All five touch `tests/` — see the fixture decision below.
 - `.dependency-cruiser.cjs` forbids only imports resolving under `node_modules/mthds/` outside the `protocol` subpath, so a new third-party dependency needs no config change.
 - `src/models.ts` already defines everything the e2e needs: `CodegenValidReport` carries `artifacts`, `lock`, `lock_filename`, `crate_fingerprint`, `engine_version`, and `GeneratedArtifact` is `{ path: string; content: string }` — **structurally identical to the tree-file input below**, so the e2e feeds `report.artifacts` straight in with no mapping. Keep it that way.
@@ -139,6 +139,8 @@ export class CodegenLockError extends Error {}
 - [ ] Release (via the `/release` skill, which owns the version bump), so `pipelex-starter-js` can pin its range to the version carrying the helper and proceed with its Phase 1.
 
 **Checkpoint 2** — ✅ `make check` + `make test` green, and `make test-e2e` green against a live local `pipelex-api` (`pipelex-api@0.14.0` on `pipelex 0.46.4`) — every e2e suite passes, including the new offline-check block. Docs, changelog and README are updated. The only thing left in the plan is the release itself, which is a deliberate hand-off: it is an outward-facing action the `/release` skill owns.
+
+**Checkpoint 3** — a full `/review` pass on 2026-08-19 fixed four verdict-flipping parity divergences in the stamp-header text rules (the line-boundary set, the strip set, the Windows drive-prefix rule, and the strict-decode obligation), narrowed the `sideEffects` declaration, closed a `.gitignore` gap that left a live `PIPELEX_API_KEY` unignored by the repo, corrected six inaccurate documentation claims, and added tests for every previously unpinned branch. `make check` and `make test` green. It also found a set of items it deliberately did **not** fix — Windows tree-walk paths, error-message hygiene, packaging blast radius, and the fact that nothing in CI can see upstream grammar drift. **They are written up in [`wip/pr-31-review-notes.md`](./wip/pr-31-review-notes.md) under "Second review round", not lost.** That file now also carries an **upstream follow-ups** section for the items `pipelex` owns rather than this SDK — the lock format's `extra="forbid"` making any added key a hard no-verdict for every pinned client is the one with real blast radius, and none of them has been filed on `pipelex` yet. The release is still the only *plan* item outstanding here.
 
 ## Decisions log
 

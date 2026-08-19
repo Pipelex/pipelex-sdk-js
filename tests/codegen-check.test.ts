@@ -40,6 +40,10 @@ const FIXTURE_ROOT = new URL("./fixtures/codegen/", import.meta.url);
 const CRATE_FINGERPRINT = "e4623057c69e8962796244a035d86e772ffd0231a8f4f6c1a4f31913db3f3c9b";
 const ENGINE_VERSION = "0.46.4";
 
+/** The two characters the JS and Python whitespace/line rules disagree about. */
+const LINE_SEP = "\u2028";
+const BOM = "\ufeff";
+
 const TS_ARTIFACTS = ["binder.ts", "types.ts"];
 const PY_ARTIFACTS = ["models.py"];
 
@@ -217,6 +221,24 @@ describe("runCodegenCheck — drift categories", () => {
     expect(report.drifts[0]?.detail).toBe("Stamp header is missing or unparseable.");
   });
 
+  it.each([
+    ["CRLF", (content: string): string => content.replace(/\n/g, "\r\n")],
+    ["lone CR", (content: string): string => content.replace(/\n/g, "\r")],
+  ])(
+    "does NOT report a %s-rewritten tree — the reference reader normalizes newlines",
+    async (_label, rewrite) => {
+      // Both halves of `normalizeNewlines`. Line coverage cannot see inside its regex, so
+      // narrowing it to /\r\n/g would keep every other test green while reporting a classic-CR
+      // tree as fully hand-edited.
+      const input = withEdit(withEdit(tsFixture(), "types.ts", rewrite), "binder.ts", rewrite);
+
+      const report = await runCodegenCheck({ ...input, lockContent: rewrite(input.lockContent) });
+
+      expect(report.drifts).toEqual([]);
+      expect(report.isCurrent).toBe(true);
+    },
+  );
+
   it("does NOT report a CRLF-rewritten tree — the reference reader normalizes newlines", async () => {
     // What `core.autocrlf=true` does to a committed tree on a Windows checkout, and what
     // pipelex itself writes when it runs there. `pipelex codegen check` reads through
@@ -281,6 +303,122 @@ describe("runCodegenCheck — drift categories", () => {
 
     expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
       ["stale.py", "orphan"],
+    ]);
+  });
+
+  // NOTE for every stamp-header test below: the fixture body carries its own
+  // `// projection: …` banner further down, so a string `.replace` hits the STAMP's copy
+  // first and leaves the hashed body untouched. That is what isolates the header rules.
+
+  it("keeps an unknown-but-well-formed projection current — the deliberate relaxation", async () => {
+    // The port checks the projection line's SHAPE but deliberately not its vocabulary, unlike
+    // pipelex's `_parse_projection`, which resolves both axes against its own enums. An SDK copy
+    // CAN lag the emitter, and tightening this would report every artifact of a newer-engine
+    // tree as `hand-edited`. Pinned in both directions so the decision cannot be silently undone.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace("// projection: types / ts-zod", "// projection: types / rust-serde"),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts).toEqual([]);
+  });
+
+  it("reports a projection line missing its target as `hand-edited`", async () => {
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace("// projection: types / ts-zod", "// projection: types"),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts).toEqual([
+      {
+        path: "types.ts",
+        category: "hand-edited",
+        detail: "Stamp header is missing or unparseable.",
+      },
+    ]);
+  });
+
+  it.each([
+    ["unparseable", "// options: {"],
+    ["a JSON array rather than an object", "// options: []"],
+  ])("reports a stamp whose options are %s as `hand-edited`", async (_label, replacement) => {
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace("// options: {}", replacement),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts).toEqual([
+      {
+        path: "types.ts",
+        category: "hand-edited",
+        detail: "Stamp header is missing or unparseable.",
+      },
+    ]);
+  });
+
+  it("reports a stamp with no content_hash line as `hand-edited`", async () => {
+    // The field defaults to "" rather than failing the parse, so this lands on the stamp
+    // mismatch rather than the no-stamp detail — the same split the reference makes.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace(/\/\/ content_hash: [0-9a-f]+\n/, ""),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts).toEqual([
+      {
+        path: "types.ts",
+        category: "hand-edited",
+        detail: "Body was edited below the stamp (stamp hash no longer matches).",
+      },
+    ]);
+  });
+
+  it("truncates a header field at U+2028, the way Python's splitlines() does", async () => {
+    // `str.splitlines()` breaks on more than "\n". A U+2028 inside the options value truncates
+    // the JSON upstream, so the stamp fails to parse and the file reports `hand-edited`;
+    // splitting on "\n" alone kept the value whole and called the tree current.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace("// options: {}", `// options: {"k":"a${LINE_SEP}b"}`),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
+      ["types.ts", "hand-edited"],
+    ]);
+  });
+
+  it("reads header lines joined by U+2028 as separate fields", async () => {
+    // The other direction of the same rule: the reference splits them and calls the tree
+    // current, so a "\n"-only split was red here and green there.
+    const input = withEdit(tsFixture(), "types.ts", (content) => {
+      const { header, body } = splitStamp(content);
+      const lines = header.trimEnd().split("\n");
+      const fields = lines.slice(1, -1).join(LINE_SEP);
+      return `${lines[0]}\n${fields}\n${lines[lines.length - 1]}\n${body}`;
+    });
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.isCurrent).toBe(true);
+  });
+
+  it("keeps a BOM that Python's strip() keeps, so the stamp stops matching", async () => {
+    // JS `trim()` removes U+FEFF and `str.strip()` does not, so a BOM planted before the
+    // recorded hash used to vanish here — stamp verified, tree current — while the CLI
+    // reported `hand-edited`.
+    const input = withEdit(tsFixture(), "types.ts", (content) =>
+      content.replace("// content_hash: ", `// content_hash: ${BOM}`),
+    );
+
+    const report = await runCodegenCheck(input);
+
+    expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
+      ["types.ts", "hand-edited"],
     ]);
   });
 });
@@ -376,6 +514,8 @@ describe("runCodegenCheck — no-verdict conditions", () => {
   it.each([
     ["absolute", tomlLiteral("/types.ts"), /absolute paths and drive prefixes/],
     ["drive-prefixed", tomlLiteral("C:/types.ts"), /absolute paths and drive prefixes/],
+    ["digit-drive-prefixed", tomlLiteral("1:types.ts"), /absolute paths and drive prefixes/],
+    ["symbol-drive-prefixed", tomlLiteral("_:types.ts"), /absolute paths and drive prefixes/],
     ["backslashed", tomlLiteral("sub\\types.ts"), /backslashes are not allowed/],
     // A basic string here, so TOML decodes the escape into a real U+0001 in the path.
     ["control-charactered", '"ty\\u0001pes.ts"', /control characters are not allowed/],
@@ -419,6 +559,28 @@ describe("runCodegenCheck — no-verdict conditions", () => {
     const duplicated = plus(input, { path: "types.ts", content: contentOf(input, "types.ts") });
 
     await expect(runCodegenCheck(duplicated)).rejects.toThrow(/Duplicate artifact path/);
+  });
+
+  it.each([
+    ["artifacts is not an array", 'artifacts = "nope"\n', /must be an array of tables/],
+    ["an artifact is not a table", "artifacts = [1]\n", /each artifact must be a TOML table/],
+  ])("throws when %s", async (_label, body, reason) => {
+    await expect(runCodegenCheck({ lockContent: lockWith(body), files: [] })).rejects.toThrow(
+      reason,
+    );
+  });
+
+  it("still reports orphans under a lock that tracks no artifacts", async () => {
+    // A header-only lock is the one successful path that yields a degenerate all-clear, so
+    // pin that it is not a blanket pass: the orphan half of the algorithm still runs.
+    const report = await runCodegenCheck({
+      lockContent: lockWith(""),
+      files: [{ path: "stale.ts", content: contentOf(tsFixture(), "types.ts") }],
+    });
+
+    expect(report.drifts.map((drift) => [drift.path, drift.category])).toEqual([
+      ["stale.ts", "orphan"],
+    ]);
   });
 });
 

@@ -240,6 +240,9 @@ describe.each(CHECKED_TARGETS)(
       });
       expect(result.is_valid).toBe(true);
       generated = result as CodegenValidReport;
+      // Without this, the walk-filter loop below has nothing to iterate and the
+      // "verifies as current" case holds trivially for an empty tree.
+      expect(generated.artifacts.length).toBeGreaterThan(0);
     });
 
     /**

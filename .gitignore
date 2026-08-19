@@ -2,5 +2,7 @@ node_modules/
 dist/
 dist-hooks/
 coverage/
-.env.local
+.env
+.env.*
+!.env.example
 .gstack/
