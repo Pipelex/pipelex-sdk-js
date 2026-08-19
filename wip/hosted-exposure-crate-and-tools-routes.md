@@ -21,7 +21,7 @@ On dev the crate routes are not merely reachable — the whole contract survives
 
 Calling an unexposed one gets a bare `403` `ApiResponseError` that says nothing about the route being unexposed.
 
-**Dev was not a workaround — and for `lint` / `format` it still isn't.** The first instinct on hitting this was to point `PIPELEX_BASE_URL` at `https://api-dev.pipelex.com`; that failed identically, because dev and prod shared the allowlist. That has since diverged **for the crate routes only**: dev was allowlisted on 2026-08-13 and prod was not. For `lint` / `format` the original finding stands unchanged on both origins. Measured 2026-08-03 against `api-dev.pipelex.com` (`pipelex-hosted@0.2.6rc7`) through the SDK, same key, same run:
+**Dev was not a workaround — and for `lint` / `format` it still isn't.** The first instinct on hitting this was to point `PIPELEX_BASE_URL` at `https://api-dev.pipelex.com`; that failed identically, because dev and prod shared the allowlist. That has since diverged **for the crate routes only**: dev was allowlisted on 2026-08-13 and prod was not. For `lint` / `format` the original finding stands unchanged on both origins. The table below is therefore historical for `resolve()` / `codegen()` — those two pass on dev today, as the current-state table above records. Measured 2026-08-03 against `api-dev.pipelex.com` (`pipelex-hosted@0.2.6rc7`) through the SDK, same key, same run:
 
 | Call | Result |
 | --- | --- |

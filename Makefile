@@ -83,16 +83,23 @@ DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
 test-e2e: export PIPELEX_E2E_BASE_URL ?= $(shell $(DOTENV) printf '%s' "$${PIPELEX_E2E_BASE_URL:-http://localhost:8081}")
 test-e2e: export PIPELEX_API_KEY ?= $(shell $(DOTENV) printf '%s' "$$PIPELEX_API_KEY")
 
+# Trailing slashes are stripped the way the client normalizes `baseUrl` (`src/client.ts`),
+# so a value ending in `/` cannot make the probe `//v1/version` — which a runner does not
+# route — and report a live server as unreachable. It is done here, at the point of use,
+# rather than on the assignment above: `?=` never fires for a value that arrived from the
+# shell environment or the command line, so those two sources would keep their slash.
+E2E_TARGET = $$(printf '%s' "$(PIPELEX_E2E_BASE_URL)" | sed 's:/*$$::')
+
 # `/v1/version` is the one route BOTH a bare runner and a hosted origin serve, and it
 # needs no auth — origin-level `/health` is runner-only and 404s on the hosted plane.
 test-e2e:
 	$(call PRINT_TITLE,"Running E2E Tests against live pipelex-api")
-	@curl -fs --max-time 5 -o /dev/null "$(PIPELEX_E2E_BASE_URL)/v1/version" || { \
-		echo "$(RED)✗ No pipelex-api reachable at $(PIPELEX_E2E_BASE_URL)$(NC)"; \
+	@target="$(E2E_TARGET)"; curl -fs --max-time 5 -o /dev/null "$$target/v1/version" || { \
+		echo "$(RED)✗ No pipelex-api reachable at $$target$(NC)"; \
 		echo "  Start one: cd ../pipelex-api && make run — or point PIPELEX_E2E_BASE_URL (shell or .env) at a running instance."; \
 		exit 1; \
 	}
-	@echo "$(YELLOW)→ target: $(PIPELEX_E2E_BASE_URL)$(NC)\n"
+	@echo "$(YELLOW)→ target: $(E2E_TARGET)$(NC)\n"
 	@npm run test:e2e
 	@echo "$(GREEN)✓ All e2e tests passed$(NC)"
 

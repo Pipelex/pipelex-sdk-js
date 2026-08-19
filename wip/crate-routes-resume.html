@@ -343,57 +343,6 @@ b40be9c  Add resolve() and codegen() to PipelexApiClient — the crate routes
         </p>
       </div>
 
-      <h3>Update — 2026-08-13: dev SHIPPED, prod still blocked, <code>lint</code>/<code>format</code> left behind</h3>
-      <p>The allowlist change landed on dev. Measured through the SDK, same key, same run:</p>
-      <div class="scroll">
-        <table>
-          <thead><tr><th>Call</th><th><code>api-dev.pipelex.com</code> (<code>0.2.8</code>)</th><th><code>api.pipelex.com</code> (<code>0.2.6</code>)</th></tr></thead>
-          <tbody>
-            <tr><td><code>version()</code>, <code>validate()</code></td><td><span class="pill ok">OK</span></td><td><span class="pill ok">OK</span></td></tr>
-            <tr><td><code>resolve()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td><td><span class="pill bad">403</span></td></tr>
-            <tr><td><code>codegen()</code> — all three targets</td><td><span class="pill ok">OK</span> fingerprint agrees with <code>resolve</code></td><td><span class="pill bad">403</span></td></tr>
-            <tr><td><code>lint()</code>, <code>format()</code></td><td><span class="pill bad">403</span></td><td><span class="pill bad">403</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p>
-        <strong>The contract holds on hosted, not just the happy path.</strong> Every non-2xx arm survives the gateway
-        and the platform proxy intact: an unresolvable closure returns a <code>200</code> <code>is_valid: false</code>
-        with <code>validation_errors[]</code> (both routes), the reserved <code>method_ref</code> returns
-        <code>501</code>, and a <code>pipe_ref</code> on the <code>types</code> kind returns <code>422</code>. That was
-        the open risk in pointing a consumer at hosted — a proxy that mangled non-2xx bodies would have broken the
-        verdict discipline — and it is now measured, not assumed.
-      </p>
-      <p><strong>Prod needs only the deploy.</strong> It is still on <code>0.2.6</code>; dev is on <code>0.2.8</code>. No further code change is implied.</p>
-      <div class="callout warn">
-        <p>
-          <strong><code>lint</code> / <code>format</code> were not included in the change</strong>, and now sit in exactly
-          the trap this note warned about (“Fix all four at once — fixing only the two new ones leaves the same trap set
-          for the next consumer”). They 403 on both origins. The tools-extensions section of <code>src/client.ts</code>
-          had never carried a caveat at all — that omission is now fixed as part of this update.
-        </p>
-      </div>
-      <p>
-        <strong>Caveats were reworded, not deleted.</strong> The checklist below assumed full exposure and said “delete”;
-        partial exposure makes that wrong in the opposite direction — the old wording (“not reachable on any hosted
-        environment, dev included”) would now steer a developer away from the one origin that works. Updated in
-        <code>src/client.ts</code> (both sections), <code>docs/crate-routes.md</code>, <code>CHANGELOG.md</code>,
-        <code>TODOS.md</code> and <code>hosted-exposure-crate-and-tools-routes.md</code>. <strong>When prod ships, the
-        remaining edit is small:</strong> drop the prod row from each, and keep the <code>lint</code>/<code>format</code>
-        caveat until those are allowlisted too.
-      </p>
-      <div class="callout warn">
-        <p>
-          <strong>Checklist step 3 is not executable as written.</strong>
-          <code>PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com make test-e2e</code> fails before any test runs: the
-          suites’ <code>beforeAll</code> preflight calls <code>client.health()</code> → <code>GET /health</code>, a
-          bare-runner endpoint the hosted gateway does not serve (<code>404</code>), so the suite aborts with “No
-          pipelex-api server reachable”. Pointing the e2e suite at hosted first requires changing that preflight to a
-          route hosted actually serves (<code>version()</code>). Not done here — test-infrastructure change, out of this
-          note’s scope.
-        </p>
-      </div>
-
       <h3>Re-verification — 2026-08-11: still blocked</h3>
       <p>
         Re-ran the step-1 probe against dev <strong>and</strong> prod. Unchanged: <code>version()</code> and
@@ -434,6 +383,58 @@ b40be9c  Add resolve() and codegen() to PipelexApiClient — the crate routes
         <code>protocol_version</code> <strong>0.6.0</strong> while both hosted environments report <strong>0.1.0</strong>.
         Not a crate-routes issue and not chased here.
       </p>
+
+      <h3>Update — 2026-08-13: dev SHIPPED, prod still blocked, <code>lint</code>/<code>format</code> left behind</h3>
+      <p>The allowlist change landed on dev. Measured through the SDK, same key, same run:</p>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Call</th><th><code>api-dev.pipelex.com</code> (<code>0.2.8</code>)</th><th><code>api.pipelex.com</code> (<code>0.2.6</code>)</th></tr></thead>
+          <tbody>
+            <tr><td><code>version()</code>, <code>validate()</code></td><td><span class="pill ok">OK</span></td><td><span class="pill ok">OK</span></td></tr>
+            <tr><td><code>resolve()</code></td><td><span class="pill ok">OK</span> <code>is_valid: true</code></td><td><span class="pill bad">403</span></td></tr>
+            <tr><td><code>codegen()</code> — all three targets</td><td><span class="pill ok">OK</span> fingerprint agrees with <code>resolve</code></td><td><span class="pill bad">403</span></td></tr>
+            <tr><td><code>lint()</code>, <code>format()</code></td><td><span class="pill bad">403</span></td><td><span class="pill bad">403</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        <strong>The contract holds on hosted, not just the happy path.</strong> Every non-2xx arm survives the gateway
+        and the platform proxy intact: an unresolvable closure returns a <code>200</code> <code>is_valid: false</code>
+        with <code>validation_errors[]</code> (both routes), the reserved <code>method_ref</code> returns
+        <code>501</code>, and a <code>pipe_ref</code> on the <code>types</code> kind returns <code>422</code>. That was
+        the open risk in pointing a consumer at hosted — a proxy that mangled non-2xx bodies would have broken the
+        verdict discipline — and it is now measured, not assumed.
+      </p>
+      <p><strong>Prod needs only the deploy.</strong> It is still on <code>0.2.6</code>; dev is on <code>0.2.8</code>. No further code change is implied.</p>
+      <div class="callout warn">
+        <p>
+          <strong><code>lint</code> / <code>format</code> were not included in the change</strong>, and now sit in exactly
+          the trap this note warned about (“Fix all four at once — fixing only the two new ones leaves the same trap set
+          for the next consumer”). They 403 on both origins. The tools-extensions section of <code>src/client.ts</code>
+          had never carried a caveat at all — that omission is now fixed as part of this update.
+        </p>
+      </div>
+      <p>
+        <strong>Caveats were reworded, not deleted.</strong> The checklist below assumed full exposure and said “delete”;
+        partial exposure makes that wrong in the opposite direction — the old wording (“not reachable on any hosted
+        environment, dev included”) would now steer a developer away from the one origin that works. Updated in
+        <code>src/client.ts</code> (both sections), <code>docs/crate-routes.md</code>, <code>CHANGELOG.md</code>,
+        <code>TODOS.md</code> and <code>hosted-exposure-crate-and-tools-routes.md</code>. <strong>When prod ships, the
+        remaining edit is small:</strong> drop the prod row from each, and keep the <code>lint</code>/<code>format</code>
+        caveat until those are allowlisted too.
+      </p>
+      <div class="callout">
+        <p>
+          <strong>Checklist step 3 was not executable when this update was written — it is now.</strong>
+          <code>PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com make test-e2e</code> used to fail before any test ran:
+          the suites’ <code>beforeAll</code> preflight called <code>client.health()</code> → <code>GET /health</code>,
+          a bare-runner endpoint the hosted gateway does not serve (<code>404</code>), so the suite aborted with “No
+          pipelex-api server reachable” against a perfectly live origin. Fixed on this branch
+          (<code>a96c211</code>): the Makefile preflight and all three suites’ <code>beforeAll</code> now probe
+          <code>version()</code> → <code>GET /v1/version</code>, the one unauthenticated route a bare runner and a
+          hosted origin both serve.
+        </p>
+      </div>
 
       <h2>Resume checklist</h2>
       <ol class="checklist">
@@ -549,7 +550,7 @@ make test       # unit suites (mock the fetch boundary)
 make test-e2e   # LIVE server, PIPELEX_E2E_BASE_URL (default http://localhost:8081)
 
 # Start a local runner for the e2e suite:
-cd ../pipelex-api && .venv/bin/uvicorn api.main:app --port 8081</code></pre>
+cd ../pipelex-api &amp;&amp; .venv/bin/uvicorn api.main:app --port 8081</code></pre>
       <p>
         The e2e suite is what pins the <code>kind</code> / <code>target</code> vocabulary: <code>CodegenTarget</code> is a
         hand-written mirror of a Python <code>StrEnum</code> in another repo, so a member the server stops serving is
