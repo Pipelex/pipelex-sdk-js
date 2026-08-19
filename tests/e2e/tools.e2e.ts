@@ -77,16 +77,18 @@ prompt = "Say hi"
 // needs a real token or /health passes while every /v1 call 401s.
 const client = new PipelexApiClient({
   baseUrl: BASE_URL,
-  apiKey: process.env.PIPELEX_API_KEY ?? "e2e-test",
+  apiKey: process.env.PIPELEX_API_KEY || "e2e-test",
 });
 
 beforeAll(async () => {
   try {
-    await client.health();
+    // `/v1/version`, not the origin-level `/health`: only this one is served by BOTH a
+    // bare runner and a hosted origin, so the probe stays honest wherever BASE_URL points.
+    await client.version();
   } catch (err) {
     throw new Error(
-      `No pipelex-api server reachable at ${BASE_URL}. Start one (e.g. in ../pipelex-api) ` +
-        `or point PIPELEX_E2E_BASE_URL at a running instance.`,
+      `No pipelex-api reachable at ${BASE_URL}. Start one (e.g. in ../pipelex-api) ` +
+        `or point PIPELEX_E2E_BASE_URL (shell or .env) at a running instance.`,
       { cause: err },
     );
   }
