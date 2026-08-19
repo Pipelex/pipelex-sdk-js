@@ -85,6 +85,24 @@ export type {
   CodegenResponse,
 } from "./models.js";
 
+// ── Offline codegen drift check (pure — no filesystem, no network, no key) ──
+// The CI half of the codegen trust chain: hand it a committed tree plus its
+// `codegen.lock` and it returns the structured drift verdict. Regeneration needs
+// the engine (a dev action); the check needs only hashes (the CI action).
+export {
+  runCodegenCheck,
+  isStampableArtifactPath,
+  STAMPABLE_ARTIFACT_SUFFIXES,
+  CodegenLockError,
+} from "./codegen-check.js";
+export type {
+  CodegenCheckInput,
+  CodegenCheckReport,
+  CodegenDrift,
+  CodegenDriftCategory,
+  CodegenTreeFile,
+} from "./codegen-check.js";
+
 // ── Pipelex product surface (hosted management routes) ───────────────
 export type {
   UserProfile,
