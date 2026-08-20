@@ -21,7 +21,7 @@ This does **not** reopen the "SDK stays transport-only" stance recorded in the f
 
 ## Cold-start orientation — the state of this repo
 
-- One runtime dependency: `mthds@^0.22.0`. The barrel `src/index.ts` is the single public entry (`exports` has only `"."`), and the check adds no Node builtin to its graph (the barrel is not fully client-bundler-safe today — `upload.ts` names `node:fs/promises`, which a browser-targeting bundler must mark external).
+- Runtime dependencies: `mthds@^0.22.0` and `smol-toml@^1.6.0`. The barrel `src/index.ts` is the single public entry (`exports` has only `"."`), and the check adds no Node builtin to its graph (the barrel is not fully client-bundler-safe today — `upload.ts` names `node:fs/promises`, which a browser-targeting bundler must mark external).
 - `make check` = `lint` (eslint over `src/ tests/`) + `format:check` (prettier over `src/**/*.ts`, `tests/**/*.ts`, `*.ts`) + `typecheck` + `typecheck:test` (`tsconfig.test.json`, which includes `tests/**/*.ts`) + `build` + `depcruise`. All five touch `tests/` — see the fixture decision below.
 - `.dependency-cruiser.cjs` forbids only imports resolving under `node_modules/mthds/` outside the `protocol` subpath, so a new third-party dependency needs no config change.
 - `src/models.ts` already defines everything the e2e needs: `CodegenValidReport` carries `artifacts`, `lock`, `lock_filename`, `crate_fingerprint`, `engine_version`, and `GeneratedArtifact` is `{ path: string; content: string }` — **structurally identical to the tree-file input below**, so the e2e feeds `report.artifacts` straight in with no mapping. Keep it that way.
