@@ -1,0 +1,17 @@
+domain = "smoke"
+description = "Fixture bundle for the SDK offline codegen check"
+main_pipe = "echo"
+
+[concept.Customer]
+description = "A customer"
+
+[concept.Customer.structure]
+name = { type = "text", description = "Customer name" }
+age = { type = "integer", description = "Customer age", required = false }
+
+[pipe.echo]
+type = "PipeLLM"
+description = "Echo"
+inputs = { text = "Text" }
+output = "Customer"
+prompt = "@text"

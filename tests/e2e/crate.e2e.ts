@@ -18,10 +18,18 @@
  * (`is_valid: false` + `validation_errors[]`), while an unresolvable REQUEST — a
  * `pipe_ref` on the concept-set-wide `types` kind, the reserved `method_ref` — is
  * non-2xx and surfaces as the typed `ApiResponseError`.
+ *
+ * The last block runs `runCodegenCheck` over what the server just emitted. The unit
+ * suite pins that port against vendored bytes; only a live call proves it agrees with
+ * the stamp grammar and lock format the SERVER writes today — which is the pairing
+ * that matters, since a consumer commits the server's artifacts and gates CI on the
+ * SDK's verdict about them.
  */
 
 import { beforeAll, describe, expect, it } from "vitest";
 import { PipelexApiClient } from "../../src/client.js";
+import { isStampableArtifactPath, runCodegenCheck } from "../../src/codegen-check.js";
+import type { CodegenCheckInput } from "../../src/codegen-check.js";
 import { ApiResponseError } from "../../src/errors.js";
 import type {
   CodegenTarget,
@@ -29,6 +37,7 @@ import type {
   CrateInvalidReport,
   ResolveValidReport,
 } from "../../src/models.js";
+import { handEdit, regenerate } from "../helpers/codegen-stamp.js";
 
 const BASE_URL = process.env.PIPELEX_E2E_BASE_URL ?? "http://localhost:8081";
 
@@ -200,3 +209,152 @@ describe("e2e codegen (/v1/codegen)", () => {
     await expect(failure).rejects.toMatchObject({ status: 422 });
   });
 });
+
+// ── The offline check, over live server bytes ────────────────────────────
+
+/**
+ * The two flavors worth checking live: one per comment syntax the stamp grammar
+ * supports. `python-structures` shares `python-pydantic`'s `#` prefix, so a third
+ * pass would re-exercise the same parser branch — the exhaustive `target` loop above
+ * is what guards the vocabulary.
+ */
+const CHECKED_TARGETS: ReadonlyArray<{
+  target: CodegenTarget;
+  commentPrefix: string;
+  strayPath: string;
+}> = [
+  { target: "ts-zod", commentPrefix: "//", strayPath: "stale/dropped.ts" },
+  { target: "python-pydantic", commentPrefix: "#", strayPath: "stale/dropped.py" },
+];
+
+describe.each(CHECKED_TARGETS)(
+  "e2e offline check over live $target artifacts",
+  ({ target, commentPrefix, strayPath }) => {
+    let generated: CodegenValidReport;
+
+    beforeAll(async () => {
+      const result = await client.codegen({
+        files: [{ content: VALID_BUNDLE, source: "smoke.mthds" }],
+        kind: "types",
+        target,
+      });
+      expect(result.is_valid).toBe(true);
+      generated = result as CodegenValidReport;
+      // Without this, the walk-filter loop below has nothing to iterate and the
+      // "verifies as current" case holds trivially for an empty tree.
+      expect(generated.artifacts.length).toBeGreaterThan(0);
+    });
+
+    /**
+     * The response feeds the check with NO mapping: `GeneratedArtifact` and
+     * `CodegenTreeFile` are structurally identical on purpose, and this call site is
+     * what would stop compiling if either drifted.
+     */
+    const tree = (): CodegenCheckInput => ({
+      lockContent: generated.lock,
+      files: generated.artifacts,
+    });
+
+    /** The first artifact, by the same path sort the check reports drifts in. */
+    const firstPath = (): string => [...generated.artifacts].map((a) => a.path).sort()[0]!;
+
+    const contentAt = (path: string): string =>
+      generated.artifacts.find((artifact) => artifact.path === path)!.content;
+
+    it("verifies the server's own artifacts as current", async () => {
+      const report = await runCodegenCheck(tree());
+
+      expect(report.drifts).toEqual([]);
+      expect(report.isCurrent).toBe(true);
+      // The lock header the check parsed must be the one the route reported beside it;
+      // a mismatch would mean the artifacts were stamped against a crate the caller
+      // never saw. (The check itself never compares them — that is the caller's move,
+      // and this is the field that makes it possible.)
+      expect(report.crateFingerprint).toBe(generated.crate_fingerprint);
+      expect(report.engineVersion).toBe(generated.engine_version);
+    });
+
+    it("emits only artifact types a caller's tree walk would pick up", () => {
+      // The consumer filters its walk with `isStampableArtifactPath`; an artifact type
+      // outside that set would be invisible to the walk and silently unchecked.
+      for (const artifact of generated.artifacts) {
+        expect(isStampableArtifactPath(artifact.path)).toBe(true);
+      }
+    });
+
+    it("reports a deleted artifact as `missing`", async () => {
+      const path = firstPath();
+      const report = await runCodegenCheck({
+        ...tree(),
+        files: generated.artifacts.filter((artifact) => artifact.path !== path),
+      });
+
+      expect(report.isCurrent).toBe(false);
+      expect(report.drifts).toEqual([
+        { path, category: "missing", detail: "Locked artifact is absent on disk." },
+      ]);
+    });
+
+    it("reports a body edited below the stamp as exactly one `hand-edited` drift", async () => {
+      const path = firstPath();
+      const report = await runCodegenCheck({
+        ...tree(),
+        files: generated.artifacts.map((artifact) =>
+          artifact.path === path
+            ? { ...artifact, content: handEdit(artifact.content, "EDITED\n", commentPrefix) }
+            : artifact,
+        ),
+      });
+
+      // One drift, not two: the edit trips the stamp check AND the lock check, and the
+      // stamp verdict wins. Reported twice, a consumer would print the same file twice
+      // under contradictory categories.
+      expect(report.drifts).toEqual([
+        {
+          path,
+          category: "hand-edited",
+          detail: "Body was edited below the stamp (stamp hash no longer matches).",
+        },
+      ]);
+    });
+
+    it("reports a regenerated body against the stale lock as `modified`", async () => {
+      const path = firstPath();
+      const report = await runCodegenCheck({
+        ...tree(),
+        files: generated.artifacts.map((artifact) =>
+          artifact.path === path
+            ? { ...artifact, content: regenerate(artifact.content, "NEWER\n", commentPrefix) }
+            : artifact,
+        ),
+      });
+
+      // Body and stamp agree with each other and only the lock is stale — what a real
+      // regeneration against a changed method looks like before the lock is committed.
+      expect(report.drifts).toEqual([
+        {
+          path,
+          category: "modified",
+          detail: "Body no longer matches the locked hash — regenerate.",
+        },
+      ]);
+    });
+
+    it("reports a stamped file the lock does not track as an `orphan`", async () => {
+      // A real stale artifact: yesterday's generated file, still stamped, left behind
+      // after the concept it projected was deleted. Only the lock can catch this one.
+      const report = await runCodegenCheck({
+        ...tree(),
+        files: [...generated.artifacts, { path: strayPath, content: contentAt(firstPath()) }],
+      });
+
+      expect(report.drifts).toEqual([
+        {
+          path: strayPath,
+          category: "orphan",
+          detail: "Stamped generated file not tracked by the lock — stale; remove or regenerate.",
+        },
+      ]);
+    });
+  },
+);

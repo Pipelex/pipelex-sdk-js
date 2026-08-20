@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.12.0";
+export const SDK_VERSION = "0.13.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -84,6 +84,24 @@ export type {
   CodegenValidReport,
   CodegenResponse,
 } from "./models.js";
+
+// ── Offline codegen drift check (pure — no filesystem, no network, no key) ──
+// The CI half of the codegen trust chain: hand it a committed tree plus its
+// `codegen.lock` and it returns the structured drift verdict. Regeneration needs
+// the engine (a dev action); the check needs only hashes (the CI action).
+export {
+  runCodegenCheck,
+  isStampableArtifactPath,
+  STAMPABLE_ARTIFACT_SUFFIXES,
+  CodegenLockError,
+} from "./codegen-check.js";
+export type {
+  CodegenCheckInput,
+  CodegenCheckReport,
+  CodegenDrift,
+  CodegenDriftCategory,
+  CodegenTreeFile,
+} from "./codegen-check.js";
 
 // ── Pipelex product surface (hosted management routes) ───────────────
 export type {
