@@ -169,6 +169,28 @@ describe("e2e validate (/v1/validate)", () => {
     expect(report.bundle_blueprint).toBeTruthy();
     expect(report.is_runnable).toBe(true);
     expect(report.validated_pipes.some((p) => p.pipe_ref === "quick_start.hello_world")).toBe(true);
+    // The three fields a live server is the only witness for. `warnings` and
+    // `liftable_pipes` are unconditional (they default to `[]` upstream); a clean
+    // bundle exercises the empty case, which is the one a typed mirror gets wrong by
+    // omitting the field entirely.
+    expect(Array.isArray(report.warnings)).toBe(true);
+    expect(Array.isArray(report.liftable_pipes)).toBe(true);
+  });
+
+  it("keys input_form like pipe_io_contracts whenever the server sends it", async () => {
+    const result = await client.validate([VALID_BUNDLE]);
+    expect(result.is_valid).toBe(true);
+    const report = result as PipelexValidationReport;
+    // Deliberately conditional. The standard makes `input_form` an opt-in `views` view
+    // (absent by default), while a pipelex-api 0.17.0 runner resolves no `views` token
+    // and emits it on every valid verdict. Asserting the KEY SET rather than the field's
+    // presence is what keeps this green under both regimes — and it is the invariant a
+    // renderer actually depends on: address a pipe's form by the ref it already holds.
+    if (report.input_form !== undefined) {
+      expect(Object.keys(report.input_form).sort()).toEqual(
+        Object.keys(report.pipe_io_contracts).sort(),
+      );
+    }
   });
 
   it("returns is_valid: false with structured validation_errors for a broken bundle", async () => {

@@ -50,6 +50,6 @@ The dependency direction is strictly one-way: `@pipelex/sdk → mthds`, and only
 
 The client re-implements the official MTHDS protocol routes using MTHDS *types* (from `mthds/protocol`); it does not delegate to the `mthds` package's protocol client. This keeps route shapes pinned to the standard so they can't silently diverge.
 
-**Brand boundary:** MTHDS-branded concepts (protocol wire models, the standard validation shapes) belong to `mthds`. Pipelex-branded concepts (`PipelexApiClient`, run lifecycle, `PipelexValidationResult`, hosted-product errors, the product catalog/billing/keys surface) belong here. Inside a Pipelex envelope, keep neutral field names (`bundle_blueprint`, `pipe_io_contracts`, `graph_spec`) — do not stamp `pipelex_` onto standard artifacts.
+**Brand boundary:** MTHDS-branded concepts (protocol wire models, the standard validation shapes) belong to `mthds`. Pipelex-branded concepts (`PipelexApiClient`, run lifecycle, `PipelexValidationResult`, hosted-product errors, the product catalog/billing/keys surface) belong here. Inside a Pipelex envelope, keep neutral field names (`bundle_blueprint`, `pipe_io_contracts`, `input_form`, `liftable_pipes`, `graph_spec`) — do not stamp `pipelex_` onto standard artifacts.
 
 See [`docs/architecture.md`](./docs/architecture.md) for the full narrative as the client surface lands.

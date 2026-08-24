@@ -68,6 +68,23 @@ export interface ValidatedPipeEntry {
 }
 
 /**
+ * One entry of `PipelexValidationReport.liftable_pipes` — mirror of pipelex's
+ * `LiftablePipeEntry`. A pipe the runtime may skip (lift) when an optional slot
+ * resolves absent: build-time visibility for "this step may not run", derived by
+ * the absence-taint pass, not a verdict.
+ */
+export interface LiftablePipeEntry {
+  /** Namespaced ref of the liftable pipe. */
+  pipe_ref: string;
+  /** Namespaced ref of the controller in whose flow the lift happens. */
+  within_pipe_ref: string;
+  /** The slot names whose absence lifts the pipe. */
+  skipped_when_absent: string[];
+  /** Where the possible absence originates (human-readable). */
+  absence_source: string;
+}
+
+/**
  * Pipelex's `POST /v1/validate` 200 body for a VALID bundle — the canonical
  * `PipelexValidationReport` (typed extension over the protocol's `ValidationReport`,
  * carrying its `is_valid: true` discriminant) plus the route's wire-only extras
@@ -75,9 +92,12 @@ export interface ValidatedPipeEntry {
  * boundary — blueprints/graphs are language artifacts, so no `pipelex_` prefix
  * inside this envelope.
  *
- * `bundle_blueprint`, `pipe_io_contracts`, and `graph_spec` stay opaque transport
- * (`Record<string, unknown>` / `unknown`): their canonical schemas are owned
- * elsewhere (the runtime's blueprint models; `@pipelex/mthds-ui` owns `GraphSpec`).
+ * `bundle_blueprint`, `pipe_io_contracts`, `input_form`, and `graph_spec` stay opaque
+ * transport (`Record<string, unknown>` / `unknown`): their canonical schemas are owned
+ * elsewhere (the runtime's blueprint models; `@pipelex/mthds-form` owns the input-form
+ * descriptors and the typed `pipe_io_contracts` mirror; `@pipelex/mthds-ui` owns
+ * `GraphSpec`). Restating them here would be a second source of truth, free to drift
+ * from the one the server emits.
  * Inherits the extension index signature, so any further server field is preserved.
  */
 export interface PipelexValidationReport extends ValidationReport {
@@ -85,10 +105,29 @@ export interface PipelexValidationReport extends ValidationReport {
   bundle_blueprint: Record<string, unknown>;
   /** Per-pipe input/output contracts, keyed by namespaced `pipe_ref` (`domain.code`). */
   pipe_io_contracts: Record<string, unknown>;
+  /**
+   * Per-pipe input-form descriptors — the MTHDS input-form descriptor, derived from
+   * authored facts rather than the emitted JSON Schema, so a renderer can build a
+   * fill-in form from the verdict alone. Keyed exactly like `pipe_io_contracts`.
+   *
+   * OPTIONAL on purpose. The standard makes this an opt-in structured view requested
+   * through `views: ["input_form"]` (see `validate`), absent by default — while a
+   * `pipelex-api` 0.17.0 runner resolves no `views` token and emits the field on every
+   * valid verdict regardless. Optional is the one typing honest under both regimes.
+   */
+  input_form?: Record<string, unknown>;
+  /** Pipes the runtime may skip when an optional slot resolves absent. */
+  liftable_pipes: LiftablePipeEntry[];
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
   graph_spec: unknown;
   /** Per-pipe dry-run sweep outcomes. */
   validated_pipes: ValidatedPipeEntry[];
+  /**
+   * Advisory lints on a VALID bundle — same item shape as `validation_errors[]`, so one
+   * parser serves both channels, but these never flip `is_valid`. Empty when the bundle
+   * is lint-free. Carries the advisory `hint_*` error types, which ride here exclusively.
+   */
+  warnings: ValidationErrorItem[];
   /** Qualified refs of pipes still declared as `PipeSignature`. */
   pending_signatures: string[];
   /** `not pending_signatures` — whether the validated library is complete enough to run. */
@@ -144,11 +183,17 @@ export type ValidationErrorCategory =
 /**
  * One structured bundle-validation error — mirror of pipelex's `ValidationErrorItem`.
  * Carried by `PipelexInvalidReport.validation_errors[]` on the **200** invalid arm of
- * `POST /v1/validate` (NOT a 422 — an invalid bundle is a produced verdict). The same
- * typed item also rides the build routes' 422 problem bodies (`ApiResponseError.validationErrors`).
+ * `POST /v1/validate` (NOT a 422 — an invalid bundle is a produced verdict), by the
+ * VALID arm's advisory `warnings[]`, and by the build routes' 422 problem bodies
+ * (`ApiResponseError.validationErrors`).
  *
  * Only `category` and `message` are always present; the rest are populated per
- * `category` and dropped from the wire when unset (`exclude_none` server-side).
+ * `category`. Every other member is `?: T | null` because the two channels serialize
+ * an unset locator differently: the invalid arm and the crate routes drop the key
+ * (`exclude_none` server-side) while the valid arm — which carries `warnings[]` — does
+ * not, so the same item arrives with explicit `null`s there. A truthiness check reads
+ * both; an `=== undefined` check would be wrong on one of them.
+ *
  * `source` is the declaring file path (CLI) or the per-content `mthds_sources` name
  * the API threads onto the in-memory load path — the owning file for cross-file
  * diagnostics.
@@ -156,16 +201,128 @@ export type ValidationErrorCategory =
 export interface ValidationErrorItem {
   category: ValidationErrorCategory;
   message: string;
-  error_type?: string;
-  pipe_code?: string;
-  concept_code?: string;
-  domain_code?: string;
-  source?: string;
-  field_path?: string;
-  field_name?: string;
-  variable_names?: string[];
-  missing_concept_code?: string;
-  declared_concepts?: string[];
+  error_type?: string | null;
+  pipe_code?: string | null;
+  concept_code?: string | null;
+  domain_code?: string | null;
+  source?: string | null;
+  field_path?: string | null;
+  field_name?: string | null;
+  variable_names?: string[] | null;
+  missing_concept_code?: string | null;
+  missing_pipe_code?: string | null;
+  declared_concepts?: string[] | null;
+  /** The server's deterministic repair proposal for this error, when it has one. */
+  suggested_fix?: SuggestedFix | null;
+}
+
+/** Whether a `SuggestedFix` is safe to auto-apply, or needs explicit opt-in. */
+export type FixSafety = "safe" | "unsafe";
+
+/** The semantic patch operations a `SuggestedFix` is composed of. */
+export type FixOpKind =
+  | "set_key"
+  | "ensure_table"
+  | "delete_key"
+  | "delete_table"
+  | "rename_table_key"
+  | "move_key"
+  | "remap_value";
+
+/** A TOML-representable scalar a `set_key` op can write. */
+export type TomlScalar = string | number | boolean;
+
+/**
+ * What a `set_key` op writes: a scalar, or a flat scalar mapping for fixes that create
+ * a whole table at once (written as an inline table). Deeper nesting is not modelled —
+ * the server does not emit it.
+ */
+export type TomlValue = TomlScalar | Record<string, TomlScalar>;
+
+/**
+ * What every fix op carries: the table it acts in. `table_path` addresses the containing
+ * table (e.g. `["pipe", "my_seq"]`), aligned with the `field_path` conventions of
+ * `ValidationErrorItem`, and is empty for the document root.
+ *
+ * The segment `"*"` is the wildcard — "every entry of the open mapping at this node".
+ * The server refuses it as a `key` on every kind but `remap_value`, the only one with a
+ * per-key meaning for it.
+ */
+interface FixOpBase {
+  table_path: string[];
+}
+
+/** Write `key = value` in the addressed table, whatever it currently holds. */
+export interface SetKeyOp extends FixOpBase {
+  kind: "set_key";
+  key: string;
+  value: TomlValue;
+}
+
+/** Create the addressed table when it is missing. `table_path` is never empty. */
+export interface EnsureTableOp extends FixOpBase {
+  kind: "ensure_table";
+}
+
+/** Remove `key` from the addressed table. */
+export interface DeleteKeyOp extends FixOpBase {
+  kind: "delete_key";
+  key: string;
+}
+
+/** Remove the addressed table entirely. `table_path` is never empty. */
+export interface DeleteTableOp extends FixOpBase {
+  kind: "delete_table";
+}
+
+/** Rename `key` to `new_key` within the addressed table. */
+export interface RenameTableKeyOp extends FixOpBase {
+  kind: "rename_table_key";
+  key: string;
+  new_key: string;
+}
+
+/** Move `key` out of the addressed table into `new_table_path`, under `new_key`. */
+export interface MoveKeyOp extends FixOpBase {
+  kind: "move_key";
+  key: string;
+  new_table_path: string[];
+  new_key: string;
+}
+
+/** Rewrite `key`'s value through `mapping`, leaving an unmapped value untouched. */
+export interface RemapValueOp extends FixOpBase {
+  kind: "remap_value";
+  key: string;
+  mapping: Record<string, string>;
+}
+
+/** One patch operation of a `SuggestedFix` — discriminated on `kind`. */
+export type FixOp =
+  | SetKeyOp
+  | EnsureTableOp
+  | DeleteKeyOp
+  | DeleteTableOp
+  | RenameTableKeyOp
+  | MoveKeyOp
+  | RemapValueOp;
+
+/**
+ * A deterministic fix for one validation error, ready for a style-preserving applier —
+ * mirror of pipelex's `SuggestedFix`. The ops are semantic patches over the `.mthds`
+ * document, not a text diff, so an applier keeps the author's formatting.
+ */
+export interface SuggestedFix {
+  /** The kebab-case rule id, e.g. `"match-sequence-output"`. */
+  fix_code: string;
+  description: string;
+  safety: FixSafety;
+  /**
+   * The file the ops target, when known (multi-file libraries). An applier must only
+   * apply these ops to that file.
+   */
+  source?: string | null;
+  ops: FixOp[];
 }
 
 // ── Tools routes (Pipelex API — `/v1/lint`, `/v1/format`) ───────────────

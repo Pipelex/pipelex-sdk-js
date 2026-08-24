@@ -143,6 +143,8 @@ export interface ValidateFilesOptions {
   allowSignatures?: boolean;
   /** Optional validate presentation hints, e.g. ["markdown"]. */
   render?: string[];
+  /** Optional structured-view opt-in tokens, e.g. ["input_form"]; sent only when given. */
+  views?: string[];
   /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
   timeoutMs?: number;
   /** Caller-driven cancellation; the abort reason propagates untouched. */
@@ -630,12 +632,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * This client always asks for Markdown so both valid results and produced
    * validation-error verdicts carry `rendered_markdown`; callers may add more
    * tokens. Unknown tokens are server-side lenient-ignored (never a 422).
+   *
+   * `views` is the sibling opt-in for *structured* views where `render` carries
+   * *rendered text*. The two lists are independent, each resolving its own tokens
+   * against its own supported set, and each supported token adds a same-named
+   * top-level field to the valid arm — today only `input_form`. Unlike `render`,
+   * this client sends `views` ONLY when the caller asks: the point of an opt-in view
+   * is that the default response stays byte-identical, and the highest-frequency
+   * consumers (hook pipelines, CI gates, agent loops) never pay for bytes they
+   * discard. Note that a `pipelex-api` 0.17.0 runner resolves no `views` token yet
+   * (the key is silently ignored, never a 422) and emits `input_form` on every valid
+   * verdict regardless — which is why `PipelexValidationReport.input_form` is typed
+   * optional rather than required.
    */
   async validate(
     mthdsContents: string[],
     allowSignatures = false,
     mthdsSources?: string[],
     render?: string[],
+    views?: string[],
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<PipelexValidationResult> {
     const body: Record<string, unknown> = {
@@ -646,6 +661,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       body.mthds_sources = mthdsSources;
     }
     body.render = withValidateMarkdownRender(render);
+    if (views !== undefined) {
+      body.views = views;
+    }
     const res = await this.requestRaw("POST", this.url("validate"), {
       body,
       timeoutMs: options.timeoutMs,
@@ -686,6 +704,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       options.allowSignatures ?? false,
       mthdsSources,
       options.render,
+      options.views,
       {
         timeoutMs: options.timeoutMs,
         signal: options.signal,
