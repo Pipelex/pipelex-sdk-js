@@ -769,9 +769,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // origin, with the same key, `validate` succeeds while these two 403.
   //
   // That blocks nothing, because lint and format are toolchain capabilities rather
-  // than hosted ones: `plxt` carries both, and this package runs them offline
-  // through `@pipelex/tools-wasm` with no credentials (see `hooks/check-core.ts`),
-  // with these two methods as the documented fallback against a runner. The crate
+  // than hosted ones: `plxt` carries both, and the post-edit hook this repo builds
+  // (`npm run build:hook`) runs them offline through `@pipelex/tools-wasm` with no
+  // credentials (see `hooks/claude-mthds-check.ts`), with these two methods as the
+  // published package's documented fallback against a runner. The crate
   // routes (`resolve`/`codegen`) shared this gap and are now exposed everywhere;
   // these two were not included, a known non-critical item on the platform's list.
   // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.

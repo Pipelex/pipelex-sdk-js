@@ -31,10 +31,10 @@ Check `pipelex-sdk-python`'s mirror at the same time: if it is also partial, the
 
 ## How it was closed
 
-Both fields landed together in the change that mirrored the `pipelex` 0.52 / `pipelex-api` 0.17 validation-report surface, following the three steps above: `missing_pipe_code`, `suggested_fix`, and the `SuggestedFix` / `FixOp` / `FixSafety` family ported as exported types in `src/models.ts` and named in the barrel, with the `FixOp` union discriminated on `kind` over the seven patch kinds.
+Both fields landed together in the change that mirrored the `pipelex` 0.52 / `pipelex-api` 0.17 validation-report surface, following steps 1 and 2 and the barrel half of step 3: `missing_pipe_code`, `suggested_fix`, and the `SuggestedFix` / `FixOp` / `FixSafety` family ported as exported types in `src/models.ts` and named in the barrel, with the `FixOp` union discriminated on `kind` over the seven patch kinds.
 
 What forced the timing was the fourth surface. `PipelexValidationReport.warnings` — the advisory lints on a **valid** bundle — is typed with this same item, so the drift stopped being confined to the invalid arm. That addition also surfaced something the original note did not know: the two channels serialize an unset locator differently. The invalid arm and the crate routes drop the key (`exclude_none` server-side); the valid arm does not, so the identical item arrives inside `warnings[]` with explicit `null`s. Every optional member is therefore `?: T | null` rather than `?: T`, and a regression test pins the null-bearing warning item.
 
 Two upstream invariants a TypeScript type cannot carry are recorded as doc comments instead: `"*"` is the wildcard path segment, refused as a `key` on every kind but `remap_value`; `ensure_table` and `delete_table` require a non-empty `table_path`.
 
-Still open, and genuinely separate: the `pipelex-sdk-python` mirror named above. Nobody has checked whether it is partial in the same way.
+Still open, and genuinely separate. Step 3's live half was never attempted: the shapes are pinned against mocked `/v1/validate` bodies in `tests/client.test.ts`, and no e2e call asserts a populated `suggested_fix` survives the wire — the invalid arm in `tests/e2e/tools.e2e.ts` still checks only `category` and `message`. And the `pipelex-sdk-python` mirror named above, which nobody has checked for the same partiality.
