@@ -267,13 +267,26 @@ describe("methods catalog", () => {
   it("surfaces a second delete of the same method as the platform's 409 conflict", async () => {
     const client = makeClient();
     // The claim is a conditional write, so a double-clicked delete cannot
-    // enqueue two cascades over the same runs — the second call errors.
-    vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse(409, { code: "conflict", detail: "deletion already pending" }),
-    );
+    // enqueue two cascades over the same runs — the second call errors. Both
+    // calls have to go out for that to mean anything: the client holds no
+    // memory of an accepted deletion, so it is the platform that refuses the
+    // second one.
+    const accepted = {
+      method_id: "m1",
+      deletion_state: "pending",
+      deletion_job_id: "job-1",
+    };
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(202, accepted))
+      .mockResolvedValueOnce(
+        jsonResponse(409, { code: "conflict", detail: "deletion already pending" }),
+      );
 
+    await expect(client.deleteMethod("m1")).resolves.toEqual(accepted);
     const err = await client.deleteMethod("m1").catch((caught: unknown) => caught);
 
+    expect(spy).toHaveBeenCalledTimes(2);
     expect(err).toBeInstanceOf(ApiResponseError);
     expect((err as ApiResponseError).status).toBe(409);
   });

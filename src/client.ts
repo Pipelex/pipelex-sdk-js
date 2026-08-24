@@ -127,8 +127,8 @@ export interface MthdsFile {
  * They are named options rather than `extra` entries because that is the one
  * job a hosted client exists to do: `extra` remains the escape hatch for an
  * extension this client does not know about, never the way to pass one it does.
- * See the workspace spec `docs/specs/pipelex-platform-api.md` → "Layered
- * extension policy" (Rule 5).
+ * That split is normative for every client in the layered stack — it is not a
+ * preference of this one.
  */
 export interface PipelexHostedRunExtensions {
   /**
@@ -1717,9 +1717,8 @@ const PROTOCOL_REQUEST_KEYS: readonly string[] = [
 // and must never be pushed down into the protocol clients (`mthds` /
 // `mthds-python`): a layer that does not own an argument has no business
 // rejecting it — a protocol client talking to some other vendor's server must
-// keep passing that vendor's `method_id` straight through. See the workspace
-// spec `docs/specs/pipelex-platform-api.md` → "Layered extension policy"
-// (Rule 5).
+// keep passing that vendor's `method_id` straight through. That per-layer
+// split is normative for the whole layered client stack.
 const HOSTED_REQUEST_KEYS: readonly string[] = ["method_id"];
 
 // Keys that must never ride `extra`: the named request options above (which

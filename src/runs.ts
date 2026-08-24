@@ -91,10 +91,10 @@ export interface RunRead extends RunPublic {
 /**
  * One inference call's token usage — the client-facing wire record.
  *
- * Mirrors the runtime's `TokensUsageRecord`, specified in
- * `docs/specs/pipelex-mthds-protocol.md#tokensusage-records-on-run-artifacts`. The same
- * shape rides both surfaces: the durable `tokens_usages.json` artifact that the hosted
- * results route relays, and the blocking execute response's `pipe_output.tokens_usages`.
+ * Mirrors the runtime's `TokensUsageRecord`, whose wire contract the MTHDS Protocol
+ * specifies for run artifacts. The same shape rides both surfaces: the durable
+ * `tokens_usages.json` artifact that the hosted results route relays, and the blocking
+ * execute response's `pipe_output.tokens_usages`.
  *
  * Every field is optional and the index signature is open **on purpose**. A record the
  * current runtime emits always carries the full key set (a field with no value is an

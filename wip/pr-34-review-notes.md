@@ -1,0 +1,22 @@
+# PR #34 review triage — deferred item
+
+Triage of the unresolved `cubic-dev-ai` review threads on [PR #34](https://github.com/Pipelex/pipelex-sdk-js/pull/34) (`method_id` as a typed run option, plus `deleteMethod`). Greptile reviewed the same commit and reported nothing. Of cubic's four threads, two were fixed on the branch, one was a false positive, and the one below is confirmed but deferred because closing it properly is a decision about the SDK's public boundary rather than a defect in this PR. Its PR thread is deliberately left open.
+
+For the record, the three threads that needed no note: the run-source introduction in `docs/architecture.md` was rewritten so the three mutually exclusive inline *encodings* are distinguished from the hosted `method_id` *selector*, which is legal alone and legal alongside an inline encoding; the duplicate-delete test in `tests/product.test.ts` now mocks a `202` acceptance followed by the `409` and calls `deleteMethod` twice, so it exercises the sequence its name describes instead of asserting status mapping on a single pre-seeded conflict. The false positive was the blocking-fallback test in `tests/client.test.ts`, where cubic read `fetchSpy.mock.calls[1]` as out of bounds: `startAndWaitForResult` issues the `GET /v1/version` handshake through `supportsRunLifecycle` first, so the execute request is genuinely the second fetch.
+
+## 1. A non-string `method_id` from untyped JavaScript is silently dropped
+
+**Reporter:** `cubic-dev-ai` (P2). **Thread:** <https://github.com/Pipelex/pipelex-sdk-js/pull/34#discussion_r3847423057>. **Location:** `buildHostedRunExtensions`, `src/client.ts:1779-1781`, via `nonEmptyString`, `src/client.ts:1796-1798`.
+
+**The finding, confirmed.** `nonEmptyString` tests `value != null && value.length > 0`. A value that is neither a string nor nullish still reaches `.length`: for a number or a plain object that is `undefined`, `undefined > 0` is `false`, and the helper returns `undefined`. `buildHostedRunExtensions` therefore emits `{}`, the key never reaches the wire, and the run proceeds without the requested method-history linkage — no error, no warning. Worse in one direction than cubic described: an *array* has a real `.length`, so `method_id: ["mt_1"]` passes the check and is serialized as an array, which the platform answers with a `422` rather than dropping. So the failure mode is inconsistent as well as silent.
+
+TypeScript forecloses all of this — `PipelexHostedRunExtensions.method_id` is `string | undefined` — so the state is reachable only from an untyped JavaScript caller. That is not hypothetical for a package published to npm, which is why this is recorded rather than dismissed.
+
+**Why it was not fixed here.** Nothing else in this client runtime-checks a request option. `bundle_b64` goes through the same `nonEmptyString` on both the execute and start builders (`src/client.ts:571` and `src/client.ts:636`) with the same silent-drop behaviour, and `pipe_code`, `files` and `mthds_contents` are trusted outright. Every `typeof` guard in `client.ts` is on *response* parsing, where the values genuinely come from an untrusted source. Adding a throw for `method_id` alone would leave the SDK inconsistent about the same class of caller error, and would read as a guard bolted onto whichever option a reviewer happened to look at.
+
+**The open question.** Does `@pipelex/sdk` validate request-option *types* at its public boundary, on the premise that a published npm package has JavaScript consumers its types cannot reach?
+
+- If **yes**, the change is a shared normalization helper that rejects a non-string with a `PipelineRequestError`, applied uniformly to `method_id`, `bundle_b64`, `pipe_code`, `files` and `mthds_contents` — not a one-off branch. Worth pricing against how much of the surface it would touch, since the same argument extends to every option the client accepts, and to `mthds`'s protocol builders one layer down.
+- If **no**, the current behaviour is consistent and correct, TypeScript is the contract, and the thread closes as working-as-intended.
+
+Either answer is fine; what is not fine is answering it for one field. The decision belongs with whoever owns the SDK's stance on runtime validation.
