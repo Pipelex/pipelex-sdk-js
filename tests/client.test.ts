@@ -718,7 +718,11 @@ describe("PipelexApiClient.validate", () => {
         mthds_contents: ["domain = 'x'"],
       }),
     );
-    const report = await client.validate(["domain = 'x'"]);
+    // Asks for the `input_form` view, because the fixture below carries it: the server
+    // gates that field on the token, so a no-`views` request would never see it.
+    const report = await client.validate(["domain = 'x'"], false, undefined, undefined, [
+      "input_form",
+    ]);
     expect(report.is_valid).toBe(true);
     if (report.is_valid === false) throw new Error("expected a valid report");
     expect(report.validated_pipes[0]).toEqual({ pipe_ref: "x.greet", status: "SUCCESS" });

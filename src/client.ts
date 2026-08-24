@@ -640,9 +640,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * this client sends `views` ONLY when the caller asks: the point of an opt-in view
    * is that the default response stays byte-identical, and the highest-frequency
    * consumers (hook pipelines, CI gates, agent loops) never pay for bytes they
-   * discard. Note that a `pipelex-api` 0.17.0 runner resolves no `views` token yet
-   * (the key is silently ignored, never a 422) and emits `input_form` on every valid
-   * verdict regardless — which is why `PipelexValidationReport.input_form` is typed
+   * discard. `pipelex-api` gates `input_form` on this token as of 0.18.0; a 0.17.0
+   * runner resolved no token (the key is silently ignored, never a 422) and emitted
+   * the field regardless — which is why `PipelexValidationReport.input_form` is typed
    * optional rather than required.
    */
   async validate(

@@ -110,10 +110,15 @@ export interface PipelexValidationReport extends ValidationReport {
    * authored facts rather than the emitted JSON Schema, so a renderer can build a
    * fill-in form from the verdict alone. Keyed exactly like `pipe_io_contracts`.
    *
-   * OPTIONAL on purpose. The standard makes this an opt-in structured view requested
-   * through `views: ["input_form"]` (see `validate`), absent by default — while a
-   * `pipelex-api` 0.17.0 runner resolves no `views` token and emits the field on every
-   * valid verdict regardless. Optional is the one typing honest under both regimes.
+   * OPTIONAL on purpose: this is an opt-in structured view, requested through
+   * `views: ["input_form"]` (see `validate`) and absent from any verdict that did not
+   * ask for it. `pipelex-api` gates it on that token as of 0.18.0; 0.17.0 emitted it on
+   * every valid verdict, the derivation having landed ahead of its carriage gate.
+   *
+   * Optional rather than narrowed by a `views`-generic overload on `validate`: presence
+   * is a function of the request, and tying the type to a runtime array's contents costs
+   * every caller a harder signature to read in exchange for one non-null assertion at the
+   * single call site that opts in.
    */
   input_form?: Record<string, unknown>;
   /** Pipes the runtime may skip when an optional slot resolves absent. */

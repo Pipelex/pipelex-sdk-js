@@ -177,20 +177,35 @@ describe("e2e validate (/v1/validate)", () => {
     expect(Array.isArray(report.liftable_pipes)).toBe(true);
   });
 
-  it("keys input_form like pipe_io_contracts whenever the server sends it", async () => {
+  it("omits input_form unless the request names the view", async () => {
     const result = await client.validate([VALID_BUNDLE]);
     expect(result.is_valid).toBe(true);
     const report = result as PipelexValidationReport;
-    // Deliberately conditional. The standard makes `input_form` an opt-in `views` view
-    // (absent by default), while a pipelex-api 0.17.0 runner resolves no `views` token
-    // and emits it on every valid verdict. Asserting the KEY SET rather than the field's
-    // presence is what keeps this green under both regimes — and it is the invariant a
-    // renderer actually depends on: address a pipe's form by the ref it already holds.
-    if (report.input_form !== undefined) {
-      expect(Object.keys(report.input_form).sort()).toEqual(
-        Object.keys(report.pipe_io_contracts).sort(),
-      );
-    }
+    // The gate itself, which only a live server witnesses: `input_form` is an opt-in
+    // structured view, so a caller that names no token gets a body byte-identical to
+    // one that omits `views` entirely.
+    expect(report.input_form).toBeUndefined();
+  });
+
+  it("attaches input_form keyed like pipe_io_contracts when the view is asked for", async () => {
+    const result = await client.validate([VALID_BUNDLE], false, undefined, undefined, [
+      "input_form",
+    ]);
+    expect(result.is_valid).toBe(true);
+    const report = result as PipelexValidationReport;
+    expect(report.input_form).toBeDefined();
+    // The invariant a renderer depends on: address a pipe's form by the ref it holds.
+    expect(Object.keys(report.input_form ?? {}).sort()).toEqual(
+      Object.keys(report.pipe_io_contracts).sort(),
+    );
+  });
+
+  it("lenient-ignores an unsupported views token rather than refusing the request", async () => {
+    const result = await client.validate([VALID_BUNDLE], false, undefined, undefined, [
+      "not_a_supported_view",
+    ]);
+    expect(result.is_valid).toBe(true);
+    expect((result as PipelexValidationReport).input_form).toBeUndefined();
   });
 
   it("returns is_valid: false with structured validation_errors for a broken bundle", async () => {
