@@ -37,4 +37,4 @@ What forced the timing was the fourth surface. `PipelexValidationReport.warnings
 
 Two upstream invariants a TypeScript type cannot carry are recorded as doc comments instead: `"*"` is the wildcard path segment, refused as a `key` on every kind but `remap_value`; `ensure_table` and `delete_table` require a non-empty `table_path`.
 
-Still open, and genuinely separate. Step 3's live half was never attempted: the shapes are pinned against mocked `/v1/validate` bodies in `tests/client.test.ts`, and no e2e call asserts a populated `suggested_fix` survives the wire — the invalid arm in `tests/e2e/tools.e2e.ts` still checks only `category` and `message`. And the `pipelex-sdk-python` mirror named above, which nobody has checked for the same partiality.
+Still open, and genuinely separate. Step 3's live half was never attempted: the shapes are pinned against mocked `/v1/validate` bodies in `tests/client.test.ts`, and no e2e call asserts a populated `suggested_fix` survives the wire — the invalid arm in `tests/e2e/tools.e2e.ts` still checks only `category` and `message`. The `pipelex-sdk-python` mirror named above also remains unchecked for the same partiality.
