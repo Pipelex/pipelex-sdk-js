@@ -699,11 +699,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // runner, but neither the gateway's API-key allowlist nor the platform's tooling
   // proxy lists them, so every `*.pipelex.com` origin answers a gateway
   // `403 {"message":"Forbidden"}` — refused before any service sees the request.
-  // Measured 2026-08-19 on prod AND `api-dev.pipelex.com`: on the same origin, with
-  // the same key, `validate` succeeds while these two 403. Dev is not a workaround.
+  // Measured 2026-08-19 and re-measured 2026-08-23 on prod AND api-dev: on the same
+  // origin, with the same key, `validate` succeeds while these two 403.
   //
-  // The crate routes (`resolve`/`codegen`) shared this gap and were allowlisted on
-  // dev — these two were NOT included in that change. Point `baseUrl` at a runner.
+  // That blocks nothing, because lint and format are toolchain capabilities rather
+  // than hosted ones: `plxt` carries both, and this package runs them offline
+  // through `@pipelex/tools-wasm` with no credentials (see `hooks/check-core.ts`),
+  // with these two methods as the documented fallback against a runner. The crate
+  // routes (`resolve`/`codegen`) shared this gap and are now exposed everywhere;
+  // these two were not included, a known non-critical item on the platform's list.
   // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
 
   /**
@@ -827,21 +831,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
   //
-  // HOSTED EXPOSURE IS PARTIAL — dev yes, prod not yet. Both routes are served by
-  // any `pipelex-api` runner. On the hosted plane they must additionally be listed
-  // by the gateway's API-key allowlist and the platform's tooling proxy, which each
-  // enumerate routes explicitly (`validate`, `models`, `build/*`, …); an unlisted
-  // path answers a gateway `403 {"message":"Forbidden"}` — refused before any
-  // service sees it, so not even an RFC 7807 problem body.
+  // Served by any `pipelex-api` runner AND on every hosted origin. On the hosted
+  // plane a route is reachable only when the gateway's API-key allowlist and the
+  // platform's tooling proxy both list it — they each enumerate routes explicitly
+  // (`validate`, `models`, `build/*`, …), and an unlisted path answers a gateway
+  // `403 {"message":"Forbidden"}`, refused before any service sees it, so not even
+  // an RFC 7807 problem body. Both list `resolve` and `codegen`.
   //
-  // Measured 2026-08-19, same key, same run:
-  //   api-dev.pipelex.com  (pipelex-hosted@0.9.0)  resolve + codegen OK, full
-  //                        verdict discipline intact (200 `is_valid:false`, 501, 422)
-  //   api.pipelex.com      (pipelex-hosted@0.2.6)  both still 403
-  //
-  // So prod is waiting on the deploy, not on another code change. `lint`/`format`
-  // are still 403 on BOTH — only the crate routes were allowlisted. Tracked in
-  // `wip/hosted-exposure-crate-and-tools-routes.md`.
+  // Measured 2026-08-23 with a real key: api.pipelex.com (pipelex-hosted@0.10.1)
+  // serves both, verdict discipline intact (200 `is_valid:false`, 501, 422);
+  // api-dev.pipelex.com has since 2026-08-13. `lint`/`format` are the two still
+  // unexposed — see their section above for why that blocks nothing.
   //
   // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
   // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding

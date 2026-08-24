@@ -1,19 +1,19 @@
-# Deferred (cross-repo) — expose the crate + tools routes on `api.pipelex.com`
+# Deferred (cross-repo) — expose the tools routes (`lint`, `format`) on the hosted origins
 
-**Status: PARTIALLY SHIPPED (2026-08-13).** The two crate routes were allowlisted and are live on `api-dev.pipelex.com` (`pipelex-hosted@0.2.8`). **`lint` and `format` were not included** and still 403 everywhere; prod is still on `0.2.6` and still 403 on all four. Found while landing `resolve()` / `codegen()` in `@pipelex/sdk` (PR #24). Never a bug in this SDK — the client is correct and works against any `pipelex-api` runner.
+**Status: the crate half is DONE (prod, measured 2026-08-23); `lint` / `format` remain.** `resolve` and `codegen` are allowlisted and served on both `api.pipelex.com` (`pipelex-hosted@0.10.1`) and `api-dev.pipelex.com`, so the caveat has been dropped from `docs/crate-routes.md`, `src/client.ts`, and the JS starter's README / `.env.example` / docs. `lint` and `format` were never included in that change and still 403 on every hosted origin. Found while landing `resolve()` / `codegen()` in `@pipelex/sdk` (PR #24). Never a bug in this SDK — the client is correct and works against any `pipelex-api` runner.
 
-## Current state — measured 2026-08-13, same key, same run
+## Current state — measured 2026-08-23 with a real key
 
-| Method | Path | On a runner | `api-dev.pipelex.com` (`0.2.8`) | `api.pipelex.com` (`0.2.6`) |
+| Method | Path | On a runner | `api-dev.pipelex.com` | `api.pipelex.com` (`0.10.1`) |
 | --- | --- | --- | --- | --- |
-| `resolve` | `POST /v1/resolve` | yes | **yes** ✅ | **no** — 403 |
-| `codegen` | `POST /v1/codegen` | yes | **yes** ✅ | **no** — 403 |
+| `resolve` | `POST /v1/resolve` | yes | **yes** ✅ | **yes** ✅ |
+| `codegen` | `POST /v1/codegen` | yes | **yes** ✅ | **yes** ✅ |
 | `lint` | `POST /v1/lint` | yes | **no** — 403 | **no** — 403 |
 | `format` | `POST /v1/format` | yes | **no** — 403 | **no** — 403 |
 
-On dev the crate routes are not merely reachable — the whole contract survives the gateway and the platform proxy: the happy path across all three codegen targets, `resolve`/`codegen` fingerprint agreement, and every non-2xx arm (`200` `is_valid: false` on an unresolvable closure, `501` on the reserved `method_ref`, `422` on a `pipe_ref` with the `types` kind). Prod therefore needs only the deploy, not another code change.
+The crate routes are not merely reachable — the whole contract survives the gateway and the platform proxy: the happy path across all three codegen targets, `resolve`/`codegen` fingerprint agreement, and every non-2xx arm (`200` `is_valid: false` on an unresolvable closure, `501` on the reserved `method_ref`, `422` on a `pipe_ref` with the `types` kind). Re-measure with a key: unauthenticated, every path answers `401` whether allowlisted or not, so a keyless probe cannot distinguish the two states.
 
-**The "fix all four at once" warning below was not heeded, and the predicted trap is now set.** `lint` / `format` are in exactly the position `resolve` / `codegen` were in on 2026-08-03: correct in the SDK, refused by the gateway, with the next consumer to reach for them getting a bare 403. That is the remaining work here.
+**What is left is `lint` / `format`, and it is not urgent.** They sit where `resolve` / `codegen` sat on 2026-08-03 — correct in the SDK, refused by the gateway — but nothing is blocked, because linting and formatting `.mthds` are toolchain capabilities rather than hosted ones: `plxt` carries both, and this SDK runs them offline through `@pipelex/tools-wasm` with no credentials, with `client.lint` / `client.format` as the documented fallback against a runner. The cost of leaving it is a bare 403 for the next consumer who reaches for the hosted route, which the comment on those two methods now explains.
 
 ## The gap (as originally found)
 
@@ -42,12 +42,10 @@ The refusal is the gateway's, not the app's: `content-type: application/json` wi
 
 Two repos, one change each, shipped together:
 
-- `pipelex-api-infra` — add `/v1/resolve`, `/v1/codegen`, `/v1/lint`, `/v1/format` to `_API_KEY_ALLOWED_PREFIXES`.
-- `pipelex-platform` — add the matching `_proxy` handlers in `tooling_proxy.py`, alongside the existing `build/*` ones.
+- `pipelex-server/infra` (formerly `pipelex-api-infra`) — add `/v1/lint` and `/v1/format` to `_API_KEY_ALLOWED_PREFIXES`; `/v1/resolve` and `/v1/codegen` are already there.
+- `pipelex-server/platform` (formerly `pipelex-platform`) — add the matching `_proxy` handlers in `tooling_proxy.py`, alongside the existing `build/*` ones.
 
-Then drop the caveat from `src/client.ts`'s crate-extensions section header, `docs/crate-routes.md`, and the `[Unreleased]` CHANGELOG entry.
-
-**Do all four routes at once.** `lint` / `format` have carried this gap since they landed; fixing only the two new ones would leave the same trap set for the next consumer.
+Then drop the `lint` / `format` caveat from `src/client.ts`'s tools-extensions section header and `docs/crate-routes.md`. The crate half of that sweep is already done.
 
 **Verify the deployed runner image too, before declaring it fixed.** The 403 is raised at the authorizer, so it masks whatever lies behind it: allowlisting the paths could still surface a `404` if the ECS runner image predates the routes. Check the `pipelex-api` version pinned by `pipelex-api-hosted` for the target env against the release that added `/v1/resolve` + `/v1/codegen`, and confirm with a real call per environment (dev first) rather than assuming the allowlist change is sufficient.
 

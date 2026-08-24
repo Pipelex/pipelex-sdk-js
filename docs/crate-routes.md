@@ -2,16 +2,11 @@
 
 Two routes project a **closure** of MTHDS files into the artifacts downstream tooling actually consumes: `resolve` emits the **normalized library crate**, and `codegen` projects that crate into **stamped typed artifacts** plus their lock. Like the [build routes](./build-routes.md), they are Pipelex API extensions rather than MTHDS Protocol operations — but note the ownership split: the _crate_ is standard-owned (the MTHDS Library Crate Format), while the HTTP surface serving it, and every type projection on top of it, are ours.
 
-> **Hosted exposure is partial: `api-dev.pipelex.com` yes, `api.pipelex.com` not yet.** Any `pipelex-api` runner serves these routes. Reaching them on the hosted plane additionally requires that the gateway's API-key allowlist and the platform's tooling proxy list the path — both enumerate routes explicitly — and an unlisted path answers a gateway `403 {"message":"Forbidden"}`, refused before any service sees the request, so not even an RFC 7807 problem body.
+> **Both crate routes are served on every hosted origin, and by any `pipelex-api` runner.** On the hosted plane a route is reachable only when the gateway's API-key allowlist and the platform's tooling proxy both list its path — each enumerates routes explicitly, and an unlisted path answers a gateway `403 {"message":"Forbidden"}`, refused before any service sees the request, so not even an RFC 7807 problem body. `resolve` and `codegen` are listed by both.
 >
-> Measured 2026-08-19, same API key, same run (first confirmed 2026-08-13 on dev's `0.2.8`; re-verified since on `0.9.0`, so the exposure survived a redeploy):
+> Measured 2026-08-23 against `api.pipelex.com` (`pipelex-hosted@0.10.1`) with a real API key: an empty body to either route comes back as an RFC 7807 `422` naming the missing fields — a request-shape verdict only a route that reached the service can produce — and a real closure comes back as a `200` carrying the artifacts. `api-dev.pipelex.com` has served them since 2026-08-13. Use a key when re-measuring: unauthenticated, every path answers `401` whether or not it is allowlisted, so a keyless probe cannot tell the two states apart.
 >
-> | Origin | `resolve` / `codegen` |
-> | --- | --- |
-> | `api-dev.pipelex.com` (`pipelex-hosted@0.9.0`) | **Available** — all three targets, and the full verdict discipline below survives the gateway intact (a `200` `is_valid: false`, the `501`, and the `422` all arrive as documented) |
-> | `api.pipelex.com` (`pipelex-hosted@0.2.6`) | `403` — waiting on the deploy, not on a further code change |
->
-> **`lint` / `format` are still `403` on both origins** — only the crate routes were allowlisted. Use a runner for those. Tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
+> **`lint` / `format` are the exception and answer `403` on both origins.** That blocks nothing, because linting and formatting `.mthds` are toolchain capabilities rather than hosted ones: `plxt` carries both, and this SDK runs them offline through `@pipelex/tools-wasm` with no credentials — `client.lint` / `client.format` are the documented fallback, against a runner. Exposing them on the hosted origins is a known, non-critical item on the platform's list, tracked in [`wip/hosted-exposure-crate-and-tools-routes.md`](../wip/hosted-exposure-crate-and-tools-routes.md).
 
 ## The shared envelope
 

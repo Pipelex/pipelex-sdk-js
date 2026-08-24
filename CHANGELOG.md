@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **Documentation: the crate routes are hosted everywhere now.** `docs/crate-routes.md` and the crate-extensions comment in `src/client.ts` announced a partial hosted exposure — dev yes, prod not yet — which stopped being true when `api.pipelex.com` (`pipelex-hosted@0.10.1`) picked up `POST /v1/resolve` and `POST /v1/codegen`; both were re-measured with a real key on 2026-08-23. `lint` and `format` are still `403` on every hosted origin, and both places now say why that blocks nothing: linting and formatting `.mthds` are toolchain capabilities, run offline here through `@pipelex/tools-wasm` with `client.lint` / `client.format` as the documented fallback.
+
 ## [v0.13.0] - 2026-08-20
 
 ### Added
