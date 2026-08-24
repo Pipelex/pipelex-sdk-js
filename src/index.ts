@@ -21,6 +21,9 @@ export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type {
   MthdsFile,
   BuildInputsByMethodId,
+  PipelexHostedRunExtensions,
+  PipelexRunOptions,
+  PipelexStartOptions,
   ValidateFilesOptions,
   PipelexApiClientOptions,
 } from "./client.js";
@@ -122,6 +125,7 @@ export type {
   UserProfile,
   ListMethodsQuery,
   MethodData,
+  MethodDeletionAccepted,
   MethodDeletionState,
   MethodPage,
   MethodSummary,

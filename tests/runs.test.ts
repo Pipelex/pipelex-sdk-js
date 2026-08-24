@@ -290,9 +290,9 @@ describe("PipelexApiClient.waitForResult", () => {
 
 describe("TokensUsageRecord", () => {
   // A record in the shape the current runtime emits: every contract field present, absent
-  // values sent as explicit nulls. Mirrors the conformance seed corpus
-  // (conformance/conformance/usage_records.py), which is what the platform arm asserts on
-  // the wire, and the pipelex-sdk-python mirror's fixtures.
+  // values sent as explicit nulls. Mirrors the shared conformance seed corpus, which is
+  // what the platform arm asserts on the wire, and the pipelex-sdk-python mirror's
+  // fixtures.
   const RATED_RECORD: TokensUsageRecord = {
     model_type: "llm",
     inference_model_name: "test-model",
