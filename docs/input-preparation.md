@@ -99,6 +99,8 @@ The SDK **must not** guess that every string resembling a path is an asset — t
 
 The declared signature is resolved via the explicit inputs template (`buildInputs` with `explicit: true` — see [build-routes.md](./build-routes.md)), which carries concept identity, canonical content shape, and multiplicity per input.
 
+> **Why not `input_form`?** The validate report's `input_form` describes the same declared inputs, and it is the richer artifact — but it is an opt-in *presentation* view (`views: ["input_form"]`), aimed at a renderer building a fill-in form. `prepareInputs` deliberately keeps the explicit template as its classifier, because the template's canonical content shape **is** the file signal it interprets (a value that is a dict carrying a `url` key), and because that keeps preparation on one round-trip against a route whose verdict it already handles. The two are complements, not alternatives: render with `input_form`, prepare with the template.
+
 Interpretation per declared input:
 
 - A bare string, path object, or byte-backed value at an **Image/Document-declared** input is a **file reference**: local paths, data URLs, and bytes are uploaded and rewritten to `pipelex-storage://` URIs; HTTP(S) URLs and existing `pipelex-storage://` URIs pass through unchanged.
