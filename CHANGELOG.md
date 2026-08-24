@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`method_id` is a typed run option.** `execute`, `start`, and `startAndWaitForResult` now take the hosted platform's `method_id` as a first-class named option, through the new `PipelexRunOptions` / `PipelexStartOptions` types (the protocol's `RunOptions` / `StartOptions` intersected with the new `PipelexHostedRunExtensions`). It is a pure pass-through — the platform resolves the id against the org's catalog, and nothing is expanded client-side. Alone it is a run source; alongside an inline source the inline source is what runs and the id is recorded as run-history linkage on the Run row, which is what makes the run appear under `GET /v1/runs?method_id=`. It rides the blocking `execute` fallback too, so a bare runner answers the `422` that names it rather than the client silently dropping it. An empty string is treated as absent. Typing its own platform's arguments is what a hosted client is for; `extra` remains the escape hatch for extensions this client does not know about. The doctrine is normative in the workspace spec `docs/specs/pipelex-platform-api.md` → "Layered extension policy".
+- **`deleteMethod`.** `DELETE /v1/methods/{id}` has always existed on the platform; the SDK simply did not expose it, and `docs/architecture.md` justified the omission with a false claim that the route did not exist. It returns the platform's `202` acceptance as the new `MethodDeletionAccepted` (`method_id`, `deletion_state`, `deletion_job_id`), so the asynchronous erasure is honest in the type: a resolved promise means "accepted", never "gone" — completion is the row disappearing from `listMethods`. A double-clicked delete is a `409 conflict` rather than a second cascade over the same runs.
+
+### Changed
+
+- **Breaking: `extra` now rejects `method_id`.** It joins the reserved keys alongside the protocol args, the run sources, and `bundleMain`, because the client now names it itself and one argument must not arrive by two paths with different validation. Callers passing `extra: { method_id }` — an undocumented but working path — must pass the named option instead. The guard is deliberately per layer: `method_id` must never become reserved in the protocol clients (`mthds` / `mthds-python`), which have no business rejecting another vendor's arguments.
+- **The client-side run-source precondition counts `method_id`.** A `method_id`-only run is accepted and sent, where previously only an `extra` entry made such a body pass. The error message when nothing at all is supplied now names the hosted selector.
+
 ### Fixed
 
 - **Documentation: the crate routes are hosted everywhere now.** `docs/crate-routes.md` and the crate-extensions comment in `src/client.ts` announced a partial hosted exposure — dev yes, prod not yet — which stopped being true when `api.pipelex.com` (`pipelex-hosted@0.10.1`) picked up `POST /v1/resolve` and `POST /v1/codegen`; both were re-measured with a real key on 2026-08-23. `lint` and `format` are still `403` on every hosted origin, and both places now say why that blocks nothing: linting and formatting `.mthds` are toolchain capabilities, run offline here through `@pipelex/tools-wasm` with `client.lint` / `client.format` as the documented fallback.

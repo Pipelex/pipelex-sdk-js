@@ -239,6 +239,45 @@ describe("methods catalog", () => {
     expect(req.body).toEqual({ name: "Renamed", mthds: "src" });
   });
 
+  it("DELETEs /v1/methods/{id} and returns the 202 acceptance, not void", async () => {
+    const client = makeClient();
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(202, {
+        method_id: "m1",
+        deletion_state: "pending",
+        deletion_job_id: "job-1",
+      }),
+    );
+
+    const accepted = await client.deleteMethod("m/1");
+
+    const req = lastRequest(spy);
+    expect(req.method).toBe("DELETE");
+    expect(req.url).toBe("http://localhost:8081/v1/methods/m%2F1");
+    // The erasure is asynchronous: the caller gets the claim (a job id it can
+    // log or correlate), never a "it's gone" signal — completion is the row
+    // disappearing from listMethods.
+    expect(accepted).toEqual({
+      method_id: "m1",
+      deletion_state: "pending",
+      deletion_job_id: "job-1",
+    });
+  });
+
+  it("surfaces a second delete of the same method as the platform's 409 conflict", async () => {
+    const client = makeClient();
+    // The claim is a conditional write, so a double-clicked delete cannot
+    // enqueue two cascades over the same runs — the second call errors.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(409, { code: "conflict", detail: "deletion already pending" }),
+    );
+
+    const err = await client.deleteMethod("m1").catch((caught: unknown) => caught);
+
+    expect(err).toBeInstanceOf(ApiResponseError);
+    expect((err as ApiResponseError).status).toBe(409);
+  });
+
   it("POSTs /v1/methods serializing custom-PipeFunc `python` (MethodFile[] → wire string)", async () => {
     const client = makeClient();
     const spy = vi

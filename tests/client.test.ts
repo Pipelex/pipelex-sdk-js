@@ -126,6 +126,108 @@ describe("PipelexApiClient.execute argument validation", () => {
   });
 });
 
+describe("PipelexApiClient hosted method_id option", () => {
+  const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+
+  function executeResponse(): Response {
+    return jsonResponse(200, {
+      pipeline_run_id: "run-m",
+      pipe_output: { working_memory: { root: {} } },
+    });
+  }
+
+  function startResponse(): Response {
+    return jsonResponse(202, { pipeline_run_id: "run-m", state: "STARTED", created_at: "t0" });
+  }
+
+  it("sends the typed method_id as a top-level wire field on execute and start", async () => {
+    const client = makeClient();
+    const onExecute = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ method_id: "mt_1", inputs: { a: 1 } }).catch(() => undefined);
+    // A top-level field, exactly as the `extra` passthrough used to emit it —
+    // the wire is unchanged; only how a caller expresses it moved.
+    expect(bodyOf(onExecute)).toMatchObject({ method_id: "mt_1" });
+    expect(bodyOf(onExecute).extra).toBeUndefined();
+
+    vi.restoreAllMocks();
+    const onStart = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", inputs: { a: 1 } });
+    expect(bodyOf(onStart)).toMatchObject({ method_id: "mt_1" });
+  });
+
+  it("accepts a method_id-only run — a stored method is something to run", async () => {
+    const client = makeClient();
+    // The precondition counts the hosted selector: the platform resolves the
+    // stored method's source, so demanding pipe_code/mthds_contents beside it
+    // would reject the app's own by-id runs.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1" });
+    expect(bodyOf(fetchSpy)).toEqual({ method_id: "mt_1" });
+  });
+
+  it("sends method_id ALONGSIDE an inline source — linkage, never an exclusivity violation", async () => {
+    const client = makeClient();
+    // The inline source is what runs (precedence); the id rides along as the
+    // run-history linkage that writes the `GET /v1/runs?method_id=` index key.
+    // Refusing the combination once orphaned every unsaved-bundle run from its
+    // method, so it must stay legal on both encodings.
+    const withContents = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", mthds_contents: ["domain = 'x'"] });
+    expect(bodyOf(withContents)).toMatchObject({
+      method_id: "mt_1",
+      mthds_contents: ["domain = 'x'"],
+    });
+
+    vi.restoreAllMocks();
+    const withBundle = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", files: BUNDLE });
+    expect(bodyOf(withBundle)).toMatchObject({ method_id: "mt_1", files: BUNDLE });
+  });
+
+  it("rejects method_id smuggled through `extra` — one argument, one path", async () => {
+    const client = makeClient();
+    // The hosted client names this key, so it must also guard it: `extra`
+    // merges last into the body, and a second path would carry different
+    // validation for the same argument.
+    await expect(client.execute({ extra: { method_id: "mt_1" } })).rejects.toThrow(
+      /pass them as named options/,
+    );
+    await expect(
+      client.start({ pipe_code: "p", extra: { method_id: "mt_1" } }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("never ships an empty method_id (it selects nothing and links nothing)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", method_id: "" }).catch(() => undefined);
+    expect(bodyOf(fetchSpy).method_id).toBeUndefined();
+    // And it does not satisfy the precondition on its own.
+    await expect(client.execute({ method_id: "" })).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("keeps method_id on the blocking fallback, so a bare runner can diagnose it", async () => {
+    const client = makeClient();
+    // `startAndWaitForResult` falls back to `POST /execute` against a runner
+    // with no run store. Dropping the selector there would turn a server-side
+    // 422 that names it into a silently different run.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { implementation: "pipelex-api" }))
+      .mockResolvedValue(executeResponse());
+    await client
+      .startAndWaitForResult({ method_id: "mt_1", pipe_code: "p" })
+      .catch(() => undefined);
+    const executeCall = fetchSpy.mock.calls[1]!;
+    expect(String(executeCall[0])).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse((executeCall[1] as RequestInit).body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(body.method_id).toBe("mt_1");
+  });
+});
+
 describe("PipelexApiClient method-bundle transport", () => {
   const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
 
