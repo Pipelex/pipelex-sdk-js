@@ -61,6 +61,7 @@ import type {
   MembershipsResponse,
   ListMethodsQuery,
   MethodData,
+  MethodDeletionAccepted,
   MethodPage,
   MethodSummary,
   MethodWriteInput,
@@ -119,6 +120,45 @@ export interface MthdsFile {
 }
 
 /**
+ * The hosted API's own run arguments — the layer-3 extensions this client adds
+ * on top of the MTHDS Protocol's run-argument surface (`RunOptions` /
+ * `StartOptions`, which stay pure).
+ *
+ * They are named options rather than `extra` entries because that is the one
+ * job a hosted client exists to do: `extra` remains the escape hatch for an
+ * extension this client does not know about, never the way to pass one it does.
+ * That split is normative for every client in the layered stack — it is not a
+ * preference of this one.
+ */
+export interface PipelexHostedRunExtensions {
+  /**
+   * A stored method's catalog id (`mt_…`) — a **pass-through to the hosted
+   * API**, resolved server-side against the org's catalog. Nothing is expanded
+   * client-side, and it is meaningless off-platform: an open-source runner has
+   * no catalog, so it answers a `422` naming the key.
+   *
+   * Its meaning depends on what else the request carries:
+   *
+   * - **Alone** — the platform resolves the stored method's source (assembling
+   *   its bundle when the method carries Python) and runs that.
+   * - **Alongside an inline source** (`mthds_contents` / `files` / `bundle_b64`)
+   *   — the inline source is what RUNS (precedence), and the id is recorded as
+   *   **run-history linkage** on the Run row. That linkage is what writes the
+   *   index key `GET /v1/runs?method_id=` queries, so a run started without it
+   *   is absent from its method's history permanently.
+   *
+   * An empty string is treated as absent and is not sent.
+   */
+  method_id?: string | null;
+}
+
+/** `execute()` options — the protocol's run arguments plus the hosted extensions. */
+export type PipelexRunOptions = RunOptions & PipelexHostedRunExtensions;
+
+/** `start()` / `startAndWaitForResult()` options — the same, for the durable path. */
+export type PipelexStartOptions = StartOptions & PipelexHostedRunExtensions;
+
+/**
  * The by-id alternative to the wire model `BuildInputsRequest`: resolve the
  * closure from a stored method's `method_id` instead of inline `files`.
  *
@@ -143,6 +183,8 @@ export interface ValidateFilesOptions {
   allowSignatures?: boolean;
   /** Optional validate presentation hints, e.g. ["markdown"]. */
   render?: string[];
+  /** Optional structured-view opt-in tokens, e.g. ["input_form"]; sent only when given. */
+  views?: string[];
   /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
   timeoutMs?: number;
   /** Caller-driven cancellation; the abort reason propagates untouched. */
@@ -502,16 +544,18 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * durable start+poll path. Throws `RunStillRunningError` on the protocol's
    * optional 202 degrade.
    */
-  async execute(options: RunOptions): Promise<PipelexExecuteResult> {
+  async execute(options: PipelexRunOptions): Promise<PipelexExecuteResult> {
     const extensions = buildExtensions(options.extra);
+    const hosted = buildHostedRunExtensions(options);
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
       !hasBundlePayload(options) &&
+      Object.keys(hosted).length === 0 &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to execute().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a hosted method_id or a server-specific extension arg (extra) must be provided to execute().",
       );
     }
     assertExclusiveRunSources(options);
@@ -525,6 +569,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       dynamic_output_concept_ref: options.dynamic_output_concept_ref,
       files: nonEmptyFiles(options.files),
       bundle_b64: nonEmptyString(options.bundle_b64),
+      ...hosted,
       ...extensions,
     };
 
@@ -556,22 +601,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /**
    * Start a method asynchronously — `POST /v1/start` (202, no output yet).
    *
-   * Server-specific extension args ride `options.extra` and merge into the
-   * request body — the server you call defines and handles them (including a
-   * client-supplied run id where a server supports one). The returned
-   * `pipeline_run_id` is always authoritative; on a hosted deployment it is
-   * durable — poll `getRunStatus` / `getRunResult`.
+   * The hosted `method_id` is a named option (see `PipelexHostedRunExtensions`);
+   * `options.extra` stays the generic passthrough for extension args this client
+   * does not know about — the server you call defines and handles them
+   * (including a client-supplied run id where a server supports one). The
+   * returned `pipeline_run_id` is always authoritative; on a hosted deployment
+   * it is durable — poll `getRunStatus` / `getRunResult`.
    */
-  async start(options: StartOptions): Promise<RunResultStart> {
+  async start(options: PipelexStartOptions): Promise<RunResultStart> {
     const extensions = buildExtensions(options.extra);
+    const hosted = buildHostedRunExtensions(options);
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
       !hasBundlePayload(options) &&
+      Object.keys(hosted).length === 0 &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64) or a server-specific extension arg (extra) must be provided to start().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a hosted method_id or a server-specific extension arg (extra) must be provided to start().",
       );
     }
     assertExclusiveRunSources(options);
@@ -586,6 +634,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
       files: nonEmptyFiles(options.files),
       bundle_b64: nonEmptyString(options.bundle_b64),
+      ...hosted,
       ...extensions,
     };
 
@@ -630,12 +679,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * This client always asks for Markdown so both valid results and produced
    * validation-error verdicts carry `rendered_markdown`; callers may add more
    * tokens. Unknown tokens are server-side lenient-ignored (never a 422).
+   *
+   * `views` is the sibling opt-in for *structured* views where `render` carries
+   * *rendered text*. The two lists are independent, each resolving its own tokens
+   * against its own supported set, and each supported token adds a same-named
+   * top-level field to the valid arm — today only `input_form`. Unlike `render`,
+   * this client sends `views` ONLY when the caller asks: the point of an opt-in view
+   * is that the default response stays byte-identical, and the highest-frequency
+   * consumers (hook pipelines, CI gates, agent loops) never pay for bytes they
+   * discard. `pipelex-api` gates `input_form` on this token as of 0.18.0; a 0.17.0
+   * runner resolved no token (the key is silently ignored, never a 422) and emitted
+   * the field regardless — which is why `PipelexValidationReport.input_form` is typed
+   * optional rather than required.
    */
   async validate(
     mthdsContents: string[],
     allowSignatures = false,
     mthdsSources?: string[],
     render?: string[],
+    views?: string[],
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<PipelexValidationResult> {
     const body: Record<string, unknown> = {
@@ -646,6 +708,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       body.mthds_sources = mthdsSources;
     }
     body.render = withValidateMarkdownRender(render);
+    if (views !== undefined) {
+      body.views = views;
+    }
     const res = await this.requestRaw("POST", this.url("validate"), {
       body,
       timeoutMs: options.timeoutMs,
@@ -686,6 +751,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       options.allowSignatures ?? false,
       mthdsSources,
       options.render,
+      options.views,
       {
         timeoutMs: options.timeoutMs,
         signal: options.signal,
@@ -699,11 +765,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // runner, but neither the gateway's API-key allowlist nor the platform's tooling
   // proxy lists them, so every `*.pipelex.com` origin answers a gateway
   // `403 {"message":"Forbidden"}` — refused before any service sees the request.
-  // Measured 2026-08-19 on prod AND `api-dev.pipelex.com`: on the same origin, with
-  // the same key, `validate` succeeds while these two 403. Dev is not a workaround.
+  // Measured 2026-08-19 and re-measured 2026-08-23 on prod AND api-dev: on the same
+  // origin, with the same key, `validate` succeeds while these two 403.
   //
-  // The crate routes (`resolve`/`codegen`) shared this gap and were allowlisted on
-  // dev — these two were NOT included in that change. Point `baseUrl` at a runner.
+  // That blocks nothing, because lint and format are toolchain capabilities rather
+  // than hosted ones: `plxt` carries both, and the post-edit hook this repo builds
+  // (`npm run build:hook`) runs them offline through `@pipelex/tools-wasm` with no
+  // credentials (see `src/hooks/claude-mthds-check.ts`), with these two methods as the
+  // published package's documented fallback against a runner. The crate
+  // routes (`resolve`/`codegen`) shared this gap and are now exposed everywhere;
+  // these two were not included, a known non-critical item on the platform's list.
   // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
 
   /**
@@ -827,21 +898,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
   //
-  // HOSTED EXPOSURE IS PARTIAL — dev yes, prod not yet. Both routes are served by
-  // any `pipelex-api` runner. On the hosted plane they must additionally be listed
-  // by the gateway's API-key allowlist and the platform's tooling proxy, which each
-  // enumerate routes explicitly (`validate`, `models`, `build/*`, …); an unlisted
-  // path answers a gateway `403 {"message":"Forbidden"}` — refused before any
-  // service sees it, so not even an RFC 7807 problem body.
+  // Served by any `pipelex-api` runner AND on every hosted origin. On the hosted
+  // plane a route is reachable only when the gateway's API-key allowlist and the
+  // platform's tooling proxy both list it — they each enumerate routes explicitly
+  // (`validate`, `models`, `build/*`, …), and an unlisted path answers a gateway
+  // `403 {"message":"Forbidden"}`, refused before any service sees it, so not even
+  // an RFC 7807 problem body. Both list `resolve` and `codegen`.
   //
-  // Measured 2026-08-19, same key, same run:
-  //   api-dev.pipelex.com  (pipelex-hosted@0.9.0)  resolve + codegen OK, full
-  //                        verdict discipline intact (200 `is_valid:false`, 501, 422)
-  //   api.pipelex.com      (pipelex-hosted@0.2.6)  both still 403
-  //
-  // So prod is waiting on the deploy, not on another code change. `lint`/`format`
-  // are still 403 on BOTH — only the crate routes were allowlisted. Tracked in
-  // `wip/hosted-exposure-crate-and-tools-routes.md`.
+  // Measured 2026-08-23 with a real key: api.pipelex.com (pipelex-hosted@0.10.1)
+  // serves both, verdict discipline intact (200 `is_valid:false`, 501, 422);
+  // api-dev.pipelex.com has since 2026-08-13. `lint`/`format` are the two still
+  // unexposed — see their section above for why that blocks nothing.
   //
   // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
   // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding
@@ -1110,7 +1177,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *   has no gateway cap off-platform and returns the native `pipe_output`.
    */
   async startAndWaitForResult(
-    options: StartOptions,
+    options: PipelexStartOptions,
     pollOptions?: WaitForResultOptions,
   ): Promise<RunResults> {
     if (await this.supportsRunLifecycle()) {
@@ -1290,6 +1357,26 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       methodWriteToWire(input),
     );
     return methodDataFromWire(wire);
+  }
+
+  /**
+   * Erase a method and everything it produced — `DELETE /v1/methods/{id}`.
+   *
+   * **Asynchronous, and the return value says so.** The platform answers `202`
+   * the moment it has claimed the method and terminated its in-flight
+   * workflows; the rest of the cascade (runs, events, S3 objects) is enqueued.
+   * So a resolved promise means "accepted", never "gone" — completion is the
+   * method's row disappearing from `listMethods`, not any field of the
+   * acceptance body. Until then the row stays listed with a `deletion_state`,
+   * which is what lets a UI render it as "Deleting…", while `getMethod` refuses
+   * it with a `409`.
+   *
+   * A double-clicked delete is safe: the claim is a conditional write, so the
+   * second call is an `ApiResponseError` (`409 conflict`) rather than a second
+   * cascade over the same runs. An unknown or foreign-org id is a `404`.
+   */
+  async deleteMethod(methodId: string): Promise<MethodDeletionAccepted> {
+    return this.requestProduct("DELETE", `methods/${encodeURIComponent(methodId)}`);
   }
 
   /** The caller's org memberships + active-org feature flags — `GET /v1/organizations/memberships`. */
@@ -1532,11 +1619,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /**
    * Blocking `POST /v1/execute` adapted onto `RunResults` — the bare-runner
-   * path. Forwards every protocol field PLUS the `extra` extension passthrough:
-   * an extension-only call (`{ extra }` with no pipe_code/bundle) or a vendor
-   * selector riding `extra` must survive this path, not just the durable one.
+   * path. Forwards every protocol field PLUS both extension surfaces: the
+   * hosted `method_id` and the generic `extra` passthrough. An extension-only
+   * call (`{ extra }` with no pipe_code/bundle) or a vendor selector riding
+   * `extra` must survive this path, not just the durable one — and a hosted
+   * `method_id` must reach the server here too, so a runner that cannot resolve
+   * it says so (Rule 4) instead of the client silently dropping it.
    */
-  private async executeBlocking(options: StartOptions): Promise<RunResults> {
+  private async executeBlocking(options: PipelexStartOptions): Promise<RunResults> {
     const response = await this.execute({
       pipe_code: options.pipe_code ?? undefined,
       mthds_contents: options.mthds_contents ?? undefined,
@@ -1548,6 +1638,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       // this path runs the same method as the durable one, or it runs nothing.
       files: options.files ?? undefined,
       bundle_b64: options.bundle_b64 ?? undefined,
+      method_id: options.method_id ?? undefined,
       extra: options.extra ?? undefined,
     });
     return mapRunResultToRunResults(response);
@@ -1618,11 +1709,28 @@ const PROTOCOL_REQUEST_KEYS: readonly string[] = [
   "bundle_b64",
 ];
 
+// The HOSTED API's own request fields — the layer-3 extensions this client
+// names itself. Reserved on `extra` for the same reason the protocol fields
+// are: `extra` merges last, so a smuggled copy would overwrite the validated
+// named option and arrive by a second path with different validation.
+//
+// The guard is deliberately PER LAYER. It lives here, in the hosted client,
+// and must never be pushed down into the protocol clients (`mthds` /
+// `mthds-python`): a layer that does not own an argument has no business
+// rejecting it — a protocol client talking to some other vendor's server must
+// keep passing that vendor's `method_id` straight through. That per-layer
+// split is normative for the whole layered client stack.
+const HOSTED_REQUEST_KEYS: readonly string[] = ["method_id"];
+
 // Keys that must never ride `extra`: the named request options above (which
 // `extra` would overwrite — it merges last into the body) plus the client-only
 // `bundleMain` hint, which is documented as never-serialized and so must not
 // reach the wire through the passthrough either.
-const RESERVED_EXTRA_KEYS: ReadonlySet<string> = new Set([...PROTOCOL_REQUEST_KEYS, "bundleMain"]);
+const RESERVED_EXTRA_KEYS: ReadonlySet<string> = new Set([
+  ...PROTOCOL_REQUEST_KEYS,
+  ...HOSTED_REQUEST_KEYS,
+  "bundleMain",
+]);
 
 // Prototype-pollution vectors. An own `__proto__` (exactly what `JSON.parse`
 // yields, and `extra` is the field most likely populated from untrusted JSON),
@@ -1656,6 +1764,21 @@ function buildExtensions(
     if (!POLLUTION_KEYS.has(key)) result[key] = value;
   }
   return result;
+}
+
+/**
+ * Copy the hosted API's own run arguments onto the wire body. Named options,
+ * not `extra` entries — see `PipelexHostedRunExtensions`.
+ *
+ * An absent or empty `method_id` yields an empty object, so the key is simply
+ * not sent: `method_id: ""` selects no method and carries no linkage, and
+ * putting it on the wire would only make the server reject a request the client
+ * already knows is empty. That emptiness also means it does not count towards
+ * the "something to run" precondition, which reads this object's size.
+ */
+function buildHostedRunExtensions(options: PipelexHostedRunExtensions): Record<string, unknown> {
+  const methodId = nonEmptyString(options.method_id);
+  return methodId === undefined ? {} : { method_id: methodId };
 }
 
 /**

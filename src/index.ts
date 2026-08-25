@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.13.0";
+export const SDK_VERSION = "0.14.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -21,6 +21,9 @@ export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type {
   MthdsFile,
   BuildInputsByMethodId,
+  PipelexHostedRunExtensions,
+  PipelexRunOptions,
+  PipelexStartOptions,
   ValidateFilesOptions,
   PipelexApiClientOptions,
 } from "./client.js";
@@ -49,11 +52,25 @@ export type {
   DictRunResultExecute,
   DryRunStatus,
   ValidatedPipeEntry,
+  LiftablePipeEntry,
   PipelexValidationReport,
   PipelexInvalidReport,
   PipelexValidationResult,
   ValidationErrorCategory,
   ValidationErrorItem,
+  FixSafety,
+  FixOpKind,
+  TomlScalar,
+  TomlValue,
+  SetKeyOp,
+  EnsureTableOp,
+  DeleteKeyOp,
+  DeleteTableOp,
+  RenameTableKeyOp,
+  MoveKeyOp,
+  RemapValueOp,
+  FixOp,
+  SuggestedFix,
   ConceptRepresentationFormat,
   InputsTemplateFormat,
   MthdsFileItem,
@@ -108,6 +125,7 @@ export type {
   UserProfile,
   ListMethodsQuery,
   MethodData,
+  MethodDeletionAccepted,
   MethodDeletionState,
   MethodPage,
   MethodSummary,

@@ -59,6 +59,20 @@ export interface MethodData {
 export type MethodDeletionState = "pending" | "in_progress" | "failed";
 
 /**
+ * The `202` acceptance of `DELETE /v1/methods/{id}` — returned the moment the
+ * erasure is CLAIMED and handed off, not when it completes.
+ *
+ * Nothing in this body means "done": completion is the method's row
+ * disappearing from `listMethods`. What the body buys you is a claim you can
+ * log and correlate (`deletion_job_id`) and the state the cascade started in.
+ */
+export interface MethodDeletionAccepted {
+  method_id: string;
+  deletion_state: MethodDeletionState;
+  deletion_job_id: string;
+}
+
+/**
  * One row of the method LIST — deliberately much smaller than `MethodData`.
  *
  * The list is served from a narrow DynamoDB index projection, so `mthds` and

@@ -126,6 +126,108 @@ describe("PipelexApiClient.execute argument validation", () => {
   });
 });
 
+describe("PipelexApiClient hosted method_id option", () => {
+  const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
+
+  function executeResponse(): Response {
+    return jsonResponse(200, {
+      pipeline_run_id: "run-m",
+      pipe_output: { working_memory: { root: {} } },
+    });
+  }
+
+  function startResponse(): Response {
+    return jsonResponse(202, { pipeline_run_id: "run-m", state: "STARTED", created_at: "t0" });
+  }
+
+  it("sends the typed method_id as a top-level wire field on execute and start", async () => {
+    const client = makeClient();
+    const onExecute = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ method_id: "mt_1", inputs: { a: 1 } }).catch(() => undefined);
+    // A top-level field, exactly as the `extra` passthrough used to emit it —
+    // the wire is unchanged; only how a caller expresses it moved.
+    expect(bodyOf(onExecute)).toMatchObject({ method_id: "mt_1" });
+    expect(bodyOf(onExecute).extra).toBeUndefined();
+
+    vi.restoreAllMocks();
+    const onStart = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", inputs: { a: 1 } });
+    expect(bodyOf(onStart)).toMatchObject({ method_id: "mt_1" });
+  });
+
+  it("accepts a method_id-only run — a stored method is something to run", async () => {
+    const client = makeClient();
+    // The precondition counts the hosted selector: the platform resolves the
+    // stored method's source, so demanding pipe_code/mthds_contents beside it
+    // would reject the app's own by-id runs.
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1" });
+    expect(bodyOf(fetchSpy)).toEqual({ method_id: "mt_1" });
+  });
+
+  it("sends method_id ALONGSIDE an inline source — linkage, never an exclusivity violation", async () => {
+    const client = makeClient();
+    // The inline source is what runs (precedence); the id rides along as the
+    // run-history linkage that writes the `GET /v1/runs?method_id=` index key.
+    // Refusing the combination once orphaned every unsaved-bundle run from its
+    // method, so it must stay legal on both encodings.
+    const withContents = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", mthds_contents: ["domain = 'x'"] });
+    expect(bodyOf(withContents)).toMatchObject({
+      method_id: "mt_1",
+      mthds_contents: ["domain = 'x'"],
+    });
+
+    vi.restoreAllMocks();
+    const withBundle = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", files: BUNDLE });
+    expect(bodyOf(withBundle)).toMatchObject({ method_id: "mt_1", files: BUNDLE });
+  });
+
+  it("rejects method_id smuggled through `extra` — one argument, one path", async () => {
+    const client = makeClient();
+    // The hosted client names this key, so it must also guard it: `extra`
+    // merges last into the body, and a second path would carry different
+    // validation for the same argument.
+    await expect(client.execute({ extra: { method_id: "mt_1" } })).rejects.toThrow(
+      /pass them as named options/,
+    );
+    await expect(
+      client.start({ pipe_code: "p", extra: { method_id: "mt_1" } }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("never ships an empty method_id (it selects nothing and links nothing)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", method_id: "" }).catch(() => undefined);
+    expect(bodyOf(fetchSpy).method_id).toBeUndefined();
+    // And it does not satisfy the precondition on its own.
+    await expect(client.execute({ method_id: "" })).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("keeps method_id on the blocking fallback, so a bare runner can diagnose it", async () => {
+    const client = makeClient();
+    // `startAndWaitForResult` falls back to `POST /execute` against a runner
+    // with no run store. Dropping the selector there would turn a server-side
+    // 422 that names it into a silently different run.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { implementation: "pipelex-api" }))
+      .mockResolvedValue(executeResponse());
+    await client
+      .startAndWaitForResult({ method_id: "mt_1", pipe_code: "p" })
+      .catch(() => undefined);
+    const executeCall = fetchSpy.mock.calls[1]!;
+    expect(String(executeCall[0])).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse((executeCall[1] as RequestInit).body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(body.method_id).toBe("mt_1");
+  });
+});
+
 describe("PipelexApiClient method-bundle transport", () => {
   const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
 
@@ -700,8 +802,73 @@ describe("PipelexApiClient.validate", () => {
         is_valid: true,
         bundle_blueprint: { domain: "x" },
         pipe_io_contracts: { "x.greet": { inputs: {}, output: {} } },
+        input_form: { "x.greet": { fields: [] } },
+        liftable_pipes: [
+          {
+            pipe_ref: "x.enrich",
+            within_pipe_ref: "x.greet",
+            skipped_when_absent: ["profile"],
+            absence_source: "optional input `profile`",
+          },
+        ],
         graph_spec: null,
         validated_pipes: [{ pipe_ref: "x.greet", status: "SUCCESS" }],
+        warnings: [],
+        pending_signatures: [],
+        is_runnable: true,
+        message: "MTHDS content validated successfully",
+        mthds_contents: ["domain = 'x'"],
+      }),
+    );
+    // Asks for the `input_form` view, because the fixture below carries it: the server
+    // gates that field on the token, so a no-`views` request would never see it.
+    const report = await client.validate(["domain = 'x'"], false, undefined, undefined, [
+      "input_form",
+    ]);
+    expect(report.is_valid).toBe(true);
+    if (report.is_valid === false) throw new Error("expected a valid report");
+    expect(report.validated_pipes[0]).toEqual({ pipe_ref: "x.greet", status: "SUCCESS" });
+    expect(report.pending_signatures).toEqual([]);
+    expect(report.is_runnable).toBe(true);
+    expect(report.graph_spec).toBeNull();
+    expect(report.warnings).toEqual([]);
+    // `input_form` is keyed exactly like `pipe_io_contracts` — the invariant a renderer
+    // relies on to address a pipe's form by the ref it already holds.
+    expect(Object.keys(report.input_form ?? {})).toEqual(Object.keys(report.pipe_io_contracts));
+    expect(report.liftable_pipes[0]).toEqual({
+      pipe_ref: "x.enrich",
+      within_pipe_ref: "x.greet",
+      skipped_when_absent: ["profile"],
+      absence_source: "optional input `profile`",
+    });
+  });
+
+  it("carries advisory warnings on the VALID arm, with the valid arm's explicit nulls", async () => {
+    const client = makeClient();
+    // The valid arm is dumped WITHOUT `exclude_none`, so an unset locator arrives as an
+    // explicit `null` here — where the invalid arm drops the key entirely. Same item type,
+    // two serializations: this pins that a truthiness check reads both.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        is_valid: true,
+        bundle_blueprint: { domain: "x" },
+        pipe_io_contracts: {},
+        liftable_pipes: [],
+        graph_spec: null,
+        validated_pipes: [],
+        warnings: [
+          {
+            category: "pipe_validation",
+            message: "the `!` on `profile` is redundant — the slot is always present",
+            error_type: "optional_force_redundant",
+            pipe_code: "x.greet",
+            concept_code: null,
+            source: null,
+            field_name: null,
+            variable_names: null,
+            suggested_fix: null,
+          },
+        ],
         pending_signatures: [],
         is_runnable: true,
         message: "MTHDS content validated successfully",
@@ -709,12 +876,15 @@ describe("PipelexApiClient.validate", () => {
       }),
     );
     const report = await client.validate(["domain = 'x'"]);
-    expect(report.is_valid).toBe(true);
     if (report.is_valid === false) throw new Error("expected a valid report");
-    expect(report.validated_pipes[0]).toEqual({ pipe_ref: "x.greet", status: "SUCCESS" });
-    expect(report.pending_signatures).toEqual([]);
-    expect(report.is_runnable).toBe(true);
-    expect(report.graph_spec).toBeNull();
+    // Advisory items never flip the verdict.
+    expect(report.is_valid).toBe(true);
+    expect(report.warnings).toHaveLength(1);
+    const warning = report.warnings[0]!;
+    expect(warning.error_type).toBe("optional_force_redundant");
+    expect(warning.pipe_code).toBe("x.greet");
+    expect(warning.source).toBeNull();
+    expect(warning.suggested_fix).toBeNull();
   });
 
   it("returns the InvalidReport arm (200, is_valid: false) for an invalid bundle — not a throw", async () => {
@@ -738,6 +908,32 @@ describe("PipelexApiClient.validate", () => {
             pipe_code: "demo.greet",
             missing_concept_code: "demo.Missing",
           },
+          {
+            category: "pipe_validation",
+            message: "sequence output does not match its last step",
+            pipe_code: "demo.flow",
+            missing_pipe_code: "demo.summarize",
+            suggested_fix: {
+              fix_code: "match-sequence-output",
+              description: "Point the sequence output at its last step's output.",
+              safety: "safe",
+              source: "broken.mthds",
+              ops: [
+                {
+                  kind: "set_key",
+                  table_path: ["pipe", "flow"],
+                  key: "output",
+                  value: "demo.Summary",
+                },
+                {
+                  kind: "rename_table_key",
+                  table_path: ["pipe", "flow"],
+                  key: "outputs",
+                  new_key: "output",
+                },
+              ],
+            },
+          },
         ],
         pending_signatures: [],
         is_runnable: false,
@@ -748,13 +944,28 @@ describe("PipelexApiClient.validate", () => {
     expect(report.is_valid).toBe(false);
     if (report.is_valid !== false) throw new Error("expected an invalid report");
     expect(report.is_runnable).toBe(false);
-    expect(report.validation_errors).toHaveLength(2);
+    expect(report.validation_errors).toHaveLength(3);
     expect(report.validation_errors[0]).toMatchObject({
       category: "blueprint_validation",
       source: "broken.mthds",
     });
     expect(report.validation_errors[1]!.category).toBe("pipe_factory");
     expect(report.validation_errors[1]!.missing_concept_code).toBe("demo.Missing");
+    // The invalid arm carries no `warnings` — advisories live on the valid arm only.
+    expect("warnings" in report).toBe(false);
+
+    const fix = report.validation_errors[2]!.suggested_fix!;
+    expect(report.validation_errors[2]!.missing_pipe_code).toBe("demo.summarize");
+    expect(fix.fix_code).toBe("match-sequence-output");
+    expect(fix.safety).toBe("safe");
+    expect(fix.ops).toHaveLength(2);
+    // `kind` narrows the union: each arm's own members are reachable without a cast.
+    const [setKey, rename] = fix.ops;
+    if (setKey?.kind !== "set_key") throw new Error("expected a set_key op");
+    expect(setKey.value).toBe("demo.Summary");
+    expect(setKey.table_path).toEqual(["pipe", "flow"]);
+    if (rename?.kind !== "rename_table_key") throw new Error("expected a rename_table_key op");
+    expect(rename.new_key).toBe("output");
   });
 
   it("sends mthds_sources parallel to mthds_contents when provided", async () => {
@@ -1034,6 +1245,46 @@ describe("PipelexApiClient.validate render extra", () => {
       );
     await client.validate(["domain = 'x'"], false, undefined, ["html"]);
     expect(bodyOf(fetchSpy).render).toEqual(["html", "markdown"]);
+  });
+});
+
+describe("PipelexApiClient.validate views opt-in", () => {
+  it("sends the views tokens in the request body when asked", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true, input_form: {} }));
+    await client.validate(["domain = 'x'"], false, undefined, undefined, ["input_form"]);
+    expect(bodyOf(fetchSpy).views).toEqual(["input_form"]);
+  });
+
+  it("omits the views key entirely when the caller asks for no view", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+    await client.validate(["domain = 'x'"]);
+    // The invariant that keeps an opt-in view opt-in: no token asked, no key sent, so
+    // the response stays byte-identical for every consumer that does not want it.
+    expect("views" in bodyOf(fetchSpy)).toBe(false);
+  });
+
+  it("sends an explicitly empty views list verbatim", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+    await client.validate(["domain = 'x'"], false, undefined, undefined, []);
+    expect(bodyOf(fetchSpy).views).toEqual([]);
+  });
+
+  it("threads views through validateFiles", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true, input_form: {} }));
+    await client.validateFiles([{ content: "domain = 'x'" }], { views: ["input_form"] });
+    expect(bodyOf(fetchSpy).views).toEqual(["input_form"]);
   });
 });
 
