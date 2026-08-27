@@ -8,7 +8,13 @@
  * imported from the `mthds/protocol` subpath.
  */
 
-import type { InvalidValidationReport, RunResultExecute, ValidationReport } from "mthds/protocol";
+import type {
+  InputForm,
+  InvalidValidationReport,
+  PipeIOContracts,
+  RunResultExecute,
+  ValidationReport,
+} from "mthds/protocol";
 
 export interface DictStuff {
   concept: string;
@@ -92,23 +98,36 @@ export interface LiftablePipeEntry {
  * boundary — blueprints/graphs are language artifacts, so no `pipelex_` prefix
  * inside this envelope.
  *
- * `bundle_blueprint`, `pipe_io_contracts`, `input_form`, and `graph_spec` stay opaque
- * transport (`Record<string, unknown>` / `unknown`): their canonical schemas are owned
- * elsewhere (the runtime's blueprint models; `@pipelex/mthds-form` owns the input-form
- * descriptors and the typed `pipe_io_contracts` mirror; `@pipelex/mthds-ui` owns
- * `GraphSpec`). Restating them here would be a second source of truth, free to drift
- * from the one the server emits.
+ * This SDK owns none of the artifacts the envelope carries, and it narrows the two the
+ * MTHDS standard has declared in the one way that keeps that true: by **importing** the
+ * standard's own types. `pipe_io_contracts` and `input_form` are `PipeIOContracts` and
+ * `InputForm` from `mthds/protocol`, the recommended extension fields of the protocol's
+ * validation report, declared once per language and re-exported unchanged through this
+ * package's barrel. Nothing about their shape is restated here, so there is no second
+ * source of truth free to drift from the one the server emits — which is precisely what
+ * the earlier ruling that kept both opaque was protecting against. Importing serves that
+ * concern better than opacity did, and the principle it was defending is unchanged: this
+ * envelope is transport, and the shapes it transports belong to the standard.
+ *
+ * `bundle_blueprint` and `graph_spec` do stay opaque transport (`Record<string, unknown>`
+ * / `unknown`): their canonical schemas are owned elsewhere — the runtime's blueprint
+ * models, and `@pipelex/mthds-ui`'s `GraphSpec` — and neither has a wire declaration in
+ * the standard for this SDK to import. Each narrows on the day one exists.
  * Inherits the extension index signature, so any further server field is preserved.
  */
 export interface PipelexValidationReport extends ValidationReport {
   /** The batch's primary blueprint (first declaring `main_pipe`, else first). */
   bundle_blueprint: Record<string, unknown>;
-  /** Per-pipe input/output contracts, keyed by namespaced `pipe_ref` (`domain.code`). */
-  pipe_io_contracts: Record<string, unknown>;
   /**
-   * Per-pipe input-form descriptors — the MTHDS input-form descriptor, derived from
+   * Per-pipe input/output contracts, keyed by namespaced `pipe_ref` (`domain.code`) —
+   * the standard's `PipeIOContracts` artifact, imported rather than restated.
+   */
+  pipe_io_contracts: PipeIOContracts;
+  /**
+   * Per-pipe input-form descriptors — the standard's `InputForm` artifact, derived from
    * authored facts rather than the emitted JSON Schema, so a renderer can build a
-   * fill-in form from the verdict alone. Keyed exactly like `pipe_io_contracts`.
+   * fill-in form from the verdict alone. Keyed over the same `pipe_ref` set as
+   * `pipe_io_contracts`, an invariant the imported type states for both.
    *
    * OPTIONAL on purpose: this is an opt-in structured view, requested through
    * `views: ["input_form"]` (see `validate`) and absent from any verdict that did not
@@ -120,7 +139,7 @@ export interface PipelexValidationReport extends ValidationReport {
    * every caller a harder signature to read in exchange for one non-null assertion at the
    * single call site that opts in.
    */
-  input_form?: Record<string, unknown>;
+  input_form?: InputForm;
   /** Pipes the runtime may skip when an optional slot resolves absent. */
   liftable_pipes: LiftablePipeEntry[];
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
