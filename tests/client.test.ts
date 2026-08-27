@@ -801,8 +801,39 @@ describe("PipelexApiClient.validate", () => {
       jsonResponse(200, {
         is_valid: true,
         bundle_blueprint: { domain: "x" },
-        pipe_io_contracts: { "x.greet": { inputs: {}, output: {} } },
-        input_form: { "x.greet": { fields: [] } },
+        pipe_io_contracts: {
+          "x.greet": {
+            inputs: {
+              who: {
+                concept_ref: "native.Text",
+                json_schema: { type: "string" },
+                presence: "plain",
+                multiplicity: "single",
+                item_count: null,
+              },
+            },
+            output: {
+              concept_ref: "native.Text",
+              multiplicity: "single",
+              item_count: null,
+              optional: false,
+            },
+          },
+        },
+        input_form: {
+          "x.greet": {
+            fields: [
+              {
+                name: "who",
+                kind: "prose",
+                concept_ref: "native.Text",
+                required: true,
+                presence: "plain",
+                gating: true,
+              },
+            ],
+          },
+        },
         liftable_pipes: [
           {
             pipe_ref: "x.enrich",
