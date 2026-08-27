@@ -7,13 +7,13 @@ description: >
   anything. Use when the user says "check min versions", "what's the min mthds
   version", "show required versions", "current version floor", or any variation
   of asking what the SDK's upstream minimum is. This is the read-only counterpart
-  to the bump-required-versions skill — if the user wants to *change* the floor,
+  to the bump-mthds skill — if the user wants to *change* the floor,
   use that one instead.
 ---
 
 # Check Required Versions
 
-Reports the one upstream version floor that `@pipelex/sdk` enforces: the **`mthds`** dependency, which provides the MTHDS protocol wire types (`mthds/protocol`) the client builds its routes on. This skill only reads and reports — it never edits. To change the floor, use the `bump-required-versions` skill.
+Reports the one upstream version floor that `@pipelex/sdk` enforces: the **`mthds`** dependency, which provides the MTHDS protocol wire types (`mthds/protocol`) the client builds its routes on. This skill only reads and reports — it never edits. To change the floor, use the `bump-mthds` skill.
 
 ## Workflow
 

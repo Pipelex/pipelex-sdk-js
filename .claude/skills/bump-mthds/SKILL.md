@@ -1,15 +1,15 @@
 ---
-name: bump-required-versions
+name: bump-mthds
 description: >
   Bump the minimum required version of the upstream dependency this SDK rests
   on — the `mthds` package, which provides the MTHDS protocol wire types via its
-  `mthds/protocol` subpath. Use when the user says "bump required versions",
-  "bump min mthds version", "raise the mthds floor", "update required versions",
-  "set min mthds to X.Y.Z", or any variation of changing the SDK's upstream
-  version floor.
+  `mthds/protocol` subpath. Use when the user says "bump mthds", "bump the mthds
+  version", "bump min mthds version", "raise the mthds floor", "bump required
+  versions", "update required versions", "set min mthds to X.Y.Z", or any
+  variation of changing the SDK's upstream version floor.
 ---
 
-# Bump Required Versions
+# Bump mthds
 
 `@pipelex/sdk` has one upstream version floor that matters: the **`mthds`** package, which it imports the MTHDS protocol wire types from (via the `mthds/protocol` subpath). Because the SDK re-implements the official protocol routes using `mthds/protocol` *types*, its route shapes are pinned to a specific `mthds` surface — bumping the floor is how the SDK adopts a newer protocol surface.
 
@@ -44,6 +44,6 @@ Run `make check && make test`. The build (`tsc`) resolves `mthds/protocol` again
 Summarise `OLD → NEW`, then remind the user to:
 
 - **Add a CHANGELOG.md entry** describing the bump and why (e.g., a protocol surface the SDK now relies on).
-- **Coordinate consumer floors** if downstream repos pin a minimum `@pipelex/sdk` — that is the `/bump-required-versions` job in those repos, not here.
+- **Coordinate consumer floors** if downstream repos pin a minimum `@pipelex/sdk` — that is the job of the equivalent floor-bump skill in those repos, not here.
 
 Do not commit or create a release — leave that to the user (or the `release` skill).
