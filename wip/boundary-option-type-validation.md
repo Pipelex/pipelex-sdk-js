@@ -40,7 +40,7 @@ Protocol-level options are guarded in `mthds-js` / `mthds-python` so both SDK fa
 
 *Checkpoint: protocol packages released — record the released versions here before moving on.*
 
-**Phase 2 — the SDKs.** Bump each SDK's `mthds` floor to the Phase 1 releases (this repo has the `bump-required-versions` skill for that). In `pipelex-sdk-js`, make `nonEmptyString` / `nonEmptyFiles` type-honest: non-nullish non-conforming values throw; nullish and empty still normalize to absent. Add the `method_id` guard. In `pipelex-sdk-python`, replace `if method_id:` with an explicit `is not None` plus `isinstance` check that raises. Wrong-type tests in both, plus changelog entries under `## [Unreleased]`.
+**Phase 2 — the SDKs.** Bump each SDK's `mthds` floor to the Phase 1 releases (this repo has the `bump-mthds` skill for that). In `pipelex-sdk-js`, make `nonEmptyString` / `nonEmptyFiles` type-honest: non-nullish non-conforming values throw; nullish and empty still normalize to absent. Add the `method_id` guard. In `pipelex-sdk-python`, replace `if method_id:` with an explicit `is not None` plus `isinstance` check that raises. Wrong-type tests in both, plus changelog entries under `## [Unreleased]`.
 
 *Checkpoint: both SDKs shipped — record versions, then close the loop on the PR #34 thread: one-line reply (`Fixed + <SHA>`) and resolve cubic's thread `discussion_r3847423057`.*
 
