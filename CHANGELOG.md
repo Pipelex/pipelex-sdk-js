@@ -1,22 +1,22 @@
 # Changelog
 
-## [Unreleased]
-
-### Changed
-
-- **Breaking: the validate report types its two standard artifacts by importing them.** `PipelexValidationReport.pipe_io_contracts` is now `PipeIOContracts` and `PipelexValidationReport.input_form` is now `InputForm`, both imported from `mthds/protocol`, in place of the `Record<string, unknown>` opaque transport they were. Reading a slot's `presence`, a field descriptor's `kind`, or a contract's `json_schema` no longer needs a cast, and a consumer that walks either artifact gets exhaustiveness checking over the discriminated unions. Breaking for any consumer that assigned a hand-rolled shape into those fields or that indexed them as bare records; the wire is unchanged, so a consumer that only reads and forwards them needs no edit.
-
-  This retires the earlier ruling that kept both payloads opaque because `@pipelex/mthds-form` owned the descriptor vocabulary. That ruling was defending the boundary — the SDK does not own these types, and a second copy here would be free to drift from what the server emits — and the boundary is unchanged. What changed is that the MTHDS standard now declares both artifacts and its TypeScript client ships the declarations, so this package narrows by *importing* the one declaration per language rather than by restating a shape. There is no second source of truth to drift, which is what the opaque typing was protecting against, and the check now happens at compile time. `bundle_blueprint` and `graph_spec` stay opaque for the original reason: their canonical schemas live in the runtime's blueprint models and in `@pipelex/mthds-ui`'s `GraphSpec`, and the standard declares neither.
-
-- **The `mthds` floor moves to `^0.24.0`.** The floor spans two releases the SDK depends on: `0.23.0` first carried `mthds/protocol`'s `input_form` and `pipe_io_contracts` modules, and `0.24.0` then tightened `InputFormTopLevelField` into a discriminated union on `required`, so the standard's pairing rules — `required: true` with `presence: "plain" | "force"`, `required: false` with `presence: "optional"` and `gating: false` — are enforced by the compiler rather than left as prose. Because the barrel re-exports `mthds/protocol` unchanged, every type the two artifacts are built from — `PipeInputContract`, `PipeOutputContract`, `PresenceMarker`, `IOMultiplicity`, `PipeInputFormDescriptor`, `InputFormTopLevelField`, the per-kind field nodes, and the `FIELD_KINDS` runtime vocabulary — is reachable from `@pipelex/sdk` with no second import, and a consumer assembling a top-level field now has to branch once on optionality and write each arm as a literal instead of computing the booleans.
+## [v0.15.0] - 2026-08-28
 
 ### Added
 
-- **A compile-time pin on the two narrowed fields.** `tests/validate-report-types.test.ts` asserts that each field's type is exactly the `mthds/protocol` artifact type and checks an annotated realistic payload against it, so a future edit cannot silently widen either field back to a bare record. The assertions bite in `npm run typecheck:test`, which `make check` runs.
+- **Compile-time type assertions:** `tests/validate-report-types.test.ts` pins `pipe_io_contracts` and `input_form` to their exact `mthds/protocol` types, so a later edit cannot silently widen either field back to a bare record. The assertions bite in `npm run typecheck:test`, which `make check` runs.
+- **Architecture documentation:** `docs/architecture.md` gains a "Standard artifacts on the validate report" section recording which fields are imported from the standard, which stay opaque, and why importing enforces the same boundary the opaque typing was reaching for.
 
-### Documentation
+### Changed
 
-- `docs/architecture.md` gains a "Standard artifacts on the validate report" section recording which fields are imported, which stay opaque, and why importing enforces the same boundary the opaque typing was reaching for.
+- **Breaking: the validate report types its standard artifacts by importing them.** `PipelexValidationReport.pipe_io_contracts` and `PipelexValidationReport.input_form` are now `PipeIOContracts` and `InputForm` from `mthds/protocol`, in place of the `Record<string, unknown>` they were. Reading a slot's presence, a field descriptor's kind, or a contract's JSON Schema no longer needs a cast, and a consumer walking either artifact gets exhaustiveness checking over the discriminated unions. The wire is unchanged, so a consumer that only reads and forwards these payloads needs no edit; one that assigned a hand-rolled shape or indexed them as bare records must update. `bundle_blueprint` and `graph_spec` stay opaque, because the standard declares neither.
+- **The `mthds` floor moves from `^0.22.0` to `^0.24.0`.** The floor spans two releases: `0.23.0` first carried `mthds/protocol`'s `input_form` and `pipe_io_contracts` modules, and `0.24.0` then tightened `InputFormTopLevelField` into a discriminated union on `required`, so the standard's pairing rules are enforced by the compiler rather than left as prose. Because the barrel re-exports `mthds/protocol` unchanged, every type the two artifacts are built from is reachable from `@pipelex/sdk` with no second import.
+- **Test payloads:** the mocked validation payloads in `tests/client.test.ts` now use realistic, fully typed contract and descriptor pairs instead of placeholder objects, matching the new strict types.
+- **Internal tooling:** the `bump-required-versions` Claude skill is renamed `bump-mthds`, with its prompts and the `check-min-versions` documentation updated to match.
+
+### Fixed
+
+- **Dev-scope security refresh:** `package-lock.json` was regenerated to move four transitive lint- and test-toolchain dependencies past their patched versions — `brace-expansion`, `js-yaml`, `nanoid` and `postcss`. None of them reaches the published package.
 
 ## [v0.14.0] - 2026-08-25
 
