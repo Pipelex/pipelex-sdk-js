@@ -1,5 +1,23 @@
 # Changelog
 
+## [v0.15.0] - 2026-08-28
+
+### Added
+
+- **Compile-time type assertions:** `tests/validate-report-types.test.ts` pins `pipe_io_contracts` and `input_form` to their exact `mthds/protocol` types, so a later edit cannot silently widen either field back to a bare record. The assertions bite in `npm run typecheck:test`, which `make check` runs.
+- **Architecture documentation:** `docs/architecture.md` gains a "Standard artifacts on the validate report" section recording which fields are imported from the standard, which stay opaque, and why importing enforces the same boundary the opaque typing was reaching for.
+
+### Changed
+
+- **Breaking: the validate report types its standard artifacts by importing them.** `PipelexValidationReport.pipe_io_contracts` and `PipelexValidationReport.input_form` are now `PipeIOContracts` and `InputForm` from `mthds/protocol`, in place of the `Record<string, unknown>` they were. Reading a slot's presence, a field descriptor's kind, or a contract's JSON Schema no longer needs a cast, and a consumer walking either artifact gets exhaustiveness checking over the discriminated unions. The wire is unchanged, so a consumer that only reads and forwards these payloads needs no edit; one that assigned a hand-rolled shape or indexed them as bare records must update. `bundle_blueprint` and `graph_spec` stay opaque, because the standard declares neither.
+- **The `mthds` floor moves from `^0.22.0` to `^0.24.0`.** The floor spans two releases: `0.23.0` first carried `mthds/protocol`'s `input_form` and `pipe_io_contracts` modules, and `0.24.0` then tightened `InputFormTopLevelField` into a discriminated union on `required`, so the standard's pairing rules are enforced by the compiler rather than left as prose. Because the barrel re-exports `mthds/protocol` unchanged, every type the two artifacts are built from is reachable from `@pipelex/sdk` with no second import.
+- **Test payloads:** the mocked validation payloads in `tests/client.test.ts` now use realistic, fully typed contract and descriptor pairs instead of placeholder objects, matching the new strict types.
+- **Internal tooling:** the `bump-required-versions` Claude skill is renamed `bump-mthds`, with its prompts and the `check-min-versions` documentation updated to match.
+
+### Fixed
+
+- **Dev-scope security refresh:** `package-lock.json` was regenerated to move four transitive lint- and test-toolchain dependencies past their patched versions — `brace-expansion`, `js-yaml`, `nanoid` and `postcss`. None of them reaches the published package.
+
 ## [v0.14.0] - 2026-08-25
 
 ### Added
