@@ -1,5 +1,5 @@
 ---
-status: draft
+status: landed
 item: L-260829-300c50
 ---
 
@@ -131,3 +131,11 @@ All three are settled; the answers are in the checkpoint log below.
 - The `validate` fetch budget — see Checkpoint A; it would have lowered a ceiling.
 - Any change to the build wrappers or the platform sniff table, both sequenced elsewhere in the program.
 - Letting a consumer that has already validated hand the descriptor in directly, avoiding the second round trip. Additive, and worth doing only when a consumer measures the cost.
+
+### Checkpoint C — landed
+
+Phase 4 is done. `pr:pipelex-sdk-js#42` merged to `dev` as `bea4632a2464ad6e3bbf4a7b9a7e9970cf7f5573`, carrying every phase of this plan; CI was green on the head commit (Quality Checks, gate-dev, CLAAssistant). `L-260829-300c50` closed `fixed` against that merge, and `L-260826-ddd843` — the two-misclassification bug this fixes from the JS side — was advanced rather than closed: it still waits on its Python twin `L-260829-8a25d5`, and on both SDKs shipping a release that carries the fix.
+
+**The merge has not reached `main`, and that is the remaining gate for the consumers.** The work sits under `## [Unreleased]`; npm's `latest` is still 0.16.0. The two items this close released — `L-260829-eefc3f` (retire the build wrappers) and `L-260829-dfaed4` (`mthds_prepare_inputs` forwards all three selectors) — both need the *published* package rather than the merged source, so the minor release Phase 4 anticipated is what actually unblocks them.
+
+Nothing in the plan changed at landing: no phase was cut, no decision was revisited, and the deliberate omissions of Checkpoint B stand as written.
