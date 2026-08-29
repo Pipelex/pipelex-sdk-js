@@ -5,7 +5,7 @@
  * resolved-output concern sits apart from the raw wire models in `models.ts`.
  */
 
-import type { DictPipeOutput, DictRunResultExecute } from "./models.js";
+import type { DictPipeOutput, DictRunResultExecute, MethodProvenance } from "./models.js";
 import { MissingMainStuffError } from "./errors.js";
 
 /**
@@ -42,6 +42,16 @@ export class PipelexExecuteResult implements DictRunResultExecute {
    * `.main_stuff` throws `MissingMainStuffError`.
    */
   readonly main_stuff_name: string | null;
+  /**
+   * Provenance of a `method_ref` run — `{address, tag, commit_sha}`, the commit
+   * SHA being what keeps the run explainable when a tag moves. Populated by the
+   * extension-copy loop below (so serializing still reproduces the wire shape:
+   * the key exists only when the server sent it); absent or `null` for runs
+   * from inline source or a bundle. `declare` because this only narrows the
+   * type of what the loop preserves — an emitted field definition would create
+   * the own property first and make the loop skip the wire value.
+   */
+  declare readonly method_provenance?: MethodProvenance | null;
   /** Server-specific response fields (preserved verbatim — the wire model is extension-open). */
   [extension: string]: unknown;
 

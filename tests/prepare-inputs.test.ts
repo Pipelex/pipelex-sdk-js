@@ -17,13 +17,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareInputs } from "../src/prepare-inputs.js";
 import type { PrepareCapableClient, PrepareInputsRequest } from "../src/prepare-inputs.js";
-import {
-  InputPreparationError,
-  RejectedAssetError,
-  ApiResponseError,
-  EmptyMethodSourceError,
-} from "../src/errors.js";
-import type { BuildInputsResponse, MthdsFileItem } from "../src/models.js";
+import { InputPreparationError, RejectedAssetError, ApiResponseError } from "../src/errors.js";
+import type { BuildInputsResponse } from "../src/models.js";
 
 /** Build an explicit-template envelope entry. */
 function entry(concept: string, content: unknown): { concept: string; content: unknown } {
@@ -32,7 +27,6 @@ function entry(concept: string, content: unknown): { concept: string; content: u
 
 interface FakeClient extends PrepareCapableClient {
   uploadCalls: { filename: string; data: string; content_type: string }[];
-  getMethodClosureCalls: string[];
 }
 
 const FILES = [{ content: 'domain = "demo"' }];
@@ -43,16 +37,12 @@ function makeClient(
   overrides: {
     report?: BuildInputsResponse;
     uploadError?: unknown;
-    closure?: MthdsFileItem[];
-    closureError?: unknown;
   } = {},
 ): FakeClient {
   const uploadCalls: { filename: string; data: string; content_type: string }[] = [];
-  const getMethodClosureCalls: string[] = [];
   let counter = 0;
   return {
     uploadCalls,
-    getMethodClosureCalls,
     async buildInputs() {
       return (
         overrides.report ?? {
@@ -64,11 +54,6 @@ function makeClient(
           inputs: template,
         }
       );
-    },
-    async getMethodClosure(methodId) {
-      getMethodClosureCalls.push(methodId);
-      if (overrides.closureError) throw overrides.closureError;
-      return overrides.closure ?? FILES;
     },
     async upload(input) {
       if (overrides.uploadError) throw overrides.uploadError;
@@ -529,66 +514,38 @@ describe("prepareInputs with the explicit { concept, content } envelope", () => 
   });
 });
 
-describe("prepareInputs by method_id", () => {
-  it("resolves a stored method's closure and produces the same result as the inline-files call", async () => {
-    const template = { photo: entry("demo.Photo", { url: "https://mock/p.png" }) };
-    const inputs = { photo: "https://example.com/real.png" };
-
-    // The by-id closure resolves to the same FILES the inline call passes.
-    const byFiles = await prepareInputs(makeClient(template), { files: FILES, inputs });
-
-    const client = makeClient(template, { closure: FILES });
-    const byId = await prepareInputs(client, { method_id: "mt_1", inputs });
-
-    expect(byId).toEqual(byFiles);
-    expect(client.getMethodClosureCalls).toEqual(["mt_1"]);
-    expect(client.uploadCalls).toHaveLength(0);
-  });
-
-  it("surfaces EmptyMethodSourceError from a source-less stored method", async () => {
-    const client = makeClient(
-      { photo: entry("demo.Photo", { url: "https://mock/p.png" }) },
-      { closureError: new EmptyMethodSourceError("mt_empty") },
-    );
-
-    await expect(
-      prepareInputs(client, { method_id: "mt_empty", inputs: { photo: new Uint8Array([1]) } }),
-    ).rejects.toBeInstanceOf(EmptyMethodSourceError);
-  });
-
-  it("guards the degenerate neither-files-nor-method_id call with InputPreparationError", async () => {
+describe("prepareInputs takes files only — the by-id expansion leg is retired", () => {
+  it("guards the missing-files call with InputPreparationError", async () => {
     const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
 
-    // A non-typed caller can still construct a request with neither closure source; the
-    // runtime guard backs up the discriminated-union type invariant.
+    // A non-typed caller can still construct a request with no closure; the runtime
+    // guard backs up the required `files` field.
     await expect(
       prepareInputs(client, { inputs: { photo: "x" } } as unknown as PrepareInputsRequest),
     ).rejects.toBeInstanceOf(InputPreparationError);
   });
 
-  it("rejects an over-specified both-files-and-method_id call before resolving the closure", async () => {
+  it("rejects a stray method_id with a teaching error naming getMethodClosure", async () => {
     const client = makeClient({ photo: entry("demo.Photo", { url: "https://mock/p.png" }) });
 
-    // A non-typed caller can still supply both closure sources; the request is genuinely
-    // ambiguous, so it must fail fast rather than silently preferring `method_id` — and it
-    // must NOT resolve the catalog method (no throwaway fetch on the rejected path).
-    await expect(
-      prepareInputs(client, {
-        files: FILES,
-        method_id: "mt_1",
-        inputs: { photo: "x" },
-      } as unknown as PrepareInputsRequest),
-    ).rejects.toBeInstanceOf(InputPreparationError);
-    expect(client.getMethodClosureCalls).toEqual([]);
+    // A non-typed caller migrating off the retired by-id form still reaches this shape;
+    // the error says what changed instead of resolving the id behind the caller's back.
+    const failure = prepareInputs(client, {
+      method_id: "mt_1",
+      inputs: { photo: "x" },
+    } as unknown as PrepareInputsRequest);
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/getMethodClosure/);
   });
 
-  it("makes an over- or under-specified closure a type error (discriminated union)", () => {
-    // @ts-expect-error — `files` and `method_id` are mutually exclusive.
-    const both: PrepareInputsRequest = { files: FILES, method_id: "mt_1", inputs: {} };
-    // @ts-expect-error — exactly one of `files` | `method_id` is required.
-    const neither: PrepareInputsRequest = { inputs: {} };
+  it("makes the retired method_id form a type error", () => {
+    // @ts-expect-error — `method_id` is no longer a prepareInputs field; expand a stored
+    // method with `getMethodClosure` and pass the resulting `files`.
+    const byId: PrepareInputsRequest = { method_id: "mt_1", inputs: {} };
+    // @ts-expect-error — `files` is required.
+    const missingFiles: PrepareInputsRequest = { inputs: {} };
 
-    expect(both).toBeDefined();
-    expect(neither).toBeDefined();
+    expect(byId).toBeDefined();
+    expect(missingFiles).toBeDefined();
   });
 });

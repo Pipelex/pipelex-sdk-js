@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.15.0";
+export const SDK_VERSION = "0.16.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -20,10 +20,11 @@ export * from "mthds/protocol";
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type {
   MthdsFile,
-  BuildInputsByMethodId,
+  PipelexApiRunExtensions,
   PipelexHostedRunExtensions,
   PipelexRunOptions,
   PipelexStartOptions,
+  ValidateMethodSelector,
   ValidateFilesOptions,
   PipelexApiClientOptions,
 } from "./client.js";
@@ -50,6 +51,9 @@ export type {
   DictWorkingMemory,
   DictPipeOutput,
   DictRunResultExecute,
+  MethodProvenance,
+  PipelexRunResultStart,
+  PipelexHostedToolingExtensions,
   DryRunStatus,
   ValidatedPipeEntry,
   LiftablePipeEntry,

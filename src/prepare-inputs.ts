@@ -29,32 +29,23 @@ import { uploadFile } from "./upload.js";
 const PIPELEX_STORAGE_SCHEME = "pipelex-storage://";
 const HTTP_URL_RE = /^https?:\/\//i;
 
-/** The pipe selector + caller inputs shared by both closure-source shapes. */
-interface PrepareInputsBase {
+/**
+ * What `prepareInputs` takes: the method closure (inline `files` — the
+ * signature source), the target pipe, and the caller's compact inputs.
+ *
+ * `files` is the ONLY closure form here: preparation is a client-side walk over
+ * the closure's signature, so there is no by-id (or by-address) leg to
+ * delegate to a server. A stored method is expanded first —
+ * `prepareInputs({ files: await client.getMethodClosure(methodId), … })`.
+ */
+export interface PrepareInputsRequest {
+  /** The method closure — inline MTHDS files. This is the signature source. */
+  files: MthdsFileItem[];
   /** The pipe to prepare inputs for, as a qualified `domain.pipe_code`; omit to default to the closure's `main_pipe`. */
   pipe_ref?: string;
   /** The caller's compact inputs (variable name → value). */
   inputs: Record<string, unknown>;
 }
-
-/**
- * What `prepareInputs` takes: the method closure, the target pipe, and the
- * caller's compact inputs. Supply the closure EITHER as inline `files` OR as a
- * stored `method_id` — never both. `method_id` is a client-side convenience:
- * it is resolved to `files` via `getMethodClosure` before anything hits the
- * wire (it never travels as a wire field), and requires an API key.
- */
-export type PrepareInputsRequest =
-  | (PrepareInputsBase & {
-      /** The method closure — inline MTHDS files. This is the signature source. */
-      files: MthdsFileItem[];
-      method_id?: never;
-    })
-  | (PrepareInputsBase & {
-      /** A stored method's id — resolved client-side to its closure before the build call. */
-      method_id: string;
-      files?: never;
-    });
 
 /** The result of `prepareInputs`: rewritten inputs (copy-on-write) plus upload records. */
 export interface PreparedInputs {
@@ -65,8 +56,8 @@ export interface PreparedInputs {
 }
 
 /**
- * The client surface `prepareInputs` needs: raw `upload`, the `buildInputs`
- * signature source, and `getMethodClosure` to resolve a by-id request's closure.
+ * The client surface `prepareInputs` needs: raw `upload` and the `buildInputs`
+ * signature source.
  */
 export interface PrepareCapableClient extends UploadCapableClient {
   buildInputs(request: {
@@ -75,8 +66,6 @@ export interface PrepareCapableClient extends UploadCapableClient {
     format?: "json";
     explicit?: boolean;
   }): Promise<BuildInputsResponse>;
-  /** Resolve a stored method's id into its runnable closure — the by-id signature source. */
-  getMethodClosure(methodId: string): Promise<MthdsFileItem[]>;
 }
 
 /** Mutable state threaded through one preparation walk. */
@@ -234,58 +223,26 @@ async function resolveNode(
 }
 
 /**
- * Resolve a `files` / `method_id` closure pair to inline files: reject an
- * over-specified `{ files, method_id }` (both given) before any resolution
- * runs, then either return the inline `files` unchanged or fetch-and-parse the
- * stored method behind `method_id` via `getMethodClosure`. Returns `undefined`
- * when NEITHER is given — the caller decides what that means for its own
- * request shape, since `buildInputs` (client.ts) also accepts a third source,
- * the reserved `method_ref`, that `prepareInputs` does not.
- *
- * Shared between `PipelexApiClient.buildInputs` and `resolveClosureFiles`
- * (below) so the files/method_id invariant is defined in exactly one place —
- * a duplicated copy of this exact check is what let a `buildInputs`-only
- * revision briefly reject a legitimate `method_ref`-only request.
+ * Read the request's closure `files`, guarding the untyped-caller shapes the
+ * type system already forbids: a missing closure (`files` is required), and the
+ * retired by-id form (`method_id` was a client-side expansion leg, deleted when
+ * the tooling routes gained native by-id — expand a stored method with
+ * `getMethodClosure` instead).
  */
-export async function resolveFilesOrMethodId(
-  files: MthdsFileItem[] | undefined,
-  methodId: string | undefined,
-  getMethodClosure: (methodId: string) => Promise<MthdsFileItem[]>,
-  makeError: (message: string) => Error,
-): Promise<MthdsFileItem[] | undefined> {
-  if (methodId !== undefined && files !== undefined) {
-    throw makeError("supply the closure as either `files` or `method_id`, never both.");
-  }
-  if (methodId !== undefined) {
-    return getMethodClosure(methodId);
-  }
-  return files;
-}
-
-/**
- * Resolve the request's closure to inline `files`: fetch and parse a stored
- * method when `method_id` is given, else use the inline `files`. The either/or
- * is a type invariant (the discriminated union); {@link resolveFilesOrMethodId}
- * backs the over-specified "both given" case at runtime for non-typed callers,
- * and the "neither given" case is rejected here (prepareInputs has no third
- * closure source, unlike `buildInputs`).
- */
-async function resolveClosureFiles(
-  client: PrepareCapableClient,
-  request: PrepareInputsRequest,
-): Promise<MthdsFileItem[]> {
-  const files = await resolveFilesOrMethodId(
-    request.files,
-    request.method_id,
-    (methodId) => client.getMethodClosure(methodId),
-    (message) => new InputPreparationError(`Cannot prepare inputs: ${message}`),
-  );
-  if (files === undefined) {
+function resolveClosureFiles(request: PrepareInputsRequest): MthdsFileItem[] {
+  if ((request as unknown as Record<string, unknown>)["method_id"] !== undefined) {
     throw new InputPreparationError(
-      "Cannot prepare inputs: supply either `files` (an inline MTHDS closure) or `method_id` (a stored method).",
+      "Cannot prepare inputs: `method_id` is not a prepareInputs field. Expand the stored method " +
+        "first — prepareInputs({ files: await client.getMethodClosure(methodId), … }).",
     );
   }
-  return files;
+  if (request.files == null) {
+    throw new InputPreparationError(
+      "Cannot prepare inputs: supply `files` (the inline MTHDS closure). A stored method's closure " +
+        "comes from client.getMethodClosure(methodId).",
+    );
+  }
+  return request.files;
 }
 
 /**
@@ -303,7 +260,7 @@ export async function prepareInputs(
   client: PrepareCapableClient,
   request: PrepareInputsRequest,
 ): Promise<PreparedInputs> {
-  const files = await resolveClosureFiles(client, request);
+  const files = resolveClosureFiles(request);
 
   const report = await client.buildInputs({
     files,

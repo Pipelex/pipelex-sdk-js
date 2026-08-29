@@ -10,24 +10,28 @@ Two routes project a **closure** of MTHDS files into the artifacts downstream to
 
 ## The shared envelope
 
-Both take the same closure selector — inline `files` **or** a `method_ref`, exactly one:
+Both take the same closure selector — inline `files`, a `method_ref`, or a hosted `method_id`, exactly one (the strict tooling XOR):
 
 ```ts
 interface CrateRequestBase {
   files?: MthdsFileItem[]; // [{ content, source? }] — `source` is the provenance label
-  method_ref?: string; // reserved — the registry does not exist yet, so the server answers 501
+  method_ref?: string; // address form server-resolved (pipelex-api >= 0.21.0); registry form reserved → 501
+}
+
+interface PipelexHostedToolingExtensions {
+  method_id?: string; // hosted-only — the platform resolves the stored method server-side
 }
 ```
 
 This is the same `MthdsFileItem` and the same `source` semantics the build routes use, so the [notes there](./build-routes.md#the-shared-envelope) apply verbatim: pass a filename per file and, when the engine can attribute a diagnostic to one, it comes back as `source` on the corresponding `validation_errors[]` item.
 
-Supplying **neither** selector or **both** is a request-shape `422`. The SDK does not model that XOR in the type system — the union would force the overwhelmingly common `{ files }` call site to pick a branch for no gain, and the server's answer is a typed `ApiResponseError` either way.
+An **address-form** `method_ref` (`github.com/<owner>/<repo>[/<selector>][@<tag>]`) is resolved by the server through the same fetch path as a `method_ref` run: the repository fetched at the tag, the package located by manifest identity, the package's real relative paths feeding the per-file `source` labels. Any non-address reference stays reserved and answers `501`.
 
-There is no `method_id` sugar here (unlike `buildInputs`). To work from a stored method, expand it first — one line, and it is exactly what the sugar would do internally:
+`method_id` is the hosted platform's selector, and it is a **pass-through**: nothing is expanded client-side — the platform resolves the id against the org's catalog and injects the stored source before the runner sees the request. It is meaningless against a bare runner (no catalog), and on `api.pipelex.com` its availability follows the platform deploy that adds the tooling-route transform. An unknown or foreign-org id is a `404` (indistinguishable by design); a stored method with no MTHDS source is a `422`.
 
-```ts
-const result = await client.resolve({ files: await client.getMethodClosure(methodId) });
-```
+Supplying **no** selector or **more than one** is a request-shape `422` — the tooling routes are stateless, so there is no linkage exception; a second selector could only be ignored, which is the worst contract of the three. The SDK does not model the XOR in the type system — the union would force the overwhelmingly common `{ files }` call site to pick a branch for no gain, and the server's answer is a typed `ApiResponseError` either way.
+
+The old advice to expand a stored method client-side (`resolve({ files: await client.getMethodClosure(methodId) })`) remains valid — `getMethodClosure` stays public as the local expansion utility, and it is what a caller uses against a bare runner or on the routes with no by-id form (`/v1/build/*`, `prepareInputs`).
 
 ## `resolve` — the normalized crate
 
@@ -91,8 +95,9 @@ Only a **no-verdict** condition, as the typed `ApiResponseError` — branch on i
 
 | Status        | Cause                                                                                                     |
 | ------------- | --------------------------------------------------------------------------------------------------------- |
-| `422`         | Request shape: neither or both closure selectors, an unknown `kind`/`target`, a `pipe_ref` on `kind: "types"`. |
-| `501`         | `method_ref` — reserved, not implemented.                                                                   |
+| `422`         | Request shape: no closure selector or more than one, an unknown `kind`/`target`, a `pipe_ref` on `kind: "types"`, a stored method with no MTHDS source. |
+| `404`         | Unknown or foreign-org `method_id` (indistinguishable by design).                                           |
+| `501`         | Registry-form `method_ref` — reserved, not implemented (the address form resolves).                         |
 | `401` / `403` | Auth.                                                                                                       |
 | `5xx`         | Server fault.                                                                                               |
 
