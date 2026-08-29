@@ -228,6 +228,166 @@ describe("PipelexApiClient hosted method_id option", () => {
   });
 });
 
+describe("PipelexApiClient method_ref run source", () => {
+  const ADDRESS = "github.com/Pipelex/methods/documents@v0.1.0";
+  const BUNDLE = { "bundle.mthds": "domain = 'x'" };
+
+  function executeResponse(): Response {
+    return jsonResponse(200, {
+      pipeline_run_id: "run-r",
+      pipe_output: { working_memory: { root: {} } },
+    });
+  }
+
+  function startResponse(): Response {
+    return jsonResponse(202, {
+      pipeline_run_id: "run-r",
+      state: "STARTED",
+      created_at: "t0",
+      method_provenance: { address: ADDRESS, tag: "v0.1.0", commit_sha: "23dda75" },
+    });
+  }
+
+  it("sends the typed method_ref as a top-level wire field on execute and start", async () => {
+    const client = makeClient();
+    const onExecute = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    // A method_ref-only run is a complete run source — the fetched package
+    // carries its `.mthds` and its entry pipe — so the precondition is satisfied.
+    await client.execute({ method_ref: ADDRESS, inputs: { a: 1 } }).catch(() => undefined);
+    expect(bodyOf(onExecute)).toEqual({ method_ref: ADDRESS, inputs: { a: 1 } });
+
+    vi.restoreAllMocks();
+    const onStart = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_ref: ADDRESS, inputs: { a: 1 } });
+    expect(bodyOf(onStart)).toEqual({ method_ref: ADDRESS, inputs: { a: 1 } });
+  });
+
+  it("accepts pipe_code beside method_ref — it overrides the manifest's main_pipe", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_ref: ADDRESS, pipe_code: "documents.extract" });
+    expect(bodyOf(fetchSpy)).toEqual({ method_ref: ADDRESS, pipe_code: "documents.extract" });
+  });
+
+  it("surfaces method_provenance on the start ack, typed", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    const ack = await client.start({ method_ref: ADDRESS });
+    // The typed field — no index-signature cast needed.
+    expect(ack.method_provenance).toEqual({
+      address: ADDRESS,
+      tag: "v0.1.0",
+      commit_sha: "23dda75",
+    });
+  });
+
+  it("preserves method_provenance on the execute result, typed", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        pipeline_run_id: "run-r",
+        main_stuff_name: "out",
+        pipe_output: {
+          working_memory: { root: { out: { concept: "native.Text", content: { text: "hi" } } } },
+        },
+        method_provenance: { address: ADDRESS, tag: "v0.1.0", commit_sha: "23dda75" },
+      }),
+    );
+    const result = await client.execute({ method_ref: ADDRESS });
+    expect(result.method_provenance).toEqual({
+      address: ADDRESS,
+      tag: "v0.1.0",
+      commit_sha: "23dda75",
+    });
+    // Serialization still reproduces the wire shape — the key was sent, so it survives.
+    expect(JSON.parse(JSON.stringify(result)).method_provenance).toEqual({
+      address: ADDRESS,
+      tag: "v0.1.0",
+      commit_sha: "23dda75",
+    });
+  });
+
+  it("rejects method_ref beside inline mthds_contents, before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // Mirror of the server's 422 — an address is a complete run source, so
+    // exactly one source per request (no linkage exception for method_ref).
+    await expect(
+      client.start({ method_ref: ADDRESS, mthds_contents: ["domain = 'x'"] }),
+    ).rejects.toThrow(/mutually exclusive/);
+    await expect(
+      client.execute({ method_ref: ADDRESS, mthds_contents: ["domain = 'x'"] }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects method_ref beside a method bundle (files / bundle_b64), before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(client.start({ method_ref: ADDRESS, files: BUNDLE })).rejects.toThrow(
+      /method bundle/,
+    );
+    await expect(client.execute({ method_ref: ADDRESS, bundle_b64: "UEsDBA==" })).rejects.toThrow(
+      /method bundle/,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects method_ref beside method_id — an address run takes no linkage id", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(client.start({ method_ref: ADDRESS, method_id: "mt_1" })).rejects.toThrow(
+      /exactly one method selector/,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still allows inline source + method_id — the documented linkage exception is untouched", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(startResponse());
+    await client.start({ method_id: "mt_1", mthds_contents: ["domain = 'x'"] });
+    expect(bodyOf(fetchSpy)).toMatchObject({
+      method_id: "mt_1",
+      mthds_contents: ["domain = 'x'"],
+    });
+  });
+
+  it("never ships an empty method_ref (it selects nothing)", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(executeResponse());
+    await client.execute({ pipe_code: "p", method_ref: "" }).catch(() => undefined);
+    expect(bodyOf(fetchSpy).method_ref).toBeUndefined();
+    // And it does not satisfy the precondition on its own.
+    await expect(client.execute({ method_ref: "" })).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("rejects method_ref smuggled through `extra` — one argument, one path", async () => {
+    const client = makeClient();
+    await expect(client.execute({ extra: { method_ref: ADDRESS } })).rejects.toThrow(
+      /reserved request args/,
+    );
+    await expect(
+      client.start({ pipe_code: "p", extra: { method_ref: ADDRESS } }),
+    ).rejects.toBeInstanceOf(PipelineRequestError);
+  });
+
+  it("keeps method_ref on the blocking fallback, so a bare runner runs the same package", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, { implementation: "pipelex-api" }))
+      .mockResolvedValue(executeResponse());
+    await client.startAndWaitForResult({ method_ref: ADDRESS }).catch(() => undefined);
+    const executeCall = fetchSpy.mock.calls[1]!;
+    expect(String(executeCall[0])).toBe("http://localhost:8081/v1/execute");
+    const body = JSON.parse((executeCall[1] as RequestInit).body as string) as Record<
+      string,
+      unknown
+    >;
+    expect(body.method_ref).toBe(ADDRESS);
+  });
+});
+
 describe("PipelexApiClient method-bundle transport", () => {
   const BUNDLE = { "bundle.mthds": "domain = 'x'", "funcs/f.py": "def f(): ..." };
 
@@ -1044,6 +1204,91 @@ describe("PipelexApiClient.validate", () => {
     expect((err as ApiResponseError).status).toBe(422);
     expect((err as ApiResponseError).errorType).toBe("ValidationError");
     expect((err as ApiResponseError).validationErrors).toBeUndefined();
+  });
+});
+
+describe("PipelexApiClient.validate method selectors", () => {
+  const ADDRESS = "github.com/Pipelex/methods/documents@v0.1.0";
+
+  it("POSTs a method_ref body — validate-by-address is a server pass-through", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+
+    await client.validate({ method_ref: ADDRESS }, true);
+
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe("http://localhost:8081/v1/validate");
+    expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+      method_ref: ADDRESS,
+      allow_signatures: true,
+      render: ["markdown"],
+    });
+  });
+
+  it("POSTs a method_id body — validate-by-id is a hosted pass-through", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+
+    await client.validate({ method_id: "mt_1" });
+
+    expect(JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string)).toEqual({
+      method_id: "mt_1",
+      allow_signatures: false,
+      render: ["markdown"],
+    });
+  });
+
+  it("keeps render and views riding beside a selector", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+
+    await client.validate({ method_ref: ADDRESS }, false, undefined, undefined, ["input_form"]);
+
+    const body = JSON.parse((fetchSpy.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.render).toEqual(["markdown"]);
+    expect(body.views).toEqual(["input_form"]);
+  });
+
+  it("rejects a both-selectors object — the tooling XOR is strict, before any fetch", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // Type-blocked (`ValidateMethodSelector` pins the other key to `never`);
+    // the runtime guard backs it for untyped callers.
+    await expect(
+      client.validate({ method_ref: ADDRESS, method_id: "mt_1" } as never),
+    ).rejects.toThrow(/exactly one method selector/);
+    // An empty selector object is just as under-specified.
+    await expect(client.validate({} as never)).rejects.toBeInstanceOf(PipelineRequestError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects mthds_sources beside a selector — labels come from the package's real files", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(client.validate({ method_ref: ADDRESS }, false, ["a.mthds"])).rejects.toThrow(
+      /mthds_sources/,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a selector-resolution failure as a non-2xx ApiResponseError, never a verdict", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(422, {
+        status: 422,
+        title: "Unprocessable Entity",
+        detail: "No package found at the address.",
+      }),
+    );
+    const failure = client.validate({ method_ref: ADDRESS });
+    await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(failure).rejects.toMatchObject({ status: 422 });
   });
 });
 

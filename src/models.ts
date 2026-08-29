@@ -13,6 +13,7 @@ import type {
   InvalidValidationReport,
   PipeIOContracts,
   RunResultExecute,
+  RunResultStart,
   ValidationReport,
 } from "mthds/protocol";
 
@@ -52,6 +53,61 @@ export interface DictPipeOutput {
  * protocol's extension-open response.
  */
 export type DictRunResultExecute = RunResultExecute<DictPipeOutput>;
+
+// ── Method-selector extensions (address form + hosted catalog id) ────────
+//
+// A method reaches any method-taking route in one of three forms: inline source
+// (the protocol's `mthds_contents` / the bundle encodings), a `method_ref`
+// address (`github.com/<owner>/<repo>[/<selector>][@<tag>]` — a Pipelex-API
+// extension, resolved by the RUNNER via git fetch at the tag), or a `method_id`
+// catalog id (`mt_…` — a hosted-platform extension, resolved against the org's
+// catalog; an open-source runner has no catalog and answers a 422 naming the
+// key). The two selectors never meet in the runner: the platform resolves
+// `method_id` into inline source before any runner sees the request.
+
+/**
+ * Provenance of a `method_ref` run — the package's resolved full address, the
+ * requested tag (`null` for a bare address, which resolves the default branch
+ * at HEAD), and the commit SHA that was actually fetched. The SHA is what keeps
+ * the run explainable when a tag moves. A Pipelex-API extension; attached to
+ * the start ack and the execute response for `method_ref` runs, absent (or
+ * `null`) otherwise.
+ */
+export interface MethodProvenance {
+  address: string;
+  tag: string | null;
+  commit_sha: string;
+}
+
+/**
+ * The `POST /v1/start` 202 ack as the Pipelex API returns it — the protocol's
+ * `RunResultStart` plus the server's `method_provenance` extension, populated
+ * for `method_ref` runs and absent or `null` otherwise.
+ */
+export interface PipelexRunResultStart extends RunResultStart {
+  method_provenance?: MethodProvenance | null;
+}
+
+/**
+ * The hosted tooling routes' own selector — the layer-3 extension the platform
+ * adds on `POST /v1/validate`, `/v1/resolve`, and `/v1/codegen`: a stored
+ * method's catalog id (`mt_…`), resolved server-side against the org's catalog
+ * and injected as inline source before the runner sees the request. A **pass-
+ * through to the hosted API**: nothing is expanded client-side, and it is
+ * meaningless off-platform (a bare runner rejects the request as carrying no
+ * source it understands).
+ *
+ * The tooling routes are stateless, so there is no linkage exception: exactly
+ * one of inline source / `method_ref` / `method_id` per request — any second
+ * selector is a request-shape `422`. An unknown or foreign-org id is a `404`
+ * (indistinguishable by design); a stored method with no MTHDS source is a
+ * `422`. The `/v1/build/*` projections are deliberately excluded — they take
+ * no `method_id` (expand a stored method with `getMethodClosure` there).
+ */
+export interface PipelexHostedToolingExtensions {
+  /** A stored method's catalog id (`mt_…`) — hosted-only, resolved server-side. */
+  method_id?: string;
+}
 
 // ── Validate surface (Pipelex-API extensions over the protocol) ──────────
 //
@@ -425,10 +481,13 @@ export interface MthdsFileItem {
  * The closure selector every crate-family route shares — `/v1/resolve`, `/v1/codegen`,
  * and `/v1/build/*` (mirror of the server's `MthdsFilesRequest`).
  *
- * Supply the closure EITHER as inline `files` OR as a `method_ref` into the method
- * registry — never both, and never neither (both arms are a request-shape `422`).
- * `method_ref` is reserved: the registry does not exist yet, so the server answers
- * `501` for it today.
+ * Supply the closure EITHER as inline `files` OR as a `method_ref` — never both, and
+ * never neither (both arms are a request-shape `422`). An **address-form** `method_ref`
+ * (`github.com/<owner>/<repo>[/<selector>][@<tag>]`) is resolved by the server
+ * (pipelex-api >= 0.21.0): the repository is fetched at the tag, the package is
+ * located by manifest identity, and its `.mthds` files feed the closure with their
+ * real relative paths as per-file sources. The **registry form** (any non-address
+ * reference) stays reserved and answers `501` until a method registry exists.
  *
  * The XOR is a server-side invariant, not a type-level one: expressing it as a union
  * here would make the common `{ files }` call site pick a branch for no gain, and the
@@ -450,17 +509,17 @@ export interface BuildRequestBase extends CrateRequestBase {
    * declares none, or declares several across its domains.
    */
   pipe_ref?: string;
+  /**
+   * The `/v1/build/*` projections take NO `method_id` — the hosted platform's
+   * tooling selector covers `validate`/`resolve`/`codegen` only, and the build
+   * routes are deliberately excluded (they are frozen, being replaced by the
+   * codegen surface). Pinned to `never` so a stored-method caller reaches for
+   * `getMethodClosure` instead of a field no server resolves.
+   */
+  method_id?: never;
 }
 
 export interface BuildInputsRequest extends BuildRequestBase {
-  /**
-   * `method_id` (the by-id closure alternative) is a separate client param type,
-   * never a field of the inline-`files` request. Pinned to `never` so an
-   * over-specified `{ files, method_id }` request is a compile error — mirroring
-   * `PrepareInputsRequest`'s discriminated union. The runtime `buildInputs` guard
-   * backs this for untyped (JS) callers.
-   */
-  method_id?: never;
   /** `json` (default) puts the parsed template in `inputs`; `toml` puts raw text in `inputs_toml`. */
   format?: InputsTemplateFormat;
   /** Emit the ceremonial `{concept, content}` envelope per input. Defaults to the light shape. */
@@ -619,8 +678,12 @@ export interface PipeSpecResponse {
 // discipline as the build routes: a produced verdict is a 200 discriminated on
 // `is_valid`, with `CrateInvalidReport` as the shared invalid arm.
 
-/** `POST /v1/resolve` request — the bare crate envelope, no projection axes. */
-export type ResolveRequest = CrateRequestBase;
+/**
+ * `POST /v1/resolve` request — the crate envelope (no projection axes) plus the
+ * hosted `method_id` selector. Exactly one of `files` / `method_ref` /
+ * `method_id` — the strict tooling XOR; see {@link PipelexHostedToolingExtensions}.
+ */
+export type ResolveRequest = CrateRequestBase & PipelexHostedToolingExtensions;
 
 /**
  * The `/v1/resolve` valid arm — the normalized library crate.
@@ -667,8 +730,12 @@ export type CodegenKind = "types";
  */
 export type CodegenTarget = "ts-zod" | "python-pydantic" | "python-structures";
 
-/** `POST /v1/codegen` request — the crate envelope plus the two explicit projection axes. */
-export interface CodegenRequest extends CrateRequestBase {
+/**
+ * `POST /v1/codegen` request — the crate envelope plus the two explicit projection
+ * axes and the hosted `method_id` selector (exactly one of `files` / `method_ref` /
+ * `method_id`; see {@link PipelexHostedToolingExtensions}).
+ */
+export interface CodegenRequest extends CrateRequestBase, PipelexHostedToolingExtensions {
   kind: CodegenKind;
   target: CodegenTarget;
   /**

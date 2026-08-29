@@ -4,7 +4,7 @@ The three build projections — `buildInputs`, `buildOutput`, `buildRunner` — 
 
 ## The shared envelope
 
-Every build request supplies the closure **either** as inline `files` **or** as a `method_ref` into the method registry — never both:
+Every build request supplies the closure **either** as inline `files` **or** as a `method_ref` — never both:
 
 ```ts
 interface MthdsFileItem {
@@ -14,15 +14,18 @@ interface MthdsFileItem {
 
 interface CrateRequestBase {
   files?: MthdsFileItem[];
-  method_ref?: string; // reserved — the registry does not exist yet, so the server answers 501
+  method_ref?: string; // address form server-resolved (pipelex-api >= 0.21.0); registry form reserved → 501
 }
 
 interface BuildRequestBase extends CrateRequestBase {
   pipe_ref?: string; // QUALIFIED `domain.pipe_code`; omit to default to the closure's `main_pipe`
+  method_id?: never; // the build routes have no by-id form — expand with getMethodClosure
 }
 ```
 
-The selector half is `CrateRequestBase`, shared verbatim with the [crate routes](./crate-routes.md) (`resolve` / `codegen`) — the same split the server makes (`MthdsPipeRequest(MthdsFilesRequest)`). What the build routes add is the pipe selector.
+The selector half is `CrateRequestBase`, shared verbatim with the [crate routes](./crate-routes.md) (`resolve` / `codegen`) — the same split the server makes (`MthdsPipeRequest(MthdsFilesRequest)`). What the build routes add is the pipe selector. An **address-form** `method_ref` (`github.com/<owner>/<repo>[/<selector>][@<tag>]`) is resolved by the server through the same fetch path as a `method_ref` run — the package's real relative paths feed the per-file `source` labels; any non-address reference stays reserved and answers `501`.
+
+The build routes deliberately take **no `method_id`** — the hosted tooling selector covers `validate` / `resolve` / `codegen` only, and these routes are frozen, being replaced by the codegen surface. The type pins the field to `never`, and `buildInputs` additionally rejects a stray runtime `method_id` with an error naming the migration (its old client-side by-id expansion was deleted). To build from a stored method, expand it first: `buildInputs({ files: await client.getMethodClosure(methodId) })`.
 
 `source` is why the envelope exists. A closure is a set of files, and a diagnostic that cannot say _which_ file it came from is much harder to act on. Pass a filename (or any label) per file and, **when the engine can attribute the diagnostic to a file**, it comes back as `source` on the corresponding `validation_errors[]` item.
 
@@ -64,7 +67,7 @@ Only a **no-verdict** condition, and it throws the typed `ApiResponseError` — 
 | Status        | Cause                                                                                                                                                                                                                                                 |
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `422`         | The pipe selector does not resolve: an unknown `pipe_ref`, or an omitted one on a closure with no `main_pipe` — or several. Also an output concept that cannot be rendered (`buildOutput`), and a requested pipe the dry-run skipped (`buildRunner`). |
-| `501`         | `method_ref` — reserved, not implemented.                                                                                                                                                                                                             |
+| `501`         | Registry-form `method_ref` — reserved, not implemented (the address form resolves).                                                                                                                                                                   |
 | `401` / `403` | Auth.                                                                                                                                                                                                                                                 |
 | `5xx`         | Server fault.                                                                                                                                                                                                                                         |
 

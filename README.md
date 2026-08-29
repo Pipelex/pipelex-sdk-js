@@ -36,6 +36,15 @@ if (report.is_valid) {
   // also rides `pipe_output` on the blocking path).
   console.log(result.main_stuff);
 }
+
+// Or run a published method by address — resolved server-side (fetch at tag,
+// commit SHA recorded as provenance on the start ack). Requires pipelex-api >= 0.21.0;
+// on api.pipelex.com, availability follows the platform deploy that forwards it.
+const ack = await client.start({
+  method_ref: "github.com/Pipelex/methods/documents@v0.1.0",
+  inputs: { document: { url: "https://example.com/report.pdf" } },
+});
+console.log(ack.method_provenance); // { address, tag, commit_sha }
 ```
 
 ### Product routes
