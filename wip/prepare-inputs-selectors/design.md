@@ -95,7 +95,7 @@ The walk is unchanged in shape — top-down, template-guided, copy-on-write — 
 
 ## Errors and no-verdict conditions
 
-All failures are raised before any upload and before any run exists.
+All failures are raised before any run is created.
 
 - Selector shape — none, several, or only empty selectors: `InputPreparationError` naming the three forms.
 - `is_valid: false`: `InputPreparationError` carrying the first validation error's message, as today.

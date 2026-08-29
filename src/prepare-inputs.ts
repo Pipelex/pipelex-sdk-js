@@ -429,7 +429,7 @@ function readBlueprintMainPipeRef(blueprint: unknown): string | undefined {
  * Prepare a pipe's inputs: upload local/byte/data-URL assets at the signature's
  * file-bearing positions and return copy-on-write rewritten inputs plus upload
  * records. HTTP(S) URLs and existing `pipelex-storage://` URIs pass through
- * unchanged. All failures are raised before any upload and before any run exists.
+ * unchanged. All failures are raised before any run is created.
  *
  * The signature comes from one `POST /v1/validate` with `views: ["input_form"]`,
  * whatever the selector — inline `files`, a `method_ref` the runner resolves, or
