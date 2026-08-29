@@ -1268,6 +1268,19 @@ describe("PipelexApiClient.validate method selectors", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects a null/non-object source with the typed error, not a native TypeError", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    // An untyped caller can pass anything; every malformed source must stay
+    // inside the documented error hierarchy.
+    await expect(client.validate(null as never)).rejects.toBeInstanceOf(PipelineRequestError);
+    await expect(client.validate(undefined as never)).rejects.toBeInstanceOf(PipelineRequestError);
+    await expect(client.validate("domain = 'x'" as never)).rejects.toBeInstanceOf(
+      PipelineRequestError,
+    );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects mthds_sources beside a selector — labels come from the package's real files", async () => {
     const client = makeClient();
     const fetchSpy = vi.spyOn(globalThis, "fetch");
