@@ -1092,7 +1092,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
           "method first: buildInputs({ files: await client.getMethodClosure(methodId) }).",
       );
     }
-    return this.requestExtension("build/inputs", request);
+    return this.requestExtension("build/inputs", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   /**
@@ -1102,7 +1104,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * text in `output_python`.
    */
   async buildOutput(request: BuildOutputRequest): Promise<BuildOutputResponse> {
-    return this.requestExtension("build/output", request);
+    return this.requestExtension("build/output", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   /**
@@ -1874,8 +1878,11 @@ function buildExtensions(
 const METHOD_REF_FETCH_TIMEOUT_MS = 180_000; // 3 min — covers the server's clone + resolve
 
 /**
- * The internal request budget for a crate-route call: the static-route default,
+ * The internal request budget for a call carrying a `CrateRequestBase` closure
+ * (the crate routes and the build projections alike): the static-route default,
  * unless the closure is a `method_ref` the server may have to fetch first.
+ * `buildRunner` is the exception — its own five-minute default already clears
+ * the fetch budget.
  */
 function crateRequestTimeoutMs(request: CrateRequestBase): number | undefined {
   return nonEmptyString(request.method_ref) !== undefined ? METHOD_REF_FETCH_TIMEOUT_MS : undefined;

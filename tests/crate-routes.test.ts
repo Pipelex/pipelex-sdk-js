@@ -227,6 +227,29 @@ describe("crate routes — a method_ref closure gets the fetch budget", () => {
     expect(byRef.settled).toBe(true);
     expect(byRef.error).toBeInstanceOf(ApiUnreachableError);
   });
+
+  it("gives the build projections the same budget — a method_ref buildInputs outlives 30s", async () => {
+    // The build routes share `CrateRequestBase`, so an address-form closure makes
+    // the server fetch there too. `buildRunner` is excluded: its own five-minute
+    // default already clears the fetch budget.
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const byFiles = track(client.buildInputs({ files: [{ content: "domain = 'smoke'\n" }] }));
+    const byRef = track(
+      client.buildOutput({ method_ref: "github.com/Pipelex/methods/documents@v0.1.0" }),
+    );
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(byFiles.settled).toBe(true);
+    expect(byFiles.error).toBeInstanceOf(ApiUnreachableError);
+    expect(byRef.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(byRef.settled).toBe(true);
+    expect(byRef.error).toBeInstanceOf(ApiUnreachableError);
+  });
 });
 
 describe("crate routes — the 200 verdict", () => {
