@@ -775,10 +775,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
         body.mthds_sources = mthdsSources;
       }
     } else {
-      // A selector object. The both-selectors shape is a compile error for typed
+      // A selector object. The illegal shapes are compile errors for typed
       // callers (`ValidateMethodSelector` pins the other key to `never`); the
-      // runtime check backs it for untyped (JS) callers, mirroring the server's
-      // strict tooling XOR instead of silently picking one.
+      // runtime checks back them for untyped (JS) callers — a typed
+      // `PipelineRequestError`, never a native TypeError off a null source —
+      // mirroring the server's strict tooling XOR instead of silently picking.
+      if (source === null || source === undefined || typeof source !== "object") {
+        throw new PipelineRequestError(
+          "validate() takes inline contents (a string[]) or a method selector object " +
+            "({ method_ref } or { method_id }).",
+        );
+      }
       const methodRef = nonEmptyString(source.method_ref);
       const methodId = nonEmptyString(source.method_id);
       if ((methodRef === undefined) === (methodId === undefined)) {
