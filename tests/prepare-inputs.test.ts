@@ -326,6 +326,20 @@ describe("prepareInputs", () => {
     });
   });
 
+  it("does not mistake an inherited prototype member for a caller-supplied field", async () => {
+    const client = makeClient([
+      topLevel("dossier", object([named("title", text()), named("constructor", image())])),
+    ]);
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: { dossier: { title: "Q3 report" } },
+    });
+
+    expect(prepared.inputs).toEqual({ dossier: { title: "Q3 report" } });
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
   it("dedups by source identity: the same bytes object uploads once", async () => {
     const client = makeClient([topLevel("exhibits", list(document()))]);
     const shared = new Uint8Array([9, 9, 9]);

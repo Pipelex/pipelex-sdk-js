@@ -269,7 +269,7 @@ async function resolveNode(
       if (!isPlainObject(callerValue)) return callerValue;
       const result: Record<string, unknown> = { ...callerValue };
       for (const field of node.fields) {
-        if (field.name in callerValue) {
+        if (Object.hasOwn(callerValue, field.name)) {
           result[field.name] = await resolveNode(ctx, field, callerValue[field.name]);
         }
       }
