@@ -2,7 +2,7 @@
 
 > **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
-> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source) **or** as a stored catalog `method_id`, resolved client-side to its closure before anything hits the wire (see "[Closure from a stored `method_id`](#closure-from-a-stored-method_id)" below). One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
+> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source). The by-id form it used to accept (`method_id`, expanded client-side) was deleted when the tooling routes gained native by-id — a stored method is expanded explicitly with `getMethodClosure` first (see "[Closure from a stored `method_id`](#closure-from-a-stored-method_id)" below). One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
 ## Why this exists
 
@@ -38,11 +38,10 @@ The MIME type and size are known client-side, so the record is assembled without
 ### `prepareInputs` — signature-driven input preparation
 
 ```
-client.prepareInputs({ files,     pipe_ref?, inputs }) → PreparedInputs
-client.prepareInputs({ method_id, pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ files, pipe_ref?, inputs }) → PreparedInputs
 ```
 
-Takes the **method closure** — inline `files` (the signature source) **or** a stored `method_id` (resolved client-side; see below), never both — plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`. Per input, the caller may submit **either** the compact value **or** the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)" below:
+Takes the **method closure** as inline `files` (the signature source) plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`. Per input, the caller may submit **either** the compact value **or** the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)" below:
 
 - `inputs` — a **copy** of the caller's inputs with each asset reference replaced by the canonical content shape carrying `pipelex-storage://` in its `url` field (see "Rewritten-input shape" below). Copy-on-write: the caller's original object is never mutated.
 - `uploads` — one upload record per prepared asset (the `uploadFile` record shape), exposing `uri` so callers can log which source became which reference without reverse-engineering the rewritten object.
@@ -51,16 +50,14 @@ The prepared `inputs` are passed to the existing run lifecycle unchanged.
 
 ## Closure from a stored `method_id`
 
-A caller that has already saved a method to the hosted catalog should not have to re-supply its source. Passing `method_id` instead of inline `files` lets the SDK resolve the closure from the stored method, so the same prepared-inputs flow works from a catalog id:
+A caller that has already saved a method to the hosted catalog should not have to re-supply its source. The expansion is one explicit line:
 
 ```
-client.prepareInputs({ method_id: "mt_…", pipe_ref?, inputs }) → PreparedInputs
-client.buildInputs({ method_id: "mt_…", pipe_ref?, format?, explicit? }) → BuildInputsResponse
+client.prepareInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, inputs })
+client.buildInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, format?, explicit? })
 ```
 
-`method_id` is a **client-side convenience, not a wire field.** Before anything hits the network it is resolved to inline `files` via `getMethodClosure`, and the request that reaches the runner is the ordinary `files`-form body — `method_id` never travels on the wire. So `prepareInputs({ method_id, inputs })` returns exactly the same `PreparedInputs` as the equivalent inline-`files` call. (Do not confuse this client-side `method_id` with the reserved wire field `method_ref` on `BuildRequestBase`, a registry reference the runner does not yet serve — nor with the **run routes'** `method_id`, which is a genuine wire field: `execute` / `start` pass it through for the platform to resolve, and expand nothing client-side. Same name, opposite mechanism, because these routes are stateless tooling while a run has a Run row to link. See [architecture.md → hosted run extensions](./architecture.md#hosted-run-extensions-method_id).)
-
-**Exactly one closure source.** Supplying both `files` and `method_id` is a compile error for typed callers (the request types are mutually exclusive) and is rejected at runtime for untyped (JS) callers before any resolution — `prepareInputs` throws `InputPreparationError`, `buildInputs` throws `PipelineRequestError`. The request is genuinely ambiguous, so it fails fast rather than silently preferring one source over the other. Supplying neither is likewise rejected.
+`prepareInputs` and `buildInputs` **used to accept `method_id` directly**, expanded client-side through exactly this call. Those by-id legs were deleted when the surfaces that CAN resolve an id server-side gained typed `method_id` pass-throughs (`execute`/`start` had one already; `validate`/`resolve`/`codegen` gained theirs — see [architecture.md → hosted run extensions](./architecture.md#hosted-run-extensions-method_id)): keeping an id-shaped option on routes where nothing server-side resolves it made "who resolves this?" ambiguous per route. Now the rule is uniform — a `method_id` option is always a server pass-through, and any client-side expansion is the caller's own explicit `getMethodClosure` call. An untyped caller still passing `method_id` here gets a teaching error naming the migration (`prepareInputs` throws `InputPreparationError`, `buildInputs` throws `PipelineRequestError`); for typed callers the retired field is a compile error.
 
 ### `getMethodClosure` — id → runnable closure
 
@@ -68,7 +65,7 @@ client.buildInputs({ method_id: "mt_…", pipe_ref?, format?, explicit? }) → B
 client.getMethodClosure(methodId) → MthdsFileItem[]
 ```
 
-`getMethodClosure` is the seam the by-id callers plug into — a **client-side semantic layer** over `getMethod` (the platform has no route that returns a parsed closure). It fetches the method, parses its polymorphic `mthds` source with [`methodSourceToContents`](#methodsourcetocontents--the-canonical-source-parser), and labels each resulting file with the `method_id` as its `source` provenance.
+`getMethodClosure` is the public **local expansion utility** — a client-side semantic layer over `getMethod` (the platform has no route that returns a parsed closure). It fetches the method, parses its polymorphic `mthds` source with [`methodSourceToContents`](#methodsourcetocontents--the-canonical-source-parser), and labels each resulting file with the `method_id` as its `source` provenance. Reach for it whenever you want the files in hand — to edit, to diff, to feed a route with no by-id form (`/v1/build/*`, `prepareInputs`), or to work by id against a bare runner that has no catalog.
 
 - **Requires an API key.** The methods catalog is org-scoped to the key's org, so resolution only works with an authenticated Pipelex-product key.
 - **Unknown or foreign-org id → the `getMethod` `404`** (`ApiResponseError`, `code: "not_found"`), propagated unchanged. An id from another org is indistinguishable from a nonexistent one — both 404.
@@ -82,7 +79,7 @@ methodSourceToContents(mthds: string) → string[]
 
 A stored method's `mthds` field is **polymorphic**: it is either the raw single-bundle source, or a JSON array of `{ name, content }` file entries (a multi-file closure). `methodSourceToContents` is the one canonical parser that turns either shape into a flat list of file contents — a verbatim port of the platform's `_method_source_to_contents`, so the SDK and the runtime read a stored source identically. It is exported from the barrel for consumers (e.g. `pipelex-mcp`) that need the parse without the fetch. Blank entries are dropped; a source that parses to no non-blank content yields `[]`, which is what `getMethodClosure` turns into `EmptyMethodSourceError`.
 
-> **Stability across a future native route.** `getMethodClosure` and `prepareInputs({ method_id })` / `buildInputs({ method_id })` are the client-side intermediate for a capability the runner may one day serve natively (a `method_id`/`method_ref` on `/v1/build/inputs` and `/v1/validate`). The consumer-facing signatures are kept stable so they can later delegate to a native route without a breaking change — exactly the posture the upload surface takes across its endpoint move.
+> **The native routes arrived, and the intermediate was retired rather than delegated.** The earlier posture kept `prepareInputs({ method_id })` / `buildInputs({ method_id })` signature-stable so they could one day delegate to a native capability. That day came for `validate` / `resolve` / `codegen` (native `method_id`, platform-resolved) and for the run routes and every method-taking route via `method_ref` (address, runner-resolved) — but not for `/v1/build/*`, which the hosted tooling selector deliberately excludes (the build routes are frozen, being replaced by the codegen surface). With no native leg to delegate to, the by-id sugar was deleted instead of kept: the uniform rule "an id option is always a server pass-through" is worth more than the saved line, and `getMethodClosure` remains the explicit expansion.
 
 ## Compact or explicit-envelope inputs
 

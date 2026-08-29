@@ -29,14 +29,15 @@ import type {
   CodegenResponse,
   ConceptRequest,
   ConceptResponse,
+  CrateRequestBase,
   DictPipeOutput,
   DictRunResultExecute,
   FormatResponse,
-  InputsTemplateFormat,
   LintResponse,
   MthdsFileItem,
   PipeSpecRequest,
   PipeSpecResponse,
+  PipelexRunResultStart,
   PipelexValidationResult,
   ResolveRequest,
   ResolveResponse,
@@ -93,7 +94,7 @@ import {
 import { methodSourceToContents } from "./method-source.js";
 import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
-import { prepareInputs as prepareInputsImpl, resolveFilesOrMethodId } from "./prepare-inputs.js";
+import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
@@ -117,6 +118,38 @@ export interface MthdsFile {
   content: string;
   /** Optional provenance URI threaded into validation diagnostics. */
   uri?: string;
+}
+
+/**
+ * The Pipelex API's own run-source extension — the layer-2 argument the RUNNER
+ * itself resolves, beside the protocol's inline sources (`mthds_contents` and
+ * the bundle encodings). Served by any pipelex-api >= 0.21.0 deployment, bare
+ * or hosted (on `api.pipelex.com`, once the platform deploy carrying it lands).
+ *
+ * Named options rather than `extra` entries, for the same reason as the hosted
+ * extensions below: `extra` remains the escape hatch for an extension this
+ * client does not know about, never the way to pass one it does.
+ */
+export interface PipelexApiRunExtensions {
+  /**
+   * A published method's address — `github.com/<owner>/<repo>[/<selector>][@<tag>]`
+   * (e.g. `github.com/Pipelex/methods/documents@v0.1.0`). Resolved by the
+   * server: the repository is fetched at the tag (a bare address means the
+   * default branch at HEAD), the package is located by manifest identity, and
+   * the resolved commit SHA comes back as `method_provenance` on the response.
+   *
+   * A complete run source of its own — the fetched package carries its `.mthds`
+   * and its entry pipe — so it pairs with NOTHING: exclusive with inline
+   * `mthds_contents`, with a method bundle (`files` / `bundle_b64`), and with
+   * the hosted `method_id` (an address run has its own provenance and needs no
+   * linkage id). `pipe_code` beside it is fine — it overrides the manifest's
+   * `main_pipe` to pick which pipe in the fetched package to run. This client
+   * rejects the illegal pairings before anything hits the wire, mirroring the
+   * server's own 422s.
+   *
+   * An empty string is treated as absent and is not sent.
+   */
+  method_ref?: string | null;
 }
 
 /**
@@ -146,37 +179,32 @@ export interface PipelexHostedRunExtensions {
    *   **run-history linkage** on the Run row. That linkage is what writes the
    *   index key `GET /v1/runs?method_id=` queries, so a run started without it
    *   is absent from its method's history permanently.
+   * - **Alongside `method_ref`** — rejected client-side (and a 422 on the
+   *   hosted API): an address run carries its own provenance, so it takes no
+   *   linkage id.
    *
    * An empty string is treated as absent and is not sent.
    */
   method_id?: string | null;
 }
 
-/** `execute()` options — the protocol's run arguments plus the hosted extensions. */
-export type PipelexRunOptions = RunOptions & PipelexHostedRunExtensions;
+/** `execute()` options — the protocol's run arguments plus the Pipelex API and hosted extensions. */
+export type PipelexRunOptions = RunOptions & PipelexApiRunExtensions & PipelexHostedRunExtensions;
 
 /** `start()` / `startAndWaitForResult()` options — the same, for the durable path. */
-export type PipelexStartOptions = StartOptions & PipelexHostedRunExtensions;
+export type PipelexStartOptions = StartOptions &
+  PipelexApiRunExtensions &
+  PipelexHostedRunExtensions;
 
 /**
- * The by-id alternative to the wire model `BuildInputsRequest`: resolve the
- * closure from a stored method's `method_id` instead of inline `files`.
- *
- * Client-side sugar — `method_id` is resolved to `files` via `getMethodClosure`
- * before the request hits the wire, so it never travels as a wire field (and is
- * distinct from `BuildRequestBase.method_ref`, the reserved registry ref). Supply
- * a `method_id` OR inline `files`, never both.
+ * The method selector `validate()` takes in place of inline contents: a
+ * `method_ref` address (server-resolved by the runner through the same fetch
+ * path as a `method_ref` run) OR a hosted `method_id` (platform-resolved) —
+ * never both. The tooling routes are stateless, so the strict XOR applies:
+ * exactly one of inline contents / `method_ref` / `method_id` per request.
  */
-export interface BuildInputsByMethodId {
-  /** A stored method's id — resolved client-side to its closure before the build call. Requires an API key. */
-  method_id: string;
-  files?: never;
-  method_ref?: never;
-  /** The pipe to project, as a qualified `domain.pipe_code`; omit to default to the closure's `main_pipe`. */
-  pipe_ref?: string;
-  format?: InputsTemplateFormat;
-  explicit?: boolean;
-}
+export type ValidateMethodSelector =
+  { method_ref: string; method_id?: never } | { method_id: string; method_ref?: never };
 
 export interface ValidateFilesOptions {
   /** Whether unresolved pipe signatures are accepted as pending instead of invalid. */
@@ -546,19 +574,22 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    */
   async execute(options: PipelexRunOptions): Promise<PipelexExecuteResult> {
     const extensions = buildExtensions(options.extra);
+    const api = buildApiRunExtensions(options);
     const hosted = buildHostedRunExtensions(options);
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
       !hasBundlePayload(options) &&
+      Object.keys(api).length === 0 &&
       Object.keys(hosted).length === 0 &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a hosted method_id or a server-specific extension arg (extra) must be provided to execute().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a method_ref, a hosted method_id or a server-specific extension arg (extra) must be provided to execute().",
       );
     }
     assertExclusiveRunSources(options);
+    assertMethodRefPairsWithNothing(options);
 
     const request: RunRequest & Record<string, unknown> = {
       pipe_code: options.pipe_code,
@@ -569,6 +600,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       dynamic_output_concept_ref: options.dynamic_output_concept_ref,
       files: nonEmptyFiles(options.files),
       bundle_b64: nonEmptyString(options.bundle_b64),
+      ...api,
       ...hosted,
       ...extensions,
     };
@@ -601,28 +633,34 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /**
    * Start a method asynchronously — `POST /v1/start` (202, no output yet).
    *
-   * The hosted `method_id` is a named option (see `PipelexHostedRunExtensions`);
-   * `options.extra` stays the generic passthrough for extension args this client
-   * does not know about — the server you call defines and handles them
-   * (including a client-supplied run id where a server supports one). The
-   * returned `pipeline_run_id` is always authoritative; on a hosted deployment
-   * it is durable — poll `getRunStatus` / `getRunResult`.
+   * The `method_ref` address and the hosted `method_id` are named options (see
+   * `PipelexApiRunExtensions` / `PipelexHostedRunExtensions`); `options.extra`
+   * stays the generic passthrough for extension args this client does not know
+   * about — the server you call defines and handles them (including a
+   * client-supplied run id where a server supports one). The returned
+   * `pipeline_run_id` is always authoritative; on a hosted deployment it is
+   * durable — poll `getRunStatus` / `getRunResult`. A `method_ref` run's ack
+   * additionally carries `method_provenance` — the address, the tag, and the
+   * commit SHA that was actually fetched.
    */
-  async start(options: PipelexStartOptions): Promise<RunResultStart> {
+  async start(options: PipelexStartOptions): Promise<PipelexRunResultStart> {
     const extensions = buildExtensions(options.extra);
+    const api = buildApiRunExtensions(options);
     const hosted = buildHostedRunExtensions(options);
     if (
       !options.pipe_code &&
       (!options.mthds_contents || options.mthds_contents.length === 0) &&
       !hasBundlePayload(options) &&
+      Object.keys(api).length === 0 &&
       Object.keys(hosted).length === 0 &&
       Object.keys(extensions).length === 0
     ) {
       throw new PipelineRequestError(
-        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a hosted method_id or a server-specific extension arg (extra) must be provided to start().",
+        "Either pipe_code, mthds_contents, a method bundle (files/bundle_b64), a method_ref, a hosted method_id or a server-specific extension arg (extra) must be provided to start().",
       );
     }
     assertExclusiveRunSources(options);
+    assertMethodRefPairsWithNothing(options);
 
     // `?? undefined` so JSON.stringify drops absent fields from the wire body.
     const request: StartRequest & Record<string, unknown> = {
@@ -634,19 +672,26 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       dynamic_output_concept_ref: options.dynamic_output_concept_ref ?? undefined,
       files: nonEmptyFiles(options.files),
       bundle_b64: nonEmptyString(options.bundle_b64),
+      ...api,
       ...hosted,
       ...extensions,
     };
 
     const url = this.url("start");
-    // `start` returns a 202 fast, so the poll timeout normally fits — but a
-    // method bundle can make the request *body* multi-megabyte, and the whole
-    // upload is charged against this budget. Give a bundle-carrying start the
-    // same upload ceiling the blocking `execute` path has, so the same payload
-    // can't time out on the durable path yet succeed on the fallback.
+    // `start` returns a 202 fast, so the poll timeout normally fits — with two
+    // exceptions that get the blocking-execute ceiling instead. A method bundle
+    // can make the request *body* multi-megabyte, and the whole upload is
+    // charged against this budget — the same payload must not time out on the
+    // durable path yet succeed on the fallback. And a `method_ref` start makes
+    // the server FETCH the package before the ack (provenance rides the 202),
+    // whose clone timeout runs well past 30s on a cold cache — aborting it here
+    // would surface as `ApiUnreachableError`, blaming the network for a healthy
+    // server that is still cloning.
+    const needsLongCeiling =
+      hasBundlePayload(options) || nonEmptyString(options.method_ref) !== undefined;
     const res = await this.requestRaw("POST", url, {
       body: request,
-      timeoutMs: hasBundlePayload(options) ? DEFAULT_REQUEST_TIMEOUT_MS : POLL_REQUEST_TIMEOUT_MS,
+      timeoutMs: needsLongCeiling ? DEFAULT_REQUEST_TIMEOUT_MS : POLL_REQUEST_TIMEOUT_MS,
     });
     // A bare runner with no run store 404s here just as it does on the result
     // routes — surface the same clear `RunLifecycleUnavailableError` (and let
@@ -655,7 +700,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (res.status < 200 || res.status >= 300) {
       this.throwApiResponseError("POST", "start", res);
     }
-    return JSON.parse(res.body) as RunResultStart;
+    return JSON.parse(res.body) as PipelexRunResultStart;
   }
 
   /**
@@ -669,11 +714,32 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * *no-verdict* condition (a malformed request, an `mthds_sources` length mismatch,
    * auth, a server fault) is non-2xx and surfaces as `ApiResponseError`.
    *
-   * `mthdsSources` (optional, parallel to `mthdsContents`) names each submitted
+   * `source` selects WHAT is validated, in exactly one of three forms — the
+   * strict tooling XOR (the routes are stateless, so there is no linkage
+   * exception; a second selector is a request-shape `422`):
+   *
+   * - **inline contents** (a `string[]`) — the protocol's own envelope;
+   * - **`{ method_ref }`** — a published method's address, resolved by the
+   *   server (pipelex-api >= 0.21.0) through the same fetch path as a
+   *   `method_ref` run, the package's real file names feeding the diagnostics'
+   *   source labels;
+   * - **`{ method_id }`** — a stored method's catalog id, hosted-only: the
+   *   platform resolves it and injects the stored source before the runner sees
+   *   the request (a bare runner rejects the request as carrying no source it
+   *   understands).
+   *
+   * A selector-resolution failure (fetch failure, no package at the address, an
+   * unknown or foreign-org id) is a non-2xx `ApiResponseError` — never an
+   * `is_valid: false` verdict, which is reserved for actual MTHDS content.
+   *
+   * `mthdsSources` (optional, parallel to inline contents) names each submitted
    * content — a Pipelex-API extension threaded onto `blueprint.source`, so
    * cross-file diagnostics name the owning file (an unnamed content yields
    * `source: null`). The server 422s a length mismatch; this client sends the
-   * arrays verbatim and surfaces that as an `ApiResponseError`.
+   * arrays verbatim and surfaces that as an `ApiResponseError`. It is an
+   * inline-contents companion only: a `method_ref` / `method_id` validation gets
+   * its source labels from the package's (or the stored method's) real file
+   * names, so supplying it beside a selector is rejected client-side.
    *
    * `render` is the Pipelex-API presentation hint — a list of view-format tokens.
    * This client always asks for Markdown so both valid results and produced
@@ -693,7 +759,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * optional rather than required.
    */
   async validate(
-    mthdsContents: string[],
+    source: string[] | ValidateMethodSelector,
     allowSignatures = false,
     mthdsSources?: string[],
     render?: string[],
@@ -701,11 +767,40 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     options: { timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<PipelexValidationResult> {
     const body: Record<string, unknown> = {
-      mthds_contents: mthdsContents,
       allow_signatures: allowSignatures,
     };
-    if (mthdsSources !== undefined) {
-      body.mthds_sources = mthdsSources;
+    if (Array.isArray(source)) {
+      body.mthds_contents = source;
+      if (mthdsSources !== undefined) {
+        body.mthds_sources = mthdsSources;
+      }
+    } else {
+      // A selector object. The illegal shapes are compile errors for typed
+      // callers (`ValidateMethodSelector` pins the other key to `never`); the
+      // runtime checks back them for untyped (JS) callers — a typed
+      // `PipelineRequestError`, never a native TypeError off a null source —
+      // mirroring the server's strict tooling XOR instead of silently picking.
+      if (source === null || source === undefined || typeof source !== "object") {
+        throw new PipelineRequestError(
+          "validate() takes inline contents (a string[]) or a method selector object " +
+            "({ method_ref } or { method_id }).",
+        );
+      }
+      const methodRef = nonEmptyString(source.method_ref);
+      const methodId = nonEmptyString(source.method_id);
+      if ((methodRef === undefined) === (methodId === undefined)) {
+        throw new PipelineRequestError(
+          "validate() takes exactly one method selector: inline contents, { method_ref }, or { method_id }.",
+        );
+      }
+      if (mthdsSources !== undefined) {
+        throw new PipelineRequestError(
+          "mthds_sources labels inline mthds_contents; a method_ref / method_id validation gets " +
+            "its source labels from the package's (or the stored method's) real file names.",
+        );
+      }
+      if (methodRef !== undefined) body.method_ref = methodRef;
+      if (methodId !== undefined) body.method_id = methodId;
     }
     body.render = withValidateMarkdownRender(render);
     if (views !== undefined) {
@@ -828,7 +923,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * The mapping is what makes their no-verdict arms usable: a crate-family route
    * answers `422` for a request it cannot act on (an unresolvable pipe selector on the
    * build routes; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
-   * `types` kind, on `codegen`) and `501` for the reserved `method_ref`. A caller
+   * `types` kind, on `codegen`) and `501` for the reserved registry-form `method_ref`
+   * (the address form is resolved server-side as of pipelex-api 0.21.0). A caller
    * branches on `ApiResponseError.status`, never on a message.
    *
    * All of these are inference-free, so they default to the management-call timeout.
@@ -927,13 +1023,20 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Returns a **200 verdict**: pattern-match `is_valid` before reading the arm — a
    * closure that does not parse/load/validate comes back as `is_valid: false` with
    * `validation_errors[]`, not as a thrown error. Only a no-verdict condition throws
-   * `ApiResponseError`: a malformed selector (neither or both of `files`/`method_ref`)
-   * is a 422, and the reserved `method_ref` is a `501` until the server-side method
-   * registry lands. To resolve a STORED method today, expand it first:
-   * `resolve({ files: await client.getMethodClosure(methodId) })`.
+   * `ApiResponseError`: a malformed selector (none, or more than one, of
+   * `files` / `method_ref` / `method_id`) is a 422; a selector-resolution failure
+   * (fetch failure, no package at the address, an unknown or foreign-org id) is
+   * non-2xx too — never an `is_valid: false` verdict.
+   *
+   * The closure arrives in exactly one of three forms: inline `files`, an
+   * address-form `method_ref` (server-resolved, pipelex-api >= 0.21.0; the
+   * registry form stays a `501`), or a hosted `method_id` (platform-resolved —
+   * see {@link PipelexHostedToolingExtensions}).
    */
   async resolve(request: ResolveRequest): Promise<ResolveResponse> {
-    return this.requestExtension("resolve", request);
+    return this.requestExtension("resolve", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   /**
@@ -946,12 +1049,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * local `pipelex codegen types` run, so the offline `pipelex codegen check` passes on
    * it; the SDK deliberately does not write files for you.
    *
-   * Same 200-verdict discipline as {@link resolve}. Only a no-verdict condition throws
-   * `ApiResponseError`: an unknown `kind`/`target`, a `pipe_ref` on the concept-set-wide
-   * `types` kind, or a malformed selector is a 422; `method_ref` is a `501`.
+   * Same 200-verdict discipline and same three-form closure selector as
+   * {@link resolve}. Only a no-verdict condition throws `ApiResponseError`: an
+   * unknown `kind`/`target`, a `pipe_ref` on the concept-set-wide `types` kind, or
+   * a malformed selector is a 422; a registry-form `method_ref` is a `501`.
    */
   async codegen(request: CodegenRequest): Promise<CodegenResponse> {
-    return this.requestExtension("codegen", request);
+    return this.requestExtension("codegen", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
@@ -968,51 +1074,27 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * unresolvable closure comes back as `is_valid: false` with `validation_errors[]`,
    * not as a thrown error.
    *
-   * Accepts the closure as inline `files` (the wire model {@link BuildInputsRequest}),
-   * as a reserved `method_ref` (also on {@link BuildInputsRequest} — still `501`s,
-   * same as `buildOutput`/`buildRunner`), or as a stored {@link BuildInputsByMethodId}
-   * — the by-id form is resolved to `files` via {@link getMethodClosure} before the
-   * request hits the wire (an empty source throws `EmptyMethodSourceError`; an
-   * unknown/foreign id, the `getMethod` 404). Supply exactly one of the three.
+   * Accepts the closure as inline `files` or as a `method_ref` (both on the wire
+   * model {@link BuildInputsRequest}; the address form is server-resolved, the
+   * registry form `501`s) — exactly one of the two, like `buildOutput` /
+   * `buildRunner`. There is NO by-id form: the build routes take no `method_id`
+   * (the hosted tooling selector covers `validate`/`resolve`/`codegen` only), so a
+   * stored method is expanded first — `buildInputs({ files: await
+   * client.getMethodClosure(methodId) })`.
    */
-  async buildInputs(
-    request: BuildInputsRequest | BuildInputsByMethodId,
-  ): Promise<BuildInputsResponse> {
-    // The files/method_id either/or is a compile-time invariant (the two param
-    // types are mutually exclusive); `resolveFilesOrMethodId` backs the
-    // over-specified "both given" case at runtime for untyped (JS) callers —
-    // shared with `resolveClosureFiles` in prepare-inputs.ts so this exact
-    // check is defined once. `method_ref` is a third, still-legal closure
-    // source (reserved, 501s server-side) shared with `buildOutput`/`buildRunner`
-    // that prepareInputs does not have, so it stays local to this method: it
-    // cannot combine with `method_id`, and a `method_ref`-only request must
-    // reach the server like it does on those sibling routes rather than being
-    // rejected as "neither given".
-    const { method_id, files, method_ref } = request;
-    if (method_id !== undefined && method_ref !== undefined) {
+  async buildInputs(request: BuildInputsRequest): Promise<BuildInputsResponse> {
+    // `method_id` is `never` in the type; this backs it for untyped (JS)
+    // callers migrating off the retired client-side by-id expansion — a
+    // teaching error beats the server silently ignoring an unknown key.
+    if ((request as unknown as Record<string, unknown>)["method_id"] !== undefined) {
       throw new PipelineRequestError(
-        "buildInputs: `method_ref` cannot be combined with `method_id`.",
+        "buildInputs takes no method_id — the build routes have no by-id form. Expand the stored " +
+          "method first: buildInputs({ files: await client.getMethodClosure(methodId) }).",
       );
     }
-    const resolvedFiles = await resolveFilesOrMethodId(
-      files,
-      method_id,
-      (methodId) => this.getMethodClosure(methodId),
-      (message) => new PipelineRequestError(`buildInputs: ${message}`),
-    );
-    if (resolvedFiles === undefined && method_ref === undefined) {
-      throw new PipelineRequestError(
-        "buildInputs: supply the closure as `files`, `method_id`, or `method_ref`.",
-      );
-    }
-    if (method_id !== undefined) {
-      const { method_id: _methodId, ...rest } = request;
-      return this.requestExtension("build/inputs", {
-        ...rest,
-        files: resolvedFiles as MthdsFileItem[],
-      });
-    }
-    return this.requestExtension("build/inputs", request);
+    return this.requestExtension("build/inputs", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   /**
@@ -1022,7 +1104,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * text in `output_python`.
    */
   async buildOutput(request: BuildOutputRequest): Promise<BuildOutputResponse> {
-    return this.requestExtension("build/output", request);
+    return this.requestExtension("build/output", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
   }
 
   /**
@@ -1324,6 +1408,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * with `methodSourceToContents`, and labels each resulting file with the
    * `method_id` as its `source` provenance.
    *
+   * This is the LOCAL expansion utility — for callers that want the files in
+   * hand (to edit, to diff, to feed a route with no by-id form such as
+   * `/v1/build/*` or `prepareInputs`). The routes that accept `method_id`
+   * natively (`execute`/`start`, and `validate`/`resolve`/`codegen` on the
+   * hosted API) take the id as a pass-through instead; nothing in this client
+   * expands an id behind your back.
+   *
    * Requires an API key: the methods catalog is org-scoped to the key's org, so
    * an unknown OR foreign-org id is a `getMethod` `404` (`ApiResponseError`
    * `not_found`), which propagates unchanged. A real, in-org method whose source
@@ -1505,9 +1596,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * content carrying `pipelex-storage://` in `url`) plus one upload record per
    * prepared asset. HTTP(S) URLs and existing `pipelex-storage://` URIs pass
    * through unchanged; all failures are raised before any run is created. The
-   * caller supplies the method closure EITHER as inline `files` OR as a stored
-   * `method_id` (resolved to its closure via `getMethodClosure` first; requires
-   * an API key). See `docs/input-preparation.md`.
+   * caller supplies the method closure as inline `files` — for a stored method,
+   * expand it first with `getMethodClosure` (requires an API key). See
+   * `docs/input-preparation.md`.
    */
   async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
     return prepareInputsImpl(this, request);
@@ -1619,12 +1710,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /**
    * Blocking `POST /v1/execute` adapted onto `RunResults` — the bare-runner
-   * path. Forwards every protocol field PLUS both extension surfaces: the
-   * hosted `method_id` and the generic `extra` passthrough. An extension-only
-   * call (`{ extra }` with no pipe_code/bundle) or a vendor selector riding
-   * `extra` must survive this path, not just the durable one — and a hosted
-   * `method_id` must reach the server here too, so a runner that cannot resolve
-   * it says so (Rule 4) instead of the client silently dropping it.
+   * path. Forwards every protocol field PLUS every extension surface: the
+   * runner-resolved `method_ref`, the hosted `method_id`, and the generic
+   * `extra` passthrough. An extension-only call (`{ extra }` with no
+   * pipe_code/bundle) or a vendor selector riding `extra` must survive this
+   * path, not just the durable one — a `method_ref` run must run the same
+   * fetched package here, and a hosted `method_id` must reach the server too,
+   * so a runner that cannot resolve it says so (Rule 4) instead of the client
+   * silently dropping it.
    */
   private async executeBlocking(options: PipelexStartOptions): Promise<RunResults> {
     const response = await this.execute({
@@ -1638,6 +1731,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       // this path runs the same method as the durable one, or it runs nothing.
       files: options.files ?? undefined,
       bundle_b64: options.bundle_b64 ?? undefined,
+      method_ref: options.method_ref ?? undefined,
       method_id: options.method_id ?? undefined,
       extra: options.extra ?? undefined,
     });
@@ -1709,6 +1803,13 @@ const PROTOCOL_REQUEST_KEYS: readonly string[] = [
   "bundle_b64",
 ];
 
+// The PIPELEX API's own request fields — the layer-2 extension the runner
+// resolves itself (`method_ref`, a run source in its own right). Reserved on
+// `extra` for the same reason the protocol fields are: `extra` merges last, so
+// a smuggled copy would overwrite the validated named option and bypass the
+// selector-exclusivity checks.
+const PIPELEX_API_REQUEST_KEYS: readonly string[] = ["method_ref"];
+
 // The HOSTED API's own request fields — the layer-3 extensions this client
 // names itself. Reserved on `extra` for the same reason the protocol fields
 // are: `extra` merges last, so a smuggled copy would overwrite the validated
@@ -1728,6 +1829,7 @@ const HOSTED_REQUEST_KEYS: readonly string[] = ["method_id"];
 // reach the wire through the passthrough either.
 const RESERVED_EXTRA_KEYS: ReadonlySet<string> = new Set([
   ...PROTOCOL_REQUEST_KEYS,
+  ...PIPELEX_API_REQUEST_KEYS,
   ...HOSTED_REQUEST_KEYS,
   "bundleMain",
 ]);
@@ -1766,6 +1868,38 @@ function buildExtensions(
   return result;
 }
 
+// `method_ref` resolution can make the server CLONE a repository before it
+// answers, and the server-side clone timeout runs well past the 30s static-route
+// budget on a cold cache. This budget covers that without touching the static
+// routes' no-transport-options policy (see the note on `requestExtension`): it
+// is an internal budget matched to what the server actually does, not a new
+// caller-facing parameter — and inert on the hosted path, where the gateway
+// caps responses regardless.
+const METHOD_REF_FETCH_TIMEOUT_MS = 180_000; // 3 min — covers the server's clone + resolve
+
+/**
+ * The internal request budget for a call carrying a `CrateRequestBase` closure
+ * (the crate routes and the build projections alike): the static-route default,
+ * unless the closure is a `method_ref` the server may have to fetch first.
+ * `buildRunner` is the exception — its own five-minute default already clears
+ * the fetch budget.
+ */
+function crateRequestTimeoutMs(request: CrateRequestBase): number | undefined {
+  return nonEmptyString(request.method_ref) !== undefined ? METHOD_REF_FETCH_TIMEOUT_MS : undefined;
+}
+
+/**
+ * Copy the Pipelex API's own run arguments onto the wire body. Named options,
+ * not `extra` entries — see `PipelexApiRunExtensions`. Same emptiness rule as
+ * the hosted builder below: an absent or empty `method_ref` yields an empty
+ * object, so the key is not sent and does not count towards the "something to
+ * run" precondition.
+ */
+function buildApiRunExtensions(options: PipelexApiRunExtensions): Record<string, unknown> {
+  const methodRef = nonEmptyString(options.method_ref);
+  return methodRef === undefined ? {} : { method_ref: methodRef };
+}
+
 /**
  * Copy the hosted API's own run arguments onto the wire body. Named options,
  * not `extra` entries — see `PipelexHostedRunExtensions`.
@@ -1779,6 +1913,44 @@ function buildExtensions(
 function buildHostedRunExtensions(options: PipelexHostedRunExtensions): Record<string, unknown> {
   const methodId = nonEmptyString(options.method_id);
   return methodId === undefined ? {} : { method_id: methodId };
+}
+
+/**
+ * Enforce the run routes' `method_ref` exclusivity, mirroring the server's own
+ * 422s so an illegal pairing fails before anything hits the wire. A
+ * `method_ref` is a complete run source (the fetched package carries its
+ * `.mthds` and its entry pipe), so it pairs with NOTHING: not with inline
+ * `mthds_contents`, not with a method bundle, and not with the hosted
+ * `method_id` — an address run has its own provenance and needs no linkage id.
+ *
+ * The one documented run-route exception is deliberately NOT here: inline
+ * source + `method_id` stays legal (the inline source runs; the id demotes to
+ * run-history linkage). `pipe_code` beside a `method_ref` is legal too — it
+ * overrides the manifest's `main_pipe`. The wording of the first two errors
+ * mirrors the server's validator; presence semantics match it as well
+ * (`mthds_contents` counts when non-empty, a bundle encoding counts when the
+ * key is present, the selectors count when non-empty).
+ */
+function assertMethodRefPairsWithNothing(
+  options: PipelexApiRunExtensions & PipelexHostedRunExtensions & RunRequest,
+): void {
+  if (nonEmptyString(options.method_ref) === undefined) return;
+  if (options.mthds_contents != null && options.mthds_contents.length > 0) {
+    throw new PipelineRequestError(
+      "method_ref and inline mthds_contents are mutually exclusive; send one or the other.",
+    );
+  }
+  if (options.files != null || options.bundle_b64 != null) {
+    throw new PipelineRequestError(
+      "method_ref and a method bundle (bundle_b64 / files) are mutually exclusive; send one or the other.",
+    );
+  }
+  if (nonEmptyString(options.method_id) !== undefined) {
+    throw new PipelineRequestError(
+      "method_ref and method_id are mutually exclusive: an address run carries its own provenance " +
+        "and takes no run-history linkage id. Send exactly one method selector.",
+    );
+  }
 }
 
 /**

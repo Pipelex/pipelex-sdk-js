@@ -10,7 +10,8 @@
  * 2. **The 200 is a verdict, not a payload.** An unresolvable closure comes back as a
  *    200 `is_valid: false`, so a consumer that only catches throws would render a
  *    success over an unusable result. Only a no-verdict condition (a request-shape
- *    422, the reserved `method_ref` 501) throws the typed `ApiResponseError`.
+ *    422, the reserved registry-form `method_ref` 501) throws the typed
+ *    `ApiResponseError`.
  * 3. **The valid arms are relayed untouched.** The crate object and the codegen
  *    artifacts + lock are the whole point of the routes: the client must not reshape,
  *    re-serialize, or drop fields on the way out, or the codegen trust chain (write
@@ -19,7 +20,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
-import { ApiResponseError } from "../src/errors.js";
+import { ApiResponseError, ApiUnreachableError } from "../src/errors.js";
 import type { CodegenValidReport, CrateInvalidReport, ResolveValidReport } from "../src/models.js";
 
 function makeClient(): PipelexApiClient {
@@ -102,18 +103,152 @@ describe("crate routes — request envelope", () => {
     });
   });
 
-  it("posts a method_ref-only envelope untouched (the server owns the files-XOR-method_ref verdict)", async () => {
+  it("posts a method_ref-only envelope untouched (the server owns the selector XOR)", async () => {
+    const client = makeClient();
+    // An address-form ref is resolved server-side (pipelex-api >= 0.21.0): fetch at
+    // tag, package located by manifest identity, real file paths as per-file sources.
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true, crate: {}, message: "ok" }));
+
+    await client.resolve({ method_ref: "github.com/Pipelex/methods/documents@v0.1.0" });
+
+    // No `files` key alongside it: the envelope carries exactly one selector.
+    expect(postedBody(fetchSpy)).toEqual({
+      method_ref: "github.com/Pipelex/methods/documents@v0.1.0",
+    });
+  });
+
+  it("maps the reserved registry-form method_ref to a 501 ApiResponseError", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      problemResponse(501, "Registry-form method_ref resolution is not implemented yet."),
+    );
+
+    // Only the ADDRESS form is un-reserved; any non-address reference keeps the 501.
+    const failure = client.resolve({ method_ref: "acme/method@1" });
+    await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(failure).rejects.toMatchObject({ status: 501 });
+  });
+
+  it("posts a method_id-only envelope untouched — by-id is a hosted pass-through, on both routes", async () => {
     const client = makeClient();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(problemResponse(501, "method_ref resolution is not available yet."));
+      .mockResolvedValue(jsonResponse(200, { is_valid: true, crate: {}, message: "ok" }));
 
-    await expect(client.resolve({ method_ref: "acme/method@1" })).rejects.toBeInstanceOf(
-      ApiResponseError,
+    // Nothing is expanded client-side: the platform resolves the id and injects the
+    // stored source before the runner sees the request.
+    await client.resolve({ method_id: "mt_1" });
+    expect(postedBody(fetchSpy)).toEqual({ method_id: "mt_1" });
+
+    vi.restoreAllMocks();
+    const onCodegen = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { is_valid: true }));
+    await client.codegen({ method_id: "mt_1", kind: "types", target: "ts-zod" });
+    expect(postedBody(onCodegen)).toEqual({ method_id: "mt_1", kind: "types", target: "ts-zod" });
+  });
+
+  it("surfaces the hosted selector no-verdict arms as typed ApiResponseErrors (404 unknown id, 422 XOR)", async () => {
+    const client = makeClient();
+    // Unknown and foreign-org ids are both 404 (indistinguishable by design).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(problemResponse(404, "No such method."));
+    const notFound = client.resolve({ method_id: "mt_missing" });
+    await expect(notFound).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(notFound).rejects.toMatchObject({ status: 404 });
+
+    vi.restoreAllMocks();
+    // A second selector beside the id is the strict tooling XOR's 422 — the server
+    // owns the check (the request type already forbids `files` + `method_id` only
+    // pairwise through docs, not `never` pins, matching the files/method_ref posture).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      problemResponse(422, "provide exactly one of `files`, `method_ref`, or `method_id`"),
+    );
+    const overSpecified = client.resolve({ files: [{ content: "x" }], method_id: "mt_1" });
+    await expect(overSpecified).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+describe("crate routes — a method_ref closure gets the fetch budget", () => {
+  // A `method_ref` closure can make the server CLONE a repository before it
+  // answers, and the server-side clone timeout runs well past the 30s
+  // static-route budget on a cold cache. Aborting at 30s would surface as
+  // `ApiUnreachableError` — blaming the caller's network for a healthy server
+  // that is still cloning. The budget is internal (no new caller-facing
+  // params), so the static routes' no-transport-options policy stands.
+
+  /** A fetch that never resolves; it only rejects when its abort signal fires. */
+  function hangingFetch(): typeof fetch {
+    return ((_url: string, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), {
+          once: true,
+        });
+      })) as typeof fetch;
+  }
+
+  /** Observe settlement without awaiting — we need to assert "still pending". */
+  function track<T>(promise: Promise<T>): { settled: boolean; error: unknown } {
+    const state: { settled: boolean; error: unknown } = { settled: false, error: undefined };
+    promise.then(
+      () => {
+        state.settled = true;
+      },
+      (error: unknown) => {
+        state.settled = true;
+        state.error = error;
+      },
+    );
+    return state;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("lets a files-form resolve time out at 30s while a method_ref resolve keeps waiting", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const byFiles = track(client.resolve({ files: [{ content: "domain = 'smoke'\n" }] }));
+    const byRef = track(
+      client.resolve({ method_ref: "github.com/Pipelex/methods/documents@v0.1.0" }),
     );
 
-    // No `files` key alongside it: the envelope carries exactly one selector.
-    expect(postedBody(fetchSpy)).toEqual({ method_ref: "acme/method@1" });
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(byFiles.settled).toBe(true);
+    expect(byFiles.error).toBeInstanceOf(ApiUnreachableError);
+    expect(byRef.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(byRef.settled).toBe(true);
+    expect(byRef.error).toBeInstanceOf(ApiUnreachableError);
+  });
+
+  it("gives the build projections the same budget — a method_ref buildInputs outlives 30s", async () => {
+    // The build routes share `CrateRequestBase`, so an address-form closure makes
+    // the server fetch there too. `buildRunner` is excluded: its own five-minute
+    // default already clears the fetch budget.
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());
+    const client = makeClient();
+
+    const byFiles = track(client.buildInputs({ files: [{ content: "domain = 'smoke'\n" }] }));
+    const byRef = track(
+      client.buildOutput({ method_ref: "github.com/Pipelex/methods/documents@v0.1.0" }),
+    );
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(byFiles.settled).toBe(true);
+    expect(byFiles.error).toBeInstanceOf(ApiUnreachableError);
+    expect(byRef.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(byRef.settled).toBe(true);
+    expect(byRef.error).toBeInstanceOf(ApiUnreachableError);
   });
 });
 

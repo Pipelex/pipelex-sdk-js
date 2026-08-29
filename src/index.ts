@@ -20,10 +20,11 @@ export * from "mthds/protocol";
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
 export type {
   MthdsFile,
-  BuildInputsByMethodId,
+  PipelexApiRunExtensions,
   PipelexHostedRunExtensions,
   PipelexRunOptions,
   PipelexStartOptions,
+  ValidateMethodSelector,
   ValidateFilesOptions,
   PipelexApiClientOptions,
 } from "./client.js";
@@ -50,6 +51,9 @@ export type {
   DictWorkingMemory,
   DictPipeOutput,
   DictRunResultExecute,
+  MethodProvenance,
+  PipelexRunResultStart,
+  PipelexHostedToolingExtensions,
   DryRunStatus,
   ValidatedPipeEntry,
   LiftablePipeEntry,
