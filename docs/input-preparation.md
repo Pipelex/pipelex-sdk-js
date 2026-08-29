@@ -78,7 +78,7 @@ A `method_ref` makes the server clone a repository first; `validate` needs no sp
 
 `validate` has no pipe selector — its report describes every pipe, keyed by qualified `pipe_ref` — so the helper picks one, in this order:
 
-1. **`pipe_ref` when given.** Qualified-only: `domain.pipe_code`, or the `alias->domain.pipe_code` form. A bare code, or a ref the method does not declare, is an `InputPreparationError` listing the qualified refs — one step to fix. The helper never grows a searched `pipe_code`: search is a run-route affordance, and the descriptor is keyed by qualified refs.
+1. **`pipe_ref` when given.** Qualified-only: `domain.pipe_code`. A bare code, or a ref the method does not declare, is an `InputPreparationError` listing the qualified refs — one step to fix. The helper never grows a searched `pipe_code`: search is a run-route affordance, and the descriptor is keyed by qualified refs. An `alias->domain.pipe_code` ref is refused for a different reason: the descriptor describes the method's *own* pipes, and an alias names one belonging to a dependency package, which the report never carries a descriptor for — the run route takes such a ref, preparation cannot.
 2. **The report's typed resolved default** (`default_pipe_ref`), once the runner serves it: the ref a caller gets by omitting the selector on the run and build routes, manifest-aware for a fetched package. Read when present; a server that predates it sends nothing.
 3. **The bundle's declared `main_pipe`**, read defensively from the opaque `bundle_blueprint` and qualified by its `domain`.
 4. **The single pipe**, when the method declares exactly one.

@@ -764,6 +764,25 @@ describe("prepareInputs pipe selection", () => {
     await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
   });
 
+  // Pins the decision, not a regression: an `alias->domain.pipe_code` ref names a
+  // DEPENDENCY package's pipe, and `input_form` describes the method's own pipes
+  // only — so there is no descriptor to prepare against and no alias to strip.
+  // Stripping one would yield a canonical key that misses, or collides with a
+  // different host-owned pipe and hands back the wrong signature. The run route
+  // takes such a ref; preparation refuses it, and that asymmetry is deliberate.
+  it("refuses an alias-qualified pipe_ref — the descriptor covers the method's own pipes", async () => {
+    const client = makeClient(TWO_PIPES);
+
+    const failure = prepareInputs(client, {
+      files: FILES,
+      pipe_ref: "vendor->demo.second",
+      inputs: {},
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+  });
+
   it("defaults to the report's typed resolved pipe ref when the runner serves one", async () => {
     const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: "demo.second" } });
 

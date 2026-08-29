@@ -51,11 +51,12 @@ const HTTP_URL_RE = /^https?:\/\//i;
 /** The shared half of the request: the target pipe and the caller's inputs. */
 export interface PrepareInputsBase {
   /**
-   * The pipe to prepare inputs for, as a QUALIFIED `domain.pipe_code` ref (an
-   * `alias->domain.pipe_code` form is qualified too). Omit it to default — see
-   * "Pipe selection" in `docs/input-preparation.md`. A bare `pipe_code` is
-   * refused: the descriptor is keyed by qualified refs, and search is a run-route
-   * affordance this helper deliberately does not grow.
+   * The pipe to prepare inputs for, as a QUALIFIED `domain.pipe_code` ref. Omit
+   * it to default — see "Pipe selection" in `docs/input-preparation.md`. A bare
+   * `pipe_code` is refused: the descriptor is keyed by qualified refs, and search
+   * is a run-route affordance this helper deliberately does not grow. So is an
+   * `alias->domain.pipe_code` ref: the alias names a dependency package's pipe,
+   * which the descriptor does not describe (it covers the method's own pipes).
    */
   pipe_ref?: string;
   /** The caller's inputs (variable name → value), compact or explicit-envelope per input. */
