@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`prepareInputs` takes the method three ways.** Beside inline `files`, it now accepts a `method_ref` address (fetched by the runner) or a stored `method_id` (resolved by the hosted platform) — exactly one per call, all three **server-resolved**, nothing expanded client-side. `PrepareInputsRequest` is a discriminated union pinning the unused selectors to `never`, so a second one is a compile error; empty is absent (`files: []`, a blank `method_ref` / `method_id`), and an untyped caller giving none or several gets an `InputPreparationError` naming the three forms. `PrepareInputsBase` and `PrepareInputsClosure` are exported from the barrel.
+- **`PipelexValidationReport.default_pipe_ref`** — the qualified `pipe_ref` a caller gets by omitting the pipe selector, or `null` when the closure declares none or several. Optional and read leniently: a runner that predates the field sends nothing, and `prepareInputs` falls back to the opaque `bundle_blueprint.main_pipe`.
+
+### Changed
+
+- **Breaking: `prepareInputs` reads its signature from the input-form descriptor, not the inputs template.** It composes one `POST /v1/validate` with `views: ["input_form"]` and `allow_signatures: true`, and walks the standard's `InputForm` artifact — `document` / `image` mark a file position, `object` recurses through `fields`, `list` through `item`, everything else passes through. Source-compatible for every caller passing `files`; the SDK no longer calls `/v1/build/inputs` at runtime.
+- **Breaking: a canonical file dict nested inside a `Dynamic` input is no longer uploaded.** Such an input is `kind: "unknown"` in the descriptor — the standard's escape hatch — and the walk does not enter it. Uploading on the strength of a `url` key is the value-shape guess this change removes; a caller with a Dynamic input uploads with `uploadFile` first and passes the storage URI, which `docs/input-preparation.md` has always prescribed.
+- **`ValidateMethodSelector` moved to `src/models.ts`**, beside the other wire shapes, and is re-exported from `src/client.ts` — the import path is unchanged for every consumer.
+
+### Fixed
+
+- **Security: an optional nested file field is now uploaded.** The required-only inputs template never rendered one, so its file position was invisible and the caller's local path travelled to the runner as a literal string. The descriptor states `required: false` and the walk enters it.
+- **Security: a text field merely *named* `url` is no longer read from disk.** The template marked a file position by rendering a `url`-bearing dict — a side effect of the field's *name*, not of its concept — so a path-shaped text value was uploaded. `kind: "text"` ends that.
+- **Documentation that generalised the build-route freeze to the address form.** `docs/input-preparation.md`, `docs/architecture.md` and `docs/build-routes.md` are rewritten around the descriptor: the three call shapes, the signature call, pipe selection and its manifest-only `main_pipe` gap, and `getMethodClosure` reduced to what it is — the explicit expansion utility for the routes that still have no by-id form.
+
 ## [v0.16.0] - 2026-08-29
 
 ### Added

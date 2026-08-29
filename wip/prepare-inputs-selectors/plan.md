@@ -81,13 +81,53 @@ Record the final exported surface, the changelog entry as written, and anything 
 - 2026-08-29 — `pipe_ref` is qualified-only, per the pipe-selector campaign's convention (`wip/pipe-selector/design.md`); the helper never grows a searched `pipe_code`.
 - 2026-08-29 — The report's typed resolved default (`L-260829-0208c7`) is read when present and outranks the `bundle_blueprint` read; it is not a blocker — the manifest-only `main_pipe` gap is accepted with an honest error until it ships.
 - 2026-08-29 — This item does not wait for the addressing campaign's Workstream B; the envelope cut sweeps this one call site (design, "Where the signature comes from").
+- 2026-08-29 — `validate` gets NO fetch-sized budget for a `method_ref`: its 20-minute default already clears the 3-minute one, which exists to raise the ~30s poll-ceiling routes. Reverting that change is the finding, not a shortcut (Checkpoint A).
+- 2026-08-29 — The report's typed resolved default is read as `default_pipe_ref`; the name is recorded on `L-260829-0208c7` so `pipelex-api` lands the same one.
+- 2026-08-29 — `ValidateMethodSelector` moves to `src/models.ts` (re-exported from `client.ts`) so `PrepareCapableClient` can name the client's own selector type without a module cycle.
 
 ## Open questions
 
-- Does `validate` already apply the fetch-sized budget to a `{ method_ref }` source? Settled in Phase 1b; record the answer here.
-- Whether the `buildInputs` teaching error should still point at `getMethodClosure` or now at `prepareInputs` — decide in Phase 1b.
-- The hosted e2e for `method_ref` and `method_id` through `prepareInputs`: dev serves both since the 2026-08-29 deploy (`api-dev.pipelex.com` 0.11.1 — `validate` by `method_ref` and by `method_id` with `views: ["input_form"]` both returned the descriptor, checked the same day). Dev is the hosted target; record at Checkpoint A the base URL the e2e ran against.
+All three are settled; the answers are in the checkpoint log below.
+
+- ~~Does `validate` already apply the fetch-sized budget to a `{ method_ref }` source?~~ It does not, and it must not — see Checkpoint A.
+- ~~Whether the `buildInputs` teaching error should still point at `getMethodClosure` or now at `prepareInputs`.~~ It keeps pointing at `getMethodClosure`.
+- ~~The base URL the hosted e2e ran against.~~ `https://api-dev.pipelex.com`.
 
 ## Checkpoint log
 
-(Empty until Checkpoint A.)
+### Checkpoint A — Phases 1, 1b and 2 landed
+
+**Phase 1b's finding inverts the plan's assumption, and the change was reverted.** `validate` does not apply `crateRequestTimeoutMs` to a `{ method_ref }` source, and giving it one would have been a regression rather than a fix: `validate` already defaults to `DEFAULT_REQUEST_TIMEOUT_MS` (20 minutes, the blocking-execute ceiling), which clears the 3-minute `METHOD_REF_FETCH_TIMEOUT_MS` several times over. That budget exists to **raise** routes whose default is the ~30s poll ceiling (`resolve`, `codegen`, the build projections); applying it to `validate` would have **lowered** a 20-minute ceiling to 3 minutes. `buildRunner` is excluded from the same budget for exactly this reason, on its own five-minute default — the precedent was already in the tree (`tests/crate-routes.test.ts`, "gives the build projections the same budget"). The budget was implemented, then reverted; what survives is a paragraph in `validate`'s docstring recording why the route needs nothing. No test was added, because there is no new behaviour to pin.
+
+**The `buildInputs` teaching error is unchanged and still names `getMethodClosure`.** A caller reaching that error wants *this route's* template, and `prepareInputs` no longer produces one — pointing them at it would send them somewhere that answers a different question. `tests/build-routes.test.ts` is untouched. The `buildInputs` docstring gained a sentence saying the expansion stays the answer there and that nothing inside the SDK calls the route any more.
+
+**The typed default pipe ref is read under the name `default_pipe_ref`** (`PipelexValidationReport.default_pipe_ref?: string | null`). The field name was not fixed by `L-260829-0208c7` when this landed; this is the name the SDK reads, and the item carries a log note saying so, so `pipelex-api` lands the same one. Confirmed absent on dev today: `POST /v1/validate {method_ref: "github.com/Pipelex/methods/documents", views: ["input_form"]}` against `api-dev.pipelex.com` (0.11.1) returns no such key, with `bundle_blueprint.main_pipe: null` and seven pipes — the manifest-only gap, live and reproducible.
+
+**Wordings, as written.**
+
+- No selector: *"Cannot prepare inputs: no method selector. Supply exactly one of `files` (an inline MTHDS closure), `method_ref` (a published method's address) or `method_id` (a stored method's catalog id)."*
+- Several: *"Cannot prepare inputs: \`files\` and \`method_id\` were both given. Supply exactly one method selector — `files`, `method_ref` or `method_id`."*
+- Bare `pipe_ref`: *"Cannot prepare inputs: `pipe_ref` must be qualified (`domain.pipe_code`), got the bare "second". The method declares: demo.first, demo.second."*
+- Unknown `pipe_ref`: *"Cannot prepare inputs: the method declares no pipe "demo.absent". It declares: demo.first, demo.second."*
+- No default: *"Cannot prepare inputs: the method declares no single default pipe, so `pipe_ref` is required. It declares: …"*
+- No descriptor: *"Cannot prepare inputs: the validate report carries no `input_form` descriptor — the signature preparation reads. The descriptor rides `views: ["input_form"]` on pipelex-api >= 0.18.0; point the client at a runner that serves it."*
+
+**The e2e ran, against `https://api-dev.pipelex.com`** (`implementation_version` 0.11.1), and all three cases pass: `files` defaulting through the bundle's `main_pipe`; `method_ref` on `github.com/Pipelex/methods/documents` with `pipe_ref: "documents.extract_document_text"`; and the manifest-only refusal when that same `method_ref` is given no `pipe_ref` — which pins the honest gap as behaviour until `L-260829-0208c7` lifts it. `method_id` has no live case (a catalog id is org-scoped, so no id a fresh checkout can name); the unit suite pins that it reaches the wire as a pass-through selector. The rest of the e2e suite passes against dev except `tests/e2e/tools.e2e.ts`, which 403s there — `/v1/lint` and `/v1/format` are unreachable on any hosted origin by design, a pre-existing condition of pointing that suite at dev, not a regression.
+
+**One structural move the plan did not name.** `ValidateMethodSelector` moved from `src/client.ts` to `src/models.ts` and is re-exported from `client.ts`, so `PrepareCapableClient` can type `validate` with the client's own selector type without `prepare-inputs.ts` importing `client.ts` back and closing a module cycle. No public surface change — `index.ts` still exports it from `./client.js`.
+
+### Checkpoint B — before the PR
+
+**The exported surface**, all additive except where the changelog says breaking:
+
+- `src/prepare-inputs.ts` — `PrepareInputsBase`, `PrepareInputsClosure` (new, both exported from the barrel), `PrepareInputsRequest` (now the union), `PreparedInputs` and `PrepareCapableClient` (now `{ upload, validate }`) unchanged in name.
+- `src/models.ts` — `ValidateMethodSelector` (moved, same import path via the client re-export) and `PipelexValidationReport.default_pipe_ref` (new, optional).
+- Unchanged and still exported: every `/v1/build/*` wrapper and its models. Their retirement is the program's Wave 1 and Wave 2, not this item.
+
+**The changelog** is a new `## [Unreleased]` with Added (the three selectors, `default_pipe_ref`), Changed (the descriptor as the signature source; the Dynamic-nested file dict no longer uploaded; the `ValidateMethodSelector` move), and Fixed (the two security misclassifications of `L-260826-ddd843`, and the documentation that generalised the build-route freeze). No version bump: that is the release's business.
+
+**Deliberately left out.**
+
+- The `validate` fetch budget — see Checkpoint A; it would have lowered a ceiling.
+- Any change to the build wrappers or the platform sniff table, both sequenced elsewhere in the program.
+- Letting a consumer that has already validated hand the descriptor in directly, avoiding the second round trip. Additive, and worth doing only when a consumer measures the cost.

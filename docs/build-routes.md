@@ -2,6 +2,8 @@
 
 The three build projections — `buildInputs`, `buildOutput`, `buildRunner` — take a **closure** of MTHDS files, select **one pipe** in it, and project something from that pipe. They are Pipelex API extensions, not MTHDS Protocol routes: the standard specifies no projection surface, so these are ours to shape.
 
+> **`prepareInputs` no longer reads the inputs template.** It resolves its signature from the input-form descriptor on the validate report (see [input-preparation.md](./input-preparation.md#signature-driven-asset-identification)), so nothing inside this SDK calls these routes. They are kept for external consumers, and their retirement across the workspace is tracked by the `wip/build-retirement/` campaign.
+
 ## The shared envelope
 
 Every build request supplies the closure **either** as inline `files` **or** as a `method_ref` — never both:

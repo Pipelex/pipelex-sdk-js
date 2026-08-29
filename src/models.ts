@@ -119,6 +119,20 @@ export interface PipelexHostedToolingExtensions {
 // conditions (a malformed request, an `mthds_sources` length mismatch, auth, a
 // server fault), surfaced as `ApiResponseError`.
 
+/**
+ * The method selector the tooling routes take in place of inline contents: a
+ * `method_ref` address (server-resolved by the runner through the same fetch
+ * path as a `method_ref` run) OR a hosted `method_id` (platform-resolved) —
+ * never both. The tooling routes are stateless, so the strict XOR applies:
+ * exactly one of inline contents / `method_ref` / `method_id` per request.
+ *
+ * Lives here, beside the other wire shapes, rather than on the client: it is
+ * the request's shape, and `prepareInputs` composes a `validate` call of its own
+ * without importing the client back (which would close a module cycle).
+ */
+export type ValidateMethodSelector =
+  { method_ref: string; method_id?: never } | { method_id: string; method_ref?: never };
+
 /** Per-pipe dry-run verdict in `validated_pipes[]` — mirror of pipelex's `DryRunStatus`. */
 export type DryRunStatus = "SUCCESS" | "FAILURE" | "SKIPPED";
 
@@ -198,6 +212,20 @@ export interface PipelexValidationReport extends ValidationReport {
   input_form?: InputForm;
   /** Pipes the runtime may skip when an optional slot resolves absent. */
   liftable_pipes: LiftablePipeEntry[];
+  /**
+   * The qualified `pipe_ref` a caller gets by omitting the pipe selector on the run
+   * and build routes — the bundle's declared `main_pipe` qualified by its domain and,
+   * for a `method_ref` package, the manifest's `main_pipe` the way the runner's
+   * `resolve_requested_pipe` reads it. `null` when the closure declares none or
+   * several.
+   *
+   * OPTIONAL because it is younger than the report: a server that predates it sends
+   * nothing, and a consumer that needs a default (`prepareInputs`) reads it when
+   * present and falls back to the opaque `bundle_blueprint.main_pipe`. It exists so
+   * that descriptor consumers stop reading a blueprint this SDK types opaque on
+   * purpose.
+   */
+  default_pipe_ref?: string | null;
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
   graph_spec: unknown;
   /** Per-pipe dry-run sweep outcomes. */
