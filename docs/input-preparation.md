@@ -2,7 +2,7 @@
 
 > **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
-> **Current scope.** `prepareInputs` takes the method closure as inline `files` (the signature source). The by-id form it used to accept (`method_id`, expanded client-side) was deleted when the tooling routes gained native by-id — a stored method is expanded explicitly with `getMethodClosure` first (see "[Closure from a stored `method_id`](#closure-from-a-stored-method_id)" below). One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
+> **Current scope.** `prepareInputs` names the method the same three ways every other method-taking operation does — inline `files`, a `method_ref` address, or a stored `method_id` — exactly one per call, all three resolved server-side by the one `validate` call it composes. One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
 ## Why this exists
 
@@ -38,38 +38,73 @@ The MIME type and size are known client-side, so the record is assembled without
 ### `prepareInputs` — signature-driven input preparation
 
 ```
-client.prepareInputs({ files, pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ files,      pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ method_ref, pipe_ref?, inputs }) → PreparedInputs
+client.prepareInputs({ method_id,  pipe_ref?, inputs }) → PreparedInputs
 ```
 
-Takes the **method closure** as inline `files` (the signature source) plus the optional target **pipe** (`pipe_ref`, a qualified `domain.pipe_code` that defaults to the closure's `main_pipe`), resolves the pipe's declared input signature, interprets the caller's `inputs` top-down against that signature, uploads the file-bearing values, and returns `PreparedInputs`. Per input, the caller may submit **either** the compact value **or** the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)" below:
+Takes the **method** as exactly one of three selectors, the optional target **pipe**, and the caller's `inputs`; resolves the pipe's declared input signature; interprets the inputs top-down against it; uploads the file-bearing values; and returns `PreparedInputs`. Per input, the caller may submit **either** the compact value **or** the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)" below:
 
 - `inputs` — a **copy** of the caller's inputs with each asset reference replaced by the canonical content shape carrying `pipelex-storage://` in its `url` field (see "Rewritten-input shape" below). Copy-on-write: the caller's original object is never mutated.
 - `uploads` — one upload record per prepared asset (the `uploadFile` record shape), exposing `uri` so callers can log which source became which reference without reverse-engineering the rewritten object.
 
 The prepared `inputs` are passed to the existing run lifecycle unchanged.
 
-## Closure from a stored `method_id`
+#### The three selectors
 
-A caller that has already saved a method to the hosted catalog should not have to re-supply its source. The expansion is one explicit line:
+Exactly one per call. The type pins the other two to `never`, so a second selector is a compile error; an untyped caller gets an `InputPreparationError` naming the three forms. **Empty is absent** — `files: []`, `method_ref: ""`, `method_id: "  "` — mirroring the run options' rule, so an empty selector may sit beside a real one without tripping the XOR.
+
+| Selector | What it is | Who resolves it |
+| --- | --- | --- |
+| `files` | the inline MTHDS closure (`{content, source?}` entries) | nobody — inline |
+| `method_ref` | a published method's address, `github.com/<owner>/<repo>[/<selector>][@<tag>]` | the runner, server-side (pipelex-api >= 0.21.0 fetches the repository at the tag) |
+| `method_id` | a stored method's catalog id (`mt_…`) | the hosted platform, which injects the stored source before the runner sees the request |
+
+Nothing is expanded client-side: `method_id` here is a **pass-through**, the same rule every other id-taking operation follows. `getMethodClosure` stays available for callers that want the files in hand, but it is no longer a step on the way to preparing inputs.
+
+#### Where the signature comes from
+
+One `POST /v1/validate` per call, whatever the selector, asking for the **input-form descriptor**:
 
 ```
-client.prepareInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, inputs })
-client.buildInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, format?, explicit? })
+validate(<selector or contents>, allowSignatures = true, …, views = ["input_form"])
 ```
 
-`prepareInputs` and `buildInputs` **used to accept `method_id` directly**, expanded client-side through exactly this call. Those by-id legs were deleted when the surfaces that CAN resolve an id server-side gained typed `method_id` pass-throughs (`execute`/`start` had one already; `validate`/`resolve`/`codegen` gained theirs — see [architecture.md → hosted run extensions](./architecture.md#hosted-run-extensions-method_id)): keeping an id-shaped option on routes where nothing server-side resolves it made "who resolves this?" ambiguous per route. Now the rule is uniform — a `method_id` option is always a server pass-through, and any client-side expansion is the caller's own explicit `getMethodClosure` call. An untyped caller still passing `method_id` here gets a teaching error naming the migration (`prepareInputs` throws `InputPreparationError`, `buildInputs` throws `PipelineRequestError`); for typed callers the retired field is a compile error.
+`allowSignatures: true` is deliberate. Preparation needs a pipe's *declared* inputs, and a bundle mid-authoring with an unresolved signature somewhere else must not be refused inputs for a pipe whose inputs are declared — whether the bundle runs is the run's verdict, not preparation's. An `is_valid: false` verdict still means the closure does not load, which is a preparation failure.
 
-### `getMethodClosure` — id → runnable closure
+A `method_ref` makes the server clone a repository first; `validate` needs no special budget for it, because the route already defaults to the 20-minute execute ceiling.
+
+#### Pipe selection
+
+`validate` has no pipe selector — its report describes every pipe, keyed by qualified `pipe_ref` — so the helper picks one, in this order:
+
+1. **`pipe_ref` when given.** Qualified-only: `domain.pipe_code`. A bare code, or a ref the method does not declare, is an `InputPreparationError` listing the qualified refs — one step to fix. The helper never grows a searched `pipe_code`: search is a run-route affordance, and the descriptor is keyed by qualified refs. An `alias->domain.pipe_code` ref is refused for a different reason: the descriptor describes the method's *own* pipes, and an alias names one belonging to a dependency package, which the report never carries a descriptor for — the run route takes such a ref, preparation cannot.
+2. **The report's typed resolved default** (`default_pipe_ref`), once the runner serves it: the ref a caller gets by omitting the selector on the run and build routes, manifest-aware for a fetched package. Read when present; a server that predates it sends nothing.
+3. **The bundle's declared `main_pipe`**, read defensively from the opaque `bundle_blueprint` and qualified by its `domain`.
+4. **The single pipe**, when the method declares exactly one.
+5. Otherwise an `InputPreparationError` naming the candidates and asking for `pipe_ref`.
+
+> **The manifest-only `main_pipe` gap.** A published package may name its entry pipe in `METHODS.toml` alone — `github.com/Pipelex/methods/documents` and `.../image_generation` do — and the validate report never carries a manifest. Until step 2's field ships, such a package needs an explicit `pipe_ref`; the error lists the candidates, so the fix is one line.
+
+## `getMethodClosure` — the explicit expansion utility
 
 ```
 client.getMethodClosure(methodId) → MthdsFileItem[]
 ```
 
-`getMethodClosure` is the public **local expansion utility** — a client-side semantic layer over `getMethod` (the platform has no route that returns a parsed closure). It fetches the method, parses its polymorphic `mthds` source with [`methodSourceToContents`](#methodsourcetocontents--the-canonical-source-parser), and labels each resulting file with the `method_id` as its `source` provenance. Reach for it whenever you want the files in hand — to edit, to diff, to feed a route with no by-id form (`/v1/build/*`, `prepareInputs`), or to work by id against a bare runner that has no catalog.
+`getMethodClosure` is the public **local expansion utility** — a client-side semantic layer over `getMethod` (the platform has no route that returns a parsed closure). It fetches the method, parses its polymorphic `mthds` source with [`methodSourceToContents`](#methodsourcetocontents--the-canonical-source-parser), and labels each resulting file with the `method_id` as its `source` provenance.
+
+Reach for it whenever you want the files **in hand** — to edit, to diff, or to feed a route with no by-id form:
+
+```
+client.buildInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, format?, explicit? })
+```
+
+`/v1/build/*` is the last such family, and it is being retired. Every other method-taking operation — `execute` / `start`, `validate` / `resolve` / `codegen`, and now `prepareInputs` — takes a `method_id` **natively**, as a server pass-through: the platform resolves it and injects the stored source before the runner sees the request (see [architecture.md → hosted run extensions](./architecture.md#hosted-run-extensions-method_id)). That is the uniform rule — *an id option is always a server pass-through, and any client-side expansion is the caller's own explicit call*. An untyped caller still passing `method_id` to `buildInputs` gets a teaching error naming this migration (`PipelineRequestError`); for typed callers the field is a compile error.
 
 - **Requires an API key.** The methods catalog is org-scoped to the key's org, so resolution only works with an authenticated Pipelex-product key.
 - **Unknown or foreign-org id → the `getMethod` `404`** (`ApiResponseError`, `code: "not_found"`), propagated unchanged. An id from another org is indistinguishable from a nonexistent one — both 404.
-- **A real, in-org method whose source parses to nothing → `EmptyMethodSourceError`** — the row exists but has no runnable MTHDS source yet. This is a distinct outcome from the 404 (see "[Error and capability behavior](#error-and-capability-behavior)").
+- **A real, in-org method whose source parses to nothing → `EmptyMethodSourceError`** — the row exists but has no runnable MTHDS source yet. This is a distinct outcome from the 404 (see "[Error and capability behavior](#error-and-capability-behavior)"), and `getMethodClosure` is now its only raiser: `prepareInputs` passes the id to the server, which answers a sourceless method with a `422`.
 
 ### `methodSourceToContents` — the canonical source parser
 
@@ -78,8 +113,6 @@ methodSourceToContents(mthds: string) → string[]
 ```
 
 A stored method's `mthds` field is **polymorphic**: it is either the raw single-bundle source, or a JSON array of `{ name, content }` file entries (a multi-file closure). `methodSourceToContents` is the one canonical parser that turns either shape into a flat list of file contents — a verbatim port of the platform's `_method_source_to_contents`, so the SDK and the runtime read a stored source identically. It is exported from the barrel for consumers (e.g. `pipelex-mcp`) that need the parse without the fetch. Blank entries are dropped; a source that parses to no non-blank content yields `[]`, which is what `getMethodClosure` turns into `EmptyMethodSourceError`.
-
-> **The native routes arrived, and the intermediate was retired rather than delegated.** The earlier posture kept `prepareInputs({ method_id })` / `buildInputs({ method_id })` signature-stable so they could one day delegate to a native capability. That day came for `validate` / `resolve` / `codegen` (native `method_id`, platform-resolved) and for the run routes and every method-taking route via `method_ref` (address, runner-resolved) — but not for `/v1/build/*`, which the hosted tooling selector deliberately excludes (the build routes are frozen, being replaced by the codegen surface). With no native leg to delegate to, the by-id sugar was deleted instead of kept: the uniform rule "an id option is always a server pass-through" is worth more than the saved line, and `getMethodClosure` remains the explicit expansion.
 
 ## Compact or explicit-envelope inputs
 
@@ -94,17 +127,25 @@ When a value is an envelope (a plain object whose keys are **exactly** `concept`
 
 The SDK **must not** guess that every string resembling a path is an asset — that would make ordinary text inputs environment-dependent and could upload unintended files. Interpretation comes from the method's **declared signature**, never from a value's shape alone. This mirrors the runtime's own top-down interpretation (`InputShaper`) combined with the file-reference resolution of `input_normalizer` in `pipelex`, so local and hosted execution read the same inputs the same way. (A caller value may be compact or the explicit `{ concept, content }` envelope — see "[Compact or explicit-envelope inputs](#compact-or-explicit-envelope-inputs)"; the walk below is over the compact value, i.e. the envelope's `content`.)
 
-The declared signature is resolved via the explicit inputs template (`buildInputs` with `explicit: true` — see [build-routes.md](./build-routes.md)), which carries concept identity, canonical content shape, and multiplicity per input.
+The declared signature is the **input-form descriptor** — the MTHDS standard's `input_form` artifact, carried on the validate report under `views: ["input_form"]`. It states the kind of every input at every depth, so a file position is a *fact of the method*, never an inference from the value in front of it.
 
-> **Why not `input_form`?** The validate report's `input_form` describes the same declared inputs, and it is the richer artifact — but it is an opt-in *presentation* view (`views: ["input_form"]`), aimed at a renderer building a fill-in form. `prepareInputs` deliberately keeps the explicit template as its classifier, because the template's canonical content shape **is** the file signal it interprets (a value that is a dict carrying a `url` key), and because that keeps preparation on one round-trip against a route whose verdict it already handles. The two are complements, not alternatives: render with `input_form`, prepare with the template.
+The walk is discriminated on the node's `kind`:
 
-Interpretation per declared input:
+| Node kind | What the walk does |
+| --- | --- |
+| `document`, `image` | A **file position.** The caller's value there is resolved: a local path, `data:` URL, or bytes is uploaded and rewritten to canonical content carrying `pipelex-storage://` in `url`; an `http(s)` URL or an existing storage URI passes through; a canonical `{ url }` content dict has its `url` resolved and its other keys preserved. |
+| `object` | Walks the declared `fields` by name against a plain-object value. Keys the descriptor does not name are copied through untouched. **Optional fields (`required: false`) are walked when present.** |
+| `list` | Walks `item` against each element of an array value. |
+| everything else (`text`, `prose`, `date`, `number`, `boolean`, `enum`, `unknown`) | Passes through at any depth. |
 
-- A bare string, path object, or byte-backed value at an **Image/Document-declared** input is a **file reference**: local paths, data URLs, and bytes are uploaded and rewritten to `pipelex-storage://` URIs; HTTP(S) URLs and existing `pipelex-storage://` URIs pass through unchanged.
-- The **identical** bare string at a **Text-declared** input is text and is never touched.
-- **Canonical image/document content structures** are recognized by their URL-bearing fields wherever they appear, including nested in structured objects and lists — exactly as the runtime normalizer walks them. The refining case matters: a concept refining `Image`/`PDF` is classified by the **canonical content shape**, not by the concept ref alone.
-- Inputs declared **`Dynamic`** are not path-interpreted (the signature genuinely cannot guide them); they accept canonical content structures or already-prepared references only.
-- A repeated reference to the **same source** within one preparation is uploaded once and rewritten consistently (within-preparation dedup by source identity).
+Two consequences worth stating outright, because they are what the descriptor buys:
+
+- **Whether a concept is native or refines `Document` / `Image` is the descriptor's statement** (`refines`), never a shape test. A concept refining `native.Document` arrives as `kind: "document"` and is prepared as one.
+- **`unknown` is not interpreted.** It is the standard's escape hatch for a `Dynamic` / `Composite` input, and the walk does not enter it — including a canonical file dict nested inside one. The signature genuinely declares no file there, and uploading on the strength of a `url` key is precisely the guess this helper stopped making. A caller with such an input uploads with `uploadFile` first and passes the storage URI.
+
+A repeated reference to the **same source** within one preparation is uploaded once and rewritten consistently (within-preparation dedup by source identity). A caller value whose shape disagrees with the node — a scalar at an `object`, a non-array at a `list` — passes through for the run to reject; preparation never second-guesses the signature.
+
+> **Why the descriptor, and why not the template.** Preparation used to read the *explicit inputs template* (`buildInputs` with `explicit: true`), whose file signal was a rendered `{"url": …}` dict. That signal is a side effect of a field being **named** `url` or `*_url`, not of the field being an Image or a Document — so a text field named `url` was read off the caller's disk and uploaded, and an **optional** nested file field, which the required-only template never rendered, was invisible and travelled to the runner as a literal path. Both were live misclassifications. The descriptor states the kind instead of implying it, and states it at every depth, so both edges fall out correctly rather than needing special cases. It costs the same one round trip, it is the standard's own artifact rather than a presentation of it, and it is what `@pipelex/mthds-form`, `pipelex-app`, `mthds-ui` and `pipelex-mcp` already derive from. The template remains what it always was — a fill-in scaffold for a person or an agent — and is projected from this same descriptor.
 
 ### Pass-through rules
 
@@ -126,7 +167,8 @@ Upload is a **hosted Pipelex-product capability**, even though the SDK can be po
 
 The contract distinguishes these semantic outcomes, each a typed subclass of `InputPreparationError` (catch the base to handle any preparation failure, a subclass to branch on category):
 
-- **empty method source** (`EmptyMethodSourceError`, carries `methodId`) — a by-id closure resolution found the stored method but its `mthds` source parses to nothing (the row exists, no runnable source yet). Distinct from the `getMethod` `404` for an unknown/foreign id, which stays an `ApiResponseError`;
+- **an unresolvable signature** (`InputPreparationError`) — the closure did not validate (`is_valid: false`, carrying the first error's message), the report carried no `input_form` descriptor, or no pipe could be chosen (an unknown or bare `pipe_ref`, or no default). A *no-verdict* condition from `/v1/validate` — a malformed selector, an unknown or foreign-org `method_id`, no package at the address, auth, a server fault — stays an `ApiResponseError` and propagates unchanged;
+- **empty method source** (`EmptyMethodSourceError`, carries `methodId`) — `getMethodClosure` found the stored method but its `mthds` source parses to nothing (the row exists, no runnable source yet). Distinct from the `getMethod` `404` for an unknown/foreign id, which stays an `ApiResponseError`. `prepareInputs` never raises it: it hands the id to the server, which answers a sourceless method with a `422`;
 - **invalid local source** (`InvalidLocalSourceError`) — missing, unreadable, or a path string outside Node;
 - **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error);
 - **unsupported server capability** (`UnsupportedUploadCapabilityError`) — the configured deployment has no upload route;
