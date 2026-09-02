@@ -59,7 +59,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "mthds": "^0.24.0",
+    "mthds": "^0.25.0",
     "smol-toml": "^1.6.0"
   }
 }

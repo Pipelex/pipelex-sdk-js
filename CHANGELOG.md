@@ -1,9 +1,12 @@
 # Changelog
 
-## [v0.17.0] - 2026-08-30
+## [v0.17.0] - 2026-09-02
 
 ### Added
 
+- **`PipelexValidationReport.output_form`** — the standard's `OutputForm`, imported from `mthds/protocol` rather than restated, exactly as its `input_form` twin and `pipe_io_contracts` already are. The report typed the artifact describing a pipe's INPUTS and had no typed route to the one describing its RESULT, which is the artifact a result renderer actually needs. Optional for the same reason its twin is: presence is a function of the request (`views: ["output_form"]`), so a required field would lie about every verdict that did not ask for it.
+
+  Requires `mthds` 0.25.0, where `OutputForm` exists — and where `json_schema` becomes required on `PipeOutputContract`, a closed shape, so a verdict from a runner predating the output payload schema now fails the parse rather than being read half-way.
 - **`prepareInputs` takes the method three ways.** Beside inline `files`, it accepts a `method_ref` address (resolved by the runner) or a stored `method_id` (resolved by the hosted platform) — exactly one per call, all three server-resolved, nothing expanded client-side. `PrepareInputsRequest` is a discriminated union pinning the unused selectors to `never`, so a second one is a compile error; empty is absent (`files: []`, a blank `method_ref` / `method_id`), and an untyped caller giving none or several gets an `InputPreparationError` naming the three forms. `PrepareInputsBase` and `PrepareInputsClosure` are exported from the barrel.
 - **`PipelexValidationReport.default_pipe_ref`** — the qualified `pipe_ref` a caller gets by omitting the pipe selector, or `null` when the closure declares none or several. Optional and read leniently: a runner that predates the field sends nothing, and `prepareInputs` falls back to the opaque `bundle_blueprint.main_pipe`.
 

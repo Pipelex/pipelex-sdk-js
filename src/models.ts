@@ -10,6 +10,7 @@
 
 import type {
   InputForm,
+  OutputForm,
   InvalidValidationReport,
   PipeIOContracts,
   RunResultExecute,
@@ -210,6 +211,22 @@ export interface PipelexValidationReport extends ValidationReport {
    * single call site that opts in.
    */
   input_form?: InputForm;
+  /**
+   * Per-pipe OUTPUT-form descriptors — the standard's `OutputForm` artifact, the twin of
+   * `input_form` on the other side of the pipe. One `field` rather than a list of them,
+   * carrying no `presence` and no `gating`, because a result is not a slot a caller
+   * fills. Keyed over the same `pipe_ref` set as `pipe_io_contracts`.
+   *
+   * Paired with that contract's `output.json_schema` it is everything a renderer needs to
+   * lay a run's result out without inspecting the payload — the descriptor says what the
+   * result IS, the schema names the property it arrives under. A consumer holding one but
+   * not the other is back to inferring the other from the value, which is the guessing
+   * these artifacts exist to end.
+   *
+   * OPTIONAL for the same reason as `input_form`: an opt-in structured view, requested
+   * through `views: ["output_form"]` and absent from any verdict that did not ask.
+   */
+  output_form?: OutputForm;
   /** Pipes the runtime may skip when an optional slot resolves absent. */
   liftable_pipes: LiftablePipeEntry[];
   /**
