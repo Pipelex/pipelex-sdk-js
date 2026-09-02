@@ -209,7 +209,7 @@ export interface ValidateFilesOptions {
   allowSignatures?: boolean;
   /** Optional validate presentation hints, e.g. ["markdown"]. */
   render?: string[];
-  /** Optional structured-view opt-in tokens, e.g. ["input_form"]; sent only when given. */
+  /** Optional structured-view opt-in tokens, e.g. ["input_form", "output_form"]; sent only when given. */
   views?: string[];
   /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
   timeoutMs?: number;
@@ -747,7 +747,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * `views` is the sibling opt-in for *structured* views where `render` carries
    * *rendered text*. The two lists are independent, each resolving its own tokens
    * against its own supported set, and each supported token adds a same-named
-   * top-level field to the valid arm — today only `input_form`. Unlike `render`,
+   * top-level field to the valid arm — `input_form` and `output_form`. Unlike `render`,
    * this client sends `views` ONLY when the caller asks: the point of an opt-in view
    * is that the default response stays byte-identical, and the highest-frequency
    * consumers (hook pipelines, CI gates, agent loops) never pay for bytes they
@@ -1620,7 +1620,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *   (hosted only; requires an API key).
    *
    * The signature itself is the input-form descriptor on the validate report
-   * (`views: ["input_form"]`), which states the kind of every input at every
+   * (`views: ["input_form", "output_form"]`), which states the kind of every input at every
    * depth — so a file position is a fact of the method, never a guess from the
    * value's shape. See `docs/input-preparation.md`.
    */
