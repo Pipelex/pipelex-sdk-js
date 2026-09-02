@@ -37,6 +37,9 @@ const contracts: PipeIOContracts = {
       multiplicity: "single",
       item_count: null,
       optional: false,
+      // Required since the output side gained a payload schema. Empty rather than
+      // a plausible one: this fixture is about the envelope's types, not shapes.
+      json_schema: {},
     },
   },
 };
