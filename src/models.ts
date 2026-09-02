@@ -10,6 +10,7 @@
 
 import type {
   InputForm,
+  OutputForm,
   InvalidValidationReport,
   PipeIOContracts,
   RunResultExecute,
@@ -119,6 +120,20 @@ export interface PipelexHostedToolingExtensions {
 // conditions (a malformed request, an `mthds_sources` length mismatch, auth, a
 // server fault), surfaced as `ApiResponseError`.
 
+/**
+ * The method selector the tooling routes take in place of inline contents: a
+ * `method_ref` address (server-resolved by the runner through the same fetch
+ * path as a `method_ref` run) OR a hosted `method_id` (platform-resolved) —
+ * never both. The tooling routes are stateless, so the strict XOR applies:
+ * exactly one of inline contents / `method_ref` / `method_id` per request.
+ *
+ * Lives here, beside the other wire shapes, rather than on the client: it is
+ * the request's shape, and `prepareInputs` composes a `validate` call of its own
+ * without importing the client back (which would close a module cycle).
+ */
+export type ValidateMethodSelector =
+  { method_ref: string; method_id?: never } | { method_id: string; method_ref?: never };
+
 /** Per-pipe dry-run verdict in `validated_pipes[]` — mirror of pipelex's `DryRunStatus`. */
 export type DryRunStatus = "SUCCESS" | "FAILURE" | "SKIPPED";
 
@@ -196,8 +211,38 @@ export interface PipelexValidationReport extends ValidationReport {
    * single call site that opts in.
    */
   input_form?: InputForm;
+  /**
+   * Per-pipe OUTPUT-form descriptors — the standard's `OutputForm` artifact, the twin of
+   * `input_form` on the other side of the pipe. One `field` rather than a list of them,
+   * carrying no `presence` and no `gating`, because a result is not a slot a caller
+   * fills. Keyed over the same `pipe_ref` set as `pipe_io_contracts`.
+   *
+   * Paired with that contract's `output.json_schema` it is everything a renderer needs to
+   * lay a run's result out without inspecting the payload — the descriptor says what the
+   * result IS, the schema names the property it arrives under. A consumer holding one but
+   * not the other is back to inferring the other from the value, which is the guessing
+   * these artifacts exist to end.
+   *
+   * OPTIONAL for the same reason as `input_form`: an opt-in structured view, requested
+   * through `views: ["output_form"]` and absent from any verdict that did not ask.
+   */
+  output_form?: OutputForm;
   /** Pipes the runtime may skip when an optional slot resolves absent. */
   liftable_pipes: LiftablePipeEntry[];
+  /**
+   * The qualified `pipe_ref` a caller gets by omitting the pipe selector on the run
+   * and build routes — the bundle's declared `main_pipe` qualified by its domain and,
+   * for a `method_ref` package, the manifest's `main_pipe` the way the runner's
+   * `resolve_requested_pipe` reads it. `null` when the closure declares none or
+   * several.
+   *
+   * OPTIONAL because it is younger than the report: a server that predates it sends
+   * nothing, and a consumer that needs a default (`prepareInputs`) reads it when
+   * present and falls back to the opaque `bundle_blueprint.main_pipe`. It exists so
+   * that descriptor consumers stop reading a blueprint this SDK types opaque on
+   * purpose.
+   */
+  default_pipe_ref?: string | null;
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
   graph_spec: unknown;
   /** Per-pipe dry-run sweep outcomes. */

@@ -30,9 +30,11 @@ export class InputPreparationError extends PipelineRequestError {
 }
 
 /**
- * The stored method resolved by `getMethodClosure` (and by-id `prepareInputs` /
- * `buildInputs`) has no MTHDS source yet — its `MethodData.mthds` parses to an
- * empty closure (a blank string, a JSON `[]`, or an all-blank file array).
+ * The stored method resolved by `getMethodClosure` has no MTHDS source yet — its
+ * `MethodData.mthds` parses to an empty closure (a blank string, a JSON `[]`, or
+ * an all-blank file array). `getMethodClosure` is the only raiser: the operations
+ * that take a `method_id` natively — `prepareInputs` among them — pass the id to
+ * the server, which answers a sourceless method with a `422`.
  *
  * Distinct from a transport failure: the `getMethod` fetch succeeded (`200`) and
  * the id is real and in-org; the row simply carries no runnable source. A missing

@@ -41,6 +41,7 @@ import type {
   PipelexValidationResult,
   ResolveRequest,
   ResolveResponse,
+  ValidateMethodSelector,
   ValidationErrorItem,
 } from "./models.js";
 import {
@@ -197,21 +198,18 @@ export type PipelexStartOptions = StartOptions &
   PipelexHostedRunExtensions;
 
 /**
- * The method selector `validate()` takes in place of inline contents: a
- * `method_ref` address (server-resolved by the runner through the same fetch
- * path as a `method_ref` run) OR a hosted `method_id` (platform-resolved) —
- * never both. The tooling routes are stateless, so the strict XOR applies:
- * exactly one of inline contents / `method_ref` / `method_id` per request.
+ * The method selector `validate()` takes in place of inline contents — declared
+ * beside the other wire shapes in `./models.js` and re-exported here, the import
+ * path consumers have always used.
  */
-export type ValidateMethodSelector =
-  { method_ref: string; method_id?: never } | { method_id: string; method_ref?: never };
+export type { ValidateMethodSelector };
 
 export interface ValidateFilesOptions {
   /** Whether unresolved pipe signatures are accepted as pending instead of invalid. */
   allowSignatures?: boolean;
   /** Optional validate presentation hints, e.g. ["markdown"]. */
   render?: string[];
-  /** Optional structured-view opt-in tokens, e.g. ["input_form"]; sent only when given. */
+  /** Optional structured-view opt-in tokens, e.g. ["input_form", "output_form"]; sent only when given. */
   views?: string[];
   /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
   timeoutMs?: number;
@@ -749,7 +747,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * `views` is the sibling opt-in for *structured* views where `render` carries
    * *rendered text*. The two lists are independent, each resolving its own tokens
    * against its own supported set, and each supported token adds a same-named
-   * top-level field to the valid arm — today only `input_form`. Unlike `render`,
+   * top-level field to the valid arm — `input_form` and `output_form`. Unlike `render`,
    * this client sends `views` ONLY when the caller asks: the point of an opt-in view
    * is that the default response stays byte-identical, and the highest-frequency
    * consumers (hook pipelines, CI gates, agent loops) never pay for bytes they
@@ -757,6 +755,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * runner resolved no token (the key is silently ignored, never a 422) and emitted
    * the field regardless — which is why `PipelexValidationReport.input_form` is typed
    * optional rather than required.
+   *
+   * A `{ method_ref }` source makes the server clone a repository before it
+   * validates anything, and it needs no special budget here: this route already
+   * defaults to the 20-minute execute ceiling, which clears the internal
+   * fetch-sized budget (`METHOD_REF_FETCH_TIMEOUT_MS`, three minutes) that
+   * `crateRequestTimeoutMs` gives the crate routes several times over. That budget
+   * exists to RAISE routes whose default is the ~30s poll ceiling; applying it here
+   * would lower this one — which is why `buildRunner`, on its own five-minute
+   * default, is excluded from it for the same reason.
    */
   async validate(
     source: string[] | ValidateMethodSelector,
@@ -1080,7 +1087,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * `buildRunner`. There is NO by-id form: the build routes take no `method_id`
    * (the hosted tooling selector covers `validate`/`resolve`/`codegen` only), so a
    * stored method is expanded first — `buildInputs({ files: await
-   * client.getMethodClosure(methodId) })`.
+   * client.getMethodClosure(methodId) })`. That expansion stays the answer here
+   * because a `buildInputs` caller wants this route's template; it is not what
+   * `prepareInputs` does any more.
+   *
+   * Nothing inside this SDK calls this route: `prepareInputs` reads its signature
+   * from the input-form descriptor on the validate report. It survives for the
+   * consumers that still render a template over HTTP, and is retired with the rest
+   * of `/v1/build/*` once they project it client-side.
    */
   async buildInputs(request: BuildInputsRequest): Promise<BuildInputsResponse> {
     // `method_id` is `never` in the type; this backs it for untyped (JS)
@@ -1409,11 +1423,11 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * `method_id` as its `source` provenance.
    *
    * This is the LOCAL expansion utility — for callers that want the files in
-   * hand (to edit, to diff, to feed a route with no by-id form such as
-   * `/v1/build/*` or `prepareInputs`). The routes that accept `method_id`
-   * natively (`execute`/`start`, and `validate`/`resolve`/`codegen` on the
-   * hosted API) take the id as a pass-through instead; nothing in this client
-   * expands an id behind your back.
+   * hand (to edit, to diff, to feed a route with no by-id form, the `/v1/build/*`
+   * family being the last of those). The operations that accept `method_id`
+   * natively (`execute`/`start`, `validate`/`resolve`/`codegen`, and
+   * `prepareInputs`, which composes a `validate` of its own) take the id as a
+   * pass-through instead; nothing in this client expands an id behind your back.
    *
    * Requires an API key: the methods catalog is org-scoped to the key's org, so
    * an unknown OR foreign-org id is a `getMethod` `404` (`ApiResponseError`
@@ -1595,10 +1609,20 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * file-bearing assets, and return copy-on-write rewritten inputs (canonical
    * content carrying `pipelex-storage://` in `url`) plus one upload record per
    * prepared asset. HTTP(S) URLs and existing `pipelex-storage://` URIs pass
-   * through unchanged; all failures are raised before any run is created. The
-   * caller supplies the method closure as inline `files` — for a stored method,
-   * expand it first with `getMethodClosure` (requires an API key). See
-   * `docs/input-preparation.md`.
+   * through unchanged; all failures are raised before any run is created.
+   *
+   * Name the method exactly one of three ways, all server-resolved through the
+   * one `validate` call this composes:
+   *
+   * - `files` — the inline MTHDS closure;
+   * - `method_ref` — a published method's address, fetched by the runner;
+   * - `method_id` — a stored method's catalog id, resolved by the platform
+   *   (hosted only; requires an API key).
+   *
+   * The signature itself is the input-form descriptor on the validate report
+   * (`views: ["input_form", "output_form"]`), which states the kind of every input at every
+   * depth — so a file position is a fact of the method, never a guess from the
+   * value's shape. See `docs/input-preparation.md`.
    */
   async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
     return prepareInputsImpl(this, request);
