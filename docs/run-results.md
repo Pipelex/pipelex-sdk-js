@@ -9,7 +9,7 @@ Two paths produce it. Against the hosted API the SDK starts a durable run and po
 | `pipeline_run_id` | `string` | the run store's id | the runner's own id for the call |
 | `main_stuff` | `unknown` | the `main_stuff.json` artifact | resolved out of the returned working memory |
 | `graph_spec` | `unknown` | the `graphspec.json` artifact | lifted off `pipe_output` |
-| `graph_assembly_error` | `string \| null` | absent until the platform relays it | lifted off `pipe_output` |
+| `graph_assembly_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
 | `tokens_usages` | `TokensUsageRecord[] \| null` | the `tokens_usages.json` artifact | lifted off `pipe_output` |
 | `usage_assembly_error` | `string \| null` | relayed | lifted off `pipe_output` |
 | `pipe_output` | `DictPipeOutput \| null` | null | the runner's whole native output |
@@ -63,17 +63,28 @@ The field is typed `unknown` by a standing ruling ([`architecture.md`](./archite
 
 **Rendering it.** `@pipelex/mthds-ui` ships the viewer that consumes it, and its `GraphSpec` type is the cast to use on the consumer side:
 
+The viewer must be loaded client-side only, because ReactFlow touches browser globals at module evaluation, so the import goes through `next/dynamic` with `ssr: false` rather than a static one. It also fills its parent, so that parent needs `position: relative` and a height of its own or the graph renders at zero height.
+
 ```tsx
-import { GraphViewer } from "@pipelex/mthds-ui/graph/react";
+"use client";
+
+import dynamic from "next/dynamic";
 import type { GraphSpec } from "@pipelex/mthds-ui/graph";
+
+const GraphViewer = dynamic(
+  () => import("@pipelex/mthds-ui/graph/react").then((m) => m.GraphViewer),
+  { ssr: false },
+);
 
 export function RunGraph({ results }: { results: RunResults }) {
   if (!results.graph_spec) return null;
-  return <GraphViewer graphspec={results.graph_spec as GraphSpec} />;
+  return (
+    <div style={{ position: "relative", height: "600px" }}>
+      <GraphViewer graphspec={results.graph_spec as GraphSpec} />
+    </div>
+  );
 }
 ```
-
-In a Next.js App Router project the viewer must be loaded client-side only (ReactFlow touches browser globals at module evaluation), which `next/dynamic` with `ssr: false` handles — `@pipelex/mthds-ui`'s own README shows that form.
 
 **Keeping it.** The value is plain JSON, so persisting it is a write; there is no SDK helper and none is needed. Keeping it is worth doing for anything you may have to explain later, because it is the only record of what the run did pipe by pipe:
 
@@ -89,7 +100,7 @@ await writeFile("graphspec.json", JSON.stringify(results.graph_spec, null, 2));
 
 `graph_assembly_error` is the graph's twin of `usage_assembly_error`, and it exists for the same reason: a null `graph_spec` alone cannot say whether graph assembly was off, broke, or simply had not finished writing. When the runner's assembly failed, this field carries the runner's message.
 
-On the blocking path the SDK lifts it off `pipe_output`, beside the graph itself. **On the hosted path it is always null**: the platform's results body relays no such key, so the failure that the bare runner reports is not yet observable through the hosted API. The field is declared ahead of that relay so consumers have one accessor to write against and nothing breaks the day the wire gains the key. Until then, treat a null value on the hosted path as "no information", not as "assembly succeeded".
+On the blocking path the SDK lifts it off `pipe_output`, beside the graph itself. **On the hosted path the key is absent, so the field reads `undefined` rather than `null`**: the platform's results body relays no such key and the SDK parses that body as it arrives, so the failure the bare runner reports is not yet observable through the hosted API. The field is declared ahead of that relay so consumers have one accessor to write against and nothing breaks the day the wire gains the key — the value appears on its own, with no SDK change. Until then, treat `undefined` on the hosted path as "no information", not as "assembly succeeded", and compare with `!= null` rather than `=== null` so that the same branch keeps working once the key arrives.
 
 ```ts
 if (results.graph_assembly_error != null) {
@@ -105,7 +116,7 @@ The usage pair reports what each inference call consumed and cost — one `Token
 
 ## `pipe_output` — the runner's native output
 
-`pipe_output` is the bare runner's whole native output, `{ root, aliases }` working memory included, and it is present on the blocking path only (`null` hosted). It is supplementary: `main_stuff`, the graph and the usage pair are already lifted out of it, so reading it is for consumers that want every named stuff of the run rather than the main output alone. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.
+`pipe_output` is the bare runner's whole native output, `{ root, aliases }` working memory included, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, the graph and the usage pair are already lifted out of it, so reading it is for consumers that want every named stuff of the run rather than the main output alone. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.
 
 ## Produced files
 
