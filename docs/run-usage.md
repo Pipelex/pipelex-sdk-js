@@ -1,6 +1,6 @@
 # Run usage — reading what a run consumed
 
-A completed run reports what its inference calls consumed as a list of `TokensUsageRecord` objects on `RunResults`, one per inference call, in the order the calls completed. This page covers how to read them, what each field means, and the edge cases the type is deliberately shaped around.
+A completed run reports what its inference calls consumed as a list of `TokensUsageRecord` objects on `RunResults`, one per inference call, in the order the calls completed. This page covers how to read them, what each field means, the edge cases the type is deliberately shaped around, and `summarizeUsage`, which folds them into one run-level summary under those rules.
 
 The wire shape is not this SDK's invention: it is specified in Pipelex's protocol spec, under "TokensUsage records on run artifacts", and the `TokensUsageRecord` interface in `src/runs.ts` is a client-side mirror of it. `pipelex-sdk` (Python) carries the same mirror. The record is a Pipelex runtime concept rather than part of the MTHDS standard — the MTHDS protocol itself says nothing about usage reporting.
 
@@ -13,12 +13,13 @@ const result = await client.startAndWaitForResult({
 });
 
 if (result.tokens_usages) {
-  const totalCost = result.tokens_usages.reduce((sum, record) => sum + (record.cost ?? 0), 0);
   for (const record of result.tokens_usages) {
     console.log(record.pipe_code, record.inference_model_name, record.nb_tokens_by_category, record.cost);
   }
 }
 ```
+
+For the run's totals, do not add the records up by hand: [`summarizeUsage`](#summarizing-a-run--summarizeusage) does it under the rules below.
 
 The accessor is the same whichever path ran. `startAndWaitForResult` picks a path from the `GET /v1/version` handshake:
 
@@ -60,7 +61,7 @@ Two traps worth naming explicitly:
 
 Those are different facts; `record.cost ?? 0` conflates them, which is fine for a sum but wrong for "was this call priced?".
 
-There is no per-category cost breakdown and no run-level aggregate on the wire. Sum the records for a run total.
+There is no per-category cost breakdown and no run-level aggregate on the wire. The run total is the sum of the records, and [`summarizeUsage`](#summarizing-a-run--summarizeusage) computes it with the `null` / `0` distinction kept.
 
 ## Null and empty semantics
 
@@ -70,7 +71,7 @@ There is no per-category cost breakdown and no run-level aggregate on the wire. 
 - usage assembly **broke** (an event-read failure);
 - on the hosted path, the run was **delivered before the artifact existed**.
 
-It is `[]` when assembly ran, succeeded, and no inference happened, and non-empty otherwise.
+It is `[]` when assembly ran, succeeded, and no inference happened, and non-empty otherwise. An empty list is a run that did no inference, so the run's total cost is `0` and its token totals are zero, never `null`: `null` stays reserved for calls that were not rated.
 
 `usage_assembly_error` is the **only** field that distinguishes the broken case from the other two — they are otherwise indistinguishable on the wire. A caller that needs to tell "we have no usage data because something failed" from "there was nothing to report" must branch on `usage_assembly_error`, not on `tokens_usages` alone:
 
@@ -83,6 +84,57 @@ if (result.usage_assembly_error != null) {
   // ran, but no inference happened
 }
 ```
+
+## Summarizing a run — `summarizeUsage`
+
+`summarizeUsage(results)` folds a run's usage pair into one run-level reading and a per-pipe rollup, applying every rule on this page so that no consumer has to re-derive them. It is pure: it does no I/O, needs no client, and leaves its input untouched. It takes the whole `RunResults`, or any object carrying the `tokens_usages` / `usage_assembly_error` pair.
+
+```ts
+import { summarizeUsage } from "@pipelex/sdk";
+
+const usage = summarizeUsage(result);
+
+switch (usage.state) {
+  case "records": {
+    const cost = usage.total_cost_usd === null ? "not rated" : `$${usage.total_cost_usd.toFixed(4)}`;
+    console.log(`${usage.calls} calls, ${cost}${usage.cost_partial ? " (partial)" : ""}`);
+    for (const pipe of usage.by_pipe) {
+      console.log(pipe.pipe_code ?? "(unattributed)", pipe.total_cost_usd, pipe.calls);
+    }
+    break;
+  }
+  case "no_inference":
+    console.log("no inference happened: $0");
+    break;
+  case "unavailable":
+    console.log(usage.assembly_error ?? "usage was not reported for this run");
+    break;
+}
+```
+
+| field | type | meaning |
+|---|---|---|
+| `state` | `"records" \| "no_inference" \| "unavailable"` | Which reading of `tokens_usages` the summary describes. Read it first. |
+| `total_cost_usd` | `number \| null` | Sum of the priced calls' costs, in USD. |
+| `cost_partial` | `boolean` | True when priced and unrated calls are mixed, so the total covers the priced calls only and is a lower bound. |
+| `tokens` | `{ input: number \| null; output: number \| null }` | The two additive token totals, each summed over the records that reported it. A category no record reported is `null`, which is different from a reported `0`. |
+| `calls` | `number` | Number of records summarized, one per inference call. |
+| `assembly_error` | `string \| null` | `usage_assembly_error` as relayed. |
+| `by_pipe` | `PipeUsageSummary[]` | One row per `pipe_code`, each carrying `pipe_code`, `total_cost_usd`, `cost_partial`, `tokens` and `calls`, folded over that pipe's calls exactly as the run level is. |
+
+The three states follow the [null and empty semantics](#null-and-empty-semantics) above:
+
+| `state` | `tokens_usages` | `total_cost_usd` | `tokens` | `calls` | `by_pipe` |
+|---|---|---|---|---|---|
+| `records` | a non-empty list | the priced sum, or `null` when no call was priced | the summed totals | the record count | one row per pipe |
+| `no_inference` | `[]` | `0` | `{ input: 0, output: 0 }` | `0` | `[]` |
+| `unavailable` | `null` or absent | `null` | `{ input: null, output: null }` | `0` | `[]` |
+
+A `null` `total_cost_usd` therefore means one of two things, and `state` tells them apart: under `records` no call was rated, and under `unavailable` nothing is known. Within `unavailable`, `assembly_error` is still the only sign that usage assembly broke rather than being off or not yet written.
+
+`by_pipe` puts the most expensive pipe first. Priced pipes come by cost, descending, and unrated pipes after every priced one; a tie breaks on the call count, descending, and then on the pipe code. The calls the runtime did not attribute to a pipe (`pipe_code: null`) form one group of their own, which sorts after the named pipes when everything else ties.
+
+A [pre-contract record](#old-artifacts-type-check-too) carries no `cost` and no `pipe_code`, so it counts as unrated and unattributed. Its legacy `job_metadata` and `unit_costs` are never read, so an old artifact shows up as a partial or `null` total rather than as a figure the SDK guessed.
 
 ## Old artifacts type-check too
 
