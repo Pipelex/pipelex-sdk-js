@@ -5,6 +5,7 @@
 ### Added
 
 - **`RunResults.graph_assembly_error`** — the graph's twin of `usage_assembly_error`: non-null when the runner's graph assembly failed, which is the only thing that tells a broken graph apart from a run that produced none. It is lifted off `pipe_output` on the blocking path; the hosted results body relays no such key, so on that path the key is absent and the field reads `undefined` until the platform writes and relays it, and the field is declared ahead of that so consumers have one accessor to write against.
+- **`summarizeUsage(results)`**: a pure helper that folds a run's `tokens_usages` / `usage_assembly_error` pair into one `UsageSummary` — a `state` of `records`, `no_inference` or `unavailable`, the total cost with a `cost_partial` flag, the `input` and `output` token totals, the call count, the assembly error, and a `by_pipe` rollup sorted by cost with unattributed calls grouped under a `null` `pipe_code`. Cost stays null-aware (`null` is unrated, `0` is priced at zero), and a run that did no inference totals `0` rather than `null`; `docs/run-usage.md` documents it.
 - **`docs/run-results.md`** — "Reading a run's results", a page walking every field of `RunResults`: the run id as the durable handle, `main_stuff` with a worked `getRunResult` example, what `graph_spec` is and how to render it with `@pipelex/mthds-ui`'s `GraphViewer` or keep it as JSON, the usage pair, and the produced files whose signed `public_url` is short-lived and must be re-minted with `resolveStorageUrl` rather than stored.
 
 ### Changed
