@@ -93,6 +93,9 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     expect(result.pipeline_run_id).toBe("run-1");
     expect(result.main_stuff).toEqual({ answer: 42 });
     expect(result.graph_spec).toEqual({ n: 1 });
+    // The hosted results body relays no graph assembly error, so the declared field is absent
+    // there — documented as "no information", never as "assembly succeeded".
+    expect(result.graph_assembly_error).toBeUndefined();
 
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/version");
     expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/start");
@@ -200,6 +203,9 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     // No usage pair in the blocking pipe_output (usage off / older runner) → nulls, never a throw.
     expect(result.tokens_usages).toBeNull();
     expect(result.usage_assembly_error).toBeNull();
+    // Same for the graph pair: absent from pipe_output means null, not a throw and not undefined.
+    expect(result.graph_spec).toBeNull();
+    expect(result.graph_assembly_error).toBeNull();
     expect(fetchSpy.mock.calls[0]![0]).toBe("http://localhost:8081/v1/version");
     expect(fetchSpy.mock.calls[1]![0]).toBe("http://localhost:8081/v1/execute");
   });
@@ -240,6 +246,52 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     expect(record.pipe_code).toBe("test_domain.summarize");
     expect(record.cost).toBe(0.000105);
     expect(result.usage_assembly_error).toBeNull();
+  });
+
+  it("lifts the executed graph off the blocking pipe_output", async () => {
+    const client = makeClient();
+    // The shape the runner returns: the same document a local run writes as `graphspec.json`.
+    const graphSpec = {
+      meta: { format: "mthds", mode: "live" },
+      nodes: [{ id: "pipe_1", status: "COMPLETED" }],
+      edges: [],
+    };
+    const body = executeBody("run-x");
+    body["pipe_output"] = {
+      ...(body["pipe_output"] as Record<string, unknown>),
+      graph_spec: graphSpec,
+      graph_assembly_error: null,
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // Regression: this path used to write `graph_spec: null` and drop the graph the runner
+    // had already returned, so the field meant different things on the two paths.
+    expect(result.graph_spec).toEqual(graphSpec);
+    expect(result.graph_assembly_error).toBeNull();
+  });
+
+  it("lifts a graph assembly failure off the blocking pipe_output", async () => {
+    const client = makeClient();
+    const body = executeBody("run-x");
+    body["pipe_output"] = {
+      ...(body["pipe_output"] as Record<string, unknown>),
+      graph_spec: null,
+      graph_assembly_error: "failed to assemble the graph for the run",
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // Regression: the error is what separates a broken assembly from a run with no graph —
+    // both leave `graph_spec` null.
+    expect(result.graph_spec).toBeNull();
+    expect(result.graph_assembly_error).toBe("failed to assemble the graph for the run");
   });
 
   it("throws MissingMainStuffError when a blocking response names no locatable main stuff", async () => {

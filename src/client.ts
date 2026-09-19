@@ -1790,21 +1790,22 @@ function isValidBaseUrl(value: string): boolean {
  * working memory (and throws `MissingMainStuffError` if the run named no locatable
  * main stuff), so the durable and blocking paths hand back the same `main_stuff`
  * content shape — the same shape the hosted path relays from S3. The full working
- * memory rides `pipe_output` (blocking only).
+ * memory rides `pipe_output` (blocking only), and the graph and usage pairs are lifted off it
+ * onto their own fields so they read the same on both paths.
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
-  // The usage pair rides `pipe_output` as Pipelex extension fields, beside `working_memory`
-  // — `DictPipeOutput` is extension-open, mirroring the Python model's `extra="allow"`, so
-  // it is read through the type rather than by casting the whole value away. Lifting the
-  // pair onto the two top-level fields is what makes `.tokens_usages` read the same on the
-  // blocking and durable paths. The remaining casts are unavoidable: an index-signature read
-  // is `unknown`, and this is unvalidated server JSON.
+  // The graph pair and the usage pair ride `pipe_output` as Pipelex extension fields, beside
+  // `working_memory` — `DictPipeOutput` is extension-open, mirroring the Python model's
+  // `extra="allow"`, so they are read through the type rather than by casting the whole value
+  // away. Lifting both pairs onto their top-level fields is what makes `.graph_spec` and
+  // `.tokens_usages` read the same on the blocking and durable paths. The remaining casts are
+  // unavoidable: an index-signature read is `unknown`, and this is unvalidated server JSON.
   return {
     pipeline_run_id: response.pipeline_run_id,
     main_stuff: response.main_stuff,
-    // The bare-runner blocking `pipe_output` carries no graph artifact; the
-    // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
-    graph_spec: null,
+    graph_spec: response.pipe_output["graph_spec"] ?? null,
+    graph_assembly_error: (response.pipe_output["graph_assembly_error"] ??
+      null) as RunResults["graph_assembly_error"],
     pipe_output: response.pipe_output,
     tokens_usages: (response.pipe_output["tokens_usages"] ?? null) as RunResults["tokens_usages"],
     usage_assembly_error: (response.pipe_output["usage_assembly_error"] ??

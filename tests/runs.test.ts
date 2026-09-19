@@ -148,6 +148,41 @@ describe("PipelexApiClient.getRunResult", () => {
     }
   });
 
+  it("reads the graph pair off the results body", async () => {
+    const client = makeClient();
+    // The hosted body relays no `graph_assembly_error` today, so the field is absent — the
+    // declaration is what makes it readable, unchanged, the day the platform writes the key.
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-1",
+          main_stuff: { answer: 42 },
+          graph_spec: { nodes: [] },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-2",
+          main_stuff: { answer: 42 },
+          graph_spec: null,
+          graph_assembly_error: "failed to assemble the graph for the run",
+        }),
+      );
+
+    const state = await client.getRunResult("run-1");
+    expect(state.state).toBe("completed");
+    if (state.state === "completed") {
+      expect(state.result.graph_assembly_error).toBeUndefined();
+    }
+
+    const relayed = await client.getRunResult("run-2");
+    expect(relayed.state).toBe("completed");
+    if (relayed.state === "completed") {
+      expect(relayed.result.graph_spec).toBeNull();
+      expect(relayed.result.graph_assembly_error).toBe("failed to assemble the graph for the run");
+    }
+  });
+
   it("maps 409 to a failed state and extracts the status from the message", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
@@ -383,5 +418,23 @@ describe("TokensUsageRecord", () => {
     // `usage_assembly_error` is the ONLY field separating a broken assembly from an off one.
     expect(assemblyOff.usage_assembly_error).toBeUndefined();
     expect(assemblyBroke.usage_assembly_error).toBe("failed to read usage events for the run");
+  });
+});
+
+describe("RunResults graph fields", () => {
+  it("keeps the graph null semantics distinct", () => {
+    // A run with no graph and a run whose graph assembly broke both carry a null `graph_spec`.
+    const noGraph: RunResults = { pipeline_run_id: "run-1", main_stuff: {}, graph_spec: null };
+    const assemblyBroke: RunResults = {
+      pipeline_run_id: "run-1",
+      main_stuff: {},
+      graph_spec: null,
+      graph_assembly_error: "failed to assemble the graph for the run",
+    };
+
+    expect(noGraph.graph_spec).toBeNull();
+    // `graph_assembly_error` is the ONLY field that tells the two apart.
+    expect(noGraph.graph_assembly_error).toBeUndefined();
+    expect(assemblyBroke.graph_assembly_error).toBe("failed to assemble the graph for the run");
   });
 });

@@ -164,8 +164,24 @@ export interface RunResults {
    * output to an object) and may be a valid falsy value (empty array, `0`); it is never absent.
    */
   main_stuff: unknown;
-  /** Method graph spec (`graphspec.json`); null if missing mid-write or on the bare-runner path. */
+  /**
+   * The executed graph — the same document a local run writes as `graphspec.json`: `mode: "live"`,
+   * one node per pipe with its status, its timings and its own usage. It reaches the client on both
+   * paths: the hosted path relays the `graphspec.json` artifact verbatim, and on the blocking path
+   * the SDK lifts it off `pipe_output`. Null when the runner assembled no graph (see
+   * `graph_assembly_error`) or, on the hosted path, when the artifact was not yet written. Typed
+   * `unknown` on purpose — the canonical declaration is `GraphSpec` in `@pipelex/mthds-ui`, which
+   * carries a React peer dependency this server-side SDK does not take. See `docs/run-results.md`.
+   */
   graph_spec?: unknown;
+  /**
+   * Non-null when the runner's graph assembly failed for the run — the graph's twin of
+   * `usage_assembly_error`, and the only thing that separates "the graph broke" from "this run
+   * produced no graph". Lifted off `pipe_output` on the blocking path; the hosted results body
+   * carries nothing of the kind yet, so on that path the field is absent until the platform writes
+   * and relays it.
+   */
+  graph_assembly_error?: string | null;
   /**
    * Bare runner's native pipe output — the full working memory (`{ root, aliases }`),
    * blocking-execute path only; null on the hosted path. Supplementary to `main_stuff`,
