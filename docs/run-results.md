@@ -57,7 +57,7 @@ switch (state.state) {
 
 ## `graph_spec` — the executed graph
 
-`graph_spec` is the graph the run actually executed: `mode: "live"`, one node per pipe with its execution status, its start and end timestamps, its inputs and outputs, and the inference models and cost attributed to it. It is the same document a local `pipelex` run writes as `graphspec.json`, so anything that reads one of those files reads this value unchanged.
+`graph_spec` is the graph the run actually executed: `meta.mode` is `"live"`, and there is one node per pipe with its execution status, its start and end timestamps, its inputs and outputs, and the inference models and cost attributed to it. It is the same document a local `pipelex` run writes as `graphspec.json`, so anything that reads one of those files reads this value unchanged.
 
 The field is typed `unknown` by a standing ruling ([`architecture.md`](./architecture.md#standard-artifacts-on-the-validate-report)): the canonical declaration is `GraphSpec` in `@pipelex/mthds-ui`, which carries a React peer dependency that a server-side SDK has no business taking, and the MTHDS standard declares nothing this SDK could import instead. The value is relayed verbatim either way — the typing says where the schema lives, not that the content is uncertain.
 

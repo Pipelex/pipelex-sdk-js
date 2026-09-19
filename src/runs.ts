@@ -165,8 +165,8 @@ export interface RunResults {
    */
   main_stuff: unknown;
   /**
-   * The executed graph — the same document a local run writes as `graphspec.json`: `mode: "live"`,
-   * one node per pipe with its status, its timings and its own usage. It reaches the client on both
+   * The executed graph — the same document a local run writes as `graphspec.json`: `meta.mode`
+   * `"live"`, one node per pipe with its status, its timings and its own usage. It reaches the client on both
    * paths: the hosted path relays the `graphspec.json` artifact verbatim, and on the blocking path
    * the SDK lifts it off `pipe_output`. Null when the runner assembled no graph (see
    * `graph_assembly_error`) or, on the hosted path, when the artifact was not yet written. Typed
