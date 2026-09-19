@@ -184,7 +184,8 @@ export interface RunResults {
   graph_assembly_error?: string | null;
   /**
    * Bare runner's native pipe output — the full working memory (`{ root, aliases }`),
-   * blocking-execute path only; null on the hosted path. Supplementary to `main_stuff`,
+   * blocking-execute path only; absent on the hosted path, whose results body carries no such
+   * key, so it reads `undefined` there. Supplementary to `main_stuff`,
    * which is already resolved out of it; kept for consumers that need the whole working memory.
    */
   pipe_output?: DictPipeOutput | null;

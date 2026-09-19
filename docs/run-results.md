@@ -12,7 +12,7 @@ Two paths produce it. Against the hosted API the SDK starts a durable run and po
 | `graph_assembly_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
 | `tokens_usages` | `TokensUsageRecord[] \| null` | the `tokens_usages.json` artifact | lifted off `pipe_output` |
 | `usage_assembly_error` | `string \| null` | relayed | lifted off `pipe_output` |
-| `pipe_output` | `DictPipeOutput \| null` | null | the runner's whole native output |
+| `pipe_output` | `DictPipeOutput \| null \| undefined` | absent | the runner's whole native output |
 
 ## `pipeline_run_id` — the durable handle
 
@@ -61,14 +61,13 @@ switch (state.state) {
 
 The field is typed `unknown` by a standing ruling ([`architecture.md`](./architecture.md#standard-artifacts-on-the-validate-report)): the canonical declaration is `GraphSpec` in `@pipelex/mthds-ui`, which carries a React peer dependency that a server-side SDK has no business taking, and the MTHDS standard declares nothing this SDK could import instead. The value is relayed verbatim either way — the typing says where the schema lives, not that the content is uncertain.
 
-**Rendering it.** `@pipelex/mthds-ui` ships the viewer that consumes it, and its `GraphSpec` type is the cast to use on the consumer side:
-
-The viewer must be loaded client-side only, because ReactFlow touches browser globals at module evaluation, so the import goes through `next/dynamic` with `ssr: false` rather than a static one. It also fills its parent, so that parent needs `position: relative` and a height of its own or the graph renders at zero height.
+**Rendering it.** `@pipelex/mthds-ui` ships the viewer that consumes it, and its `GraphSpec` type is the cast to use on the consumer side. The viewer must be loaded client-side only, because ReactFlow touches browser globals at module evaluation, so the import goes through `next/dynamic` with `ssr: false` rather than a static one. It also fills its parent, so that parent needs `position: relative` and a height of its own or the graph renders at zero height:
 
 ```tsx
 "use client";
 
 import dynamic from "next/dynamic";
+import type { RunResults } from "@pipelex/sdk";
 import type { GraphSpec } from "@pipelex/mthds-ui/graph";
 
 const GraphViewer = dynamic(

@@ -1791,7 +1791,8 @@ function isValidBaseUrl(value: string): boolean {
  * main stuff), so the durable and blocking paths hand back the same `main_stuff`
  * content shape — the same shape the hosted path relays from S3. The full working
  * memory rides `pipe_output` (blocking only), and the graph and usage pairs are lifted off it
- * onto their own fields so they read the same on both paths.
+ * onto their own fields, so `graph_spec` and the usage pair read the same on both paths.
+ * `graph_assembly_error` does not yet: it is lifted here but absent from the hosted body.
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
   // The graph pair and the usage pair ride `pipe_output` as Pipelex extension fields, beside
