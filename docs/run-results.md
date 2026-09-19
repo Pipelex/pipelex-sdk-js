@@ -70,7 +70,12 @@ for (const [name, stuff] of Object.entries(results.working_memory?.root ?? {})) 
 }
 ```
 
-**Older runs carry the concept as an object.** A runtime older than the release that names concepts by ref wrote each stuff's `concept` as the full concept object rather than its ref string: every hosted run whose `working_memory.json` was written before the hosted plane moved to that release, and every run of a bare runner still pinned below it. The artifact is relayed as it was written and never migrated, so the type's `string` is what a current run carries, not a promise about every stored one — a consumer listing past runs checks `typeof stuff.concept === "string"` before treating it as a ref, as [Old artifacts type-check too](./run-usage.md#old-artifacts-type-check-too) does for usage records.
+**Older runs carry the concept as an object.** A runtime older than pipelex 0.60.0 wrote each stuff's `concept` as the full concept object rather than its ref string: every hosted run whose `working_memory.json` was written before the hosted plane moved to that release, and every run of a bare runner still pinned below it. The artifact is relayed as it was written and never migrated. The type deliberately stays the standard's `concept: string`, which is what every run from 0.60.0 on carries, rather than widening to describe relics — so a consumer listing runs that may predate the release reads `concept` as `unknown` and narrows it itself:
+
+```ts
+const concept: unknown = stuff.concept;
+const ref = typeof concept === "string" ? concept : undefined; // undefined: a pre-0.60.0 concept object
+```
 
 ## `graph_spec` — the executed graph
 
