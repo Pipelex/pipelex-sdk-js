@@ -1,5 +1,5 @@
 import { RunFailedError, RunTimeoutError } from "./errors.js";
-import type { DictPipeOutput } from "./models.js";
+import type { DictPipeOutput, DictWorkingMemory } from "./models.js";
 
 /**
  * Run-lifecycle types + polling for the hosted polling surface (`/v1/runs/*`).
@@ -165,6 +165,16 @@ export interface RunResults {
    */
   main_stuff: unknown;
   /**
+   * The run's working memory — every named stuff of the run (`{ root, aliases }`), the inputs it
+   * was given and the intermediates it produced as well as the main output, each stuff carried as
+   * its concept ref and its content. It reads the same on both paths: the hosted path relays the
+   * `working_memory.json` artifact verbatim, and on the blocking path the SDK lifts it off
+   * `pipe_output`. `main_stuff` is the content of one of its entries, already resolved. Null on the
+   * hosted path when the artifact was not yet written. `DictWorkingMemory` mirrors the MTHDS
+   * standard's `DictWorkingMemory` field for field. See `docs/run-results.md`.
+   */
+  working_memory?: DictWorkingMemory | null;
+  /**
    * The executed graph — the same document a local run writes as `graphspec.json`: `mode: "live"`,
    * one node per pipe with its status, its timings and its own usage. It reaches the client on both
    * paths: the hosted path relays the `graphspec.json` artifact verbatim, and on the blocking path
@@ -183,10 +193,11 @@ export interface RunResults {
    */
   graph_assembly_error?: string | null;
   /**
-   * Bare runner's native pipe output — the full working memory (`{ root, aliases }`),
-   * blocking-execute path only; absent on the hosted path, whose results body carries no such
-   * key, so it reads `undefined` there. Supplementary to `main_stuff`,
-   * which is already resolved out of it; kept for consumers that need the whole working memory.
+   * Bare runner's native pipe output, blocking-execute path only; absent on the hosted path, whose
+   * results body carries no such key, so it reads `undefined` there. Supplementary: `main_stuff`,
+   * `working_memory`, the graph pair and the usage pair are all lifted out of it onto their own
+   * fields, which read the same on both paths. Read `working_memory` for the run's named stuffs;
+   * `pipe_output` is the runner's output as it arrived, extension fields included.
    */
   pipe_output?: DictPipeOutput | null;
   /**

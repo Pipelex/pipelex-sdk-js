@@ -183,6 +183,44 @@ describe("PipelexApiClient.getRunResult", () => {
     }
   });
 
+  it("reads the working memory off the results body as it arrives", async () => {
+    const client = makeClient();
+    const workingMemory = {
+      root: { answer: { concept: "native.Number", content: { value: 42 } } },
+      aliases: {},
+    };
+    // A delivered artifact, then a body delivered before the artifact was written, which the
+    // platform relays as `null`.
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-1",
+          main_stuff: { value: 42 },
+          working_memory: workingMemory,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-2",
+          main_stuff: { value: 42 },
+          working_memory: null,
+        }),
+      );
+
+    const state = await client.getRunResult("run-1");
+    expect(state.state).toBe("completed");
+    if (state.state === "completed") {
+      expect(state.result.working_memory).toEqual(workingMemory);
+      expect(state.result.working_memory!.root.answer!.concept).toBe("native.Number");
+    }
+
+    const midWrite = await client.getRunResult("run-2");
+    expect(midWrite.state).toBe("completed");
+    if (midWrite.state === "completed") {
+      expect(midWrite.result.working_memory).toBeNull();
+    }
+  });
+
   it("maps 409 to a failed state and extracts the status from the message", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(

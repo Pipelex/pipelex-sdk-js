@@ -8,6 +8,7 @@ Two paths produce it. Against the hosted API the SDK starts a durable run and po
 |---|---|---|---|
 | `pipeline_run_id` | `string` | the run store's id | the runner's own id for the call |
 | `main_stuff` | `unknown` | the `main_stuff.json` artifact | resolved out of the returned working memory |
+| `working_memory` | `DictWorkingMemory \| null` | the `working_memory.json` artifact | lifted off `pipe_output` |
 | `graph_spec` | `unknown` | the `graphspec.json` artifact | lifted off `pipe_output` |
 | `graph_assembly_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
 | `tokens_usages` | `TokensUsageRecord[] \| null` | the `tokens_usages.json` artifact | lifted off `pipe_output` |
@@ -54,6 +55,20 @@ switch (state.state) {
 ```
 
 `getRunResult` is the single-shot lookup and returns that discriminated state. `waitForResult(runId)` drives the same lookup in a loop, honouring the server's `Retry-After`, and returns the `RunResults` directly — throwing `RunFailedError` on a terminal non-completed status and `RunTimeoutError` when the budget runs out.
+
+## `working_memory` — every named stuff of the run
+
+`working_memory` is the run's whole working memory: every named stuff the run held when it finished, as `{ root, aliases }`. `root` maps each stuff's name to the stuff itself — its concept ref, a string such as `native.Text`, and its content — and `aliases` maps further names onto root keys. It holds the inputs the run was given and the intermediates it produced as well as the main output, which is what a consumer needs to show what went into a run beside what came out, or to repopulate the inputs of a run it restores.
+
+It reads the same on both paths. On the hosted path it is the `working_memory.json` artifact, relayed verbatim; on the blocking path the SDK lifts it off `pipe_output`. On the hosted path it is `null` when the artifact had not been written when the results were delivered. On the blocking path it is always there, because the SDK resolves `main_stuff` out of it and a response without one throws `MissingMainStuffError` first.
+
+`main_stuff` is one of its entries — the content of the stuff the run names as its main output — already resolved. Read `main_stuff` for the output and `working_memory` for everything else; there is no need to find the main output in the working memory by hand. The type, `DictWorkingMemory`, mirrors the MTHDS standard's `DictWorkingMemory` field for field.
+
+```ts
+for (const [name, stuff] of Object.entries(results.working_memory?.root ?? {})) {
+  console.log(name, stuff.concept); // e.g. "text native.Text"
+}
+```
 
 ## `graph_spec` — the executed graph
 
@@ -115,7 +130,7 @@ The usage pair reports what each inference call consumed and cost — one `Token
 
 ## `pipe_output` — the runner's native output
 
-`pipe_output` is the bare runner's whole native output, `{ root, aliases }` working memory included, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, the graph and the usage pair are already lifted out of it, so reading it is for consumers that want every named stuff of the run rather than the main output alone. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.
+`pipe_output` is the bare runner's whole native output, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, `working_memory`, the graph and the usage pair are all lifted out of it onto fields that read the same on both paths, so a consumer that wants every named stuff of the run reads `working_memory`, not `pipe_output.working_memory`, and its code keeps working against the hosted API. What `pipe_output` adds is the runner's output exactly as it arrived. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.
 
 ## Produced files
 
