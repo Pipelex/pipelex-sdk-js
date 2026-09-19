@@ -511,6 +511,37 @@ describe("fetchArtifact", () => {
     await expect(fetchArtifact(client, PICTURE_URI, { timeoutMs: -1 })).rejects.toBeInstanceOf(
       ArtifactOperationError,
     );
+    expect(client.resolveCalls).toHaveLength(0);
+  });
+
+  it("refuses the opaque-redirect response a browser gives for a manual redirect", async () => {
+    const client = makeClient();
+    mockFetch(() =>
+      Object.defineProperties(new Response(null), {
+        type: { value: "opaqueredirect" },
+        status: { value: 0 },
+      }),
+    );
+
+    await expect(fetchArtifact(client, PICTURE_URI)).rejects.toMatchObject({
+      code: "redirect_refused",
+    });
+  });
+
+  it("drops a Content-Encoding the fetch already decoded, with the encoded length", async () => {
+    const client = makeClient();
+    mockFetch(() =>
+      streamed([PNG_BYTES], {
+        headers: { "content-type": "image/png", "content-encoding": "gzip", "content-length": "4" },
+      }),
+    );
+
+    const response = await fetchArtifact(client, PICTURE_URI);
+
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+    expect(response.headers.get("content-type")).toBe("image/png");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG_BYTES);
   });
 });
 
@@ -871,6 +902,65 @@ describe("downloadArtifacts", () => {
       "aborted",
     ]);
     expect(error.verdict.artifacts[2]!.error!.detail).toMatch(/credential/);
+    expect(error.verdict.artifacts[2]!.content_type).toBe("application/pdf");
+  });
+
+  it("lets a fetch already running finish when a re-resolve refuses the credential", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const base = makeClient({
+      sequence: [
+        {
+          [PICTURE_URI]: resolvedItem(PICTURE_URI),
+          [REPORT_URI]: resolvedItem(REPORT_URI, { expires_at: PAST }),
+          [INPUT_URI]: resolvedItem(INPUT_URI),
+        },
+        apiError(401),
+      ],
+    });
+    // The picture's body flows only once the re-resolve has been refused.
+    const client: typeof base = {
+      ...base,
+      async resolveStorageUrls(input, options) {
+        try {
+          return await base.resolveStorageUrls(input, options);
+        } catch (err) {
+          setTimeout(release, 0);
+          throw err;
+        }
+      },
+    };
+    mockFetch(
+      () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            async pull(controller): Promise<void> {
+              await gate;
+              controller.enqueue(PNG_BYTES);
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const dir = await makeTempDir();
+
+    const error = (await downloadArtifacts(client, {
+      results: {
+        pipeline_run_id: RUN_ID,
+        main_stuff: [{ url: PICTURE_URI }, { url: REPORT_URI }, { url: INPUT_URI }],
+      },
+      dir,
+      concurrency: 2,
+    }).catch((err: unknown) => err)) as ArtifactAuthenticationError;
+
+    expect(error).toBeInstanceOf(ArtifactAuthenticationError);
+    expect(error.verdict.saved_paths).toEqual([join(dir, "illustration.png")]);
+    expect(error.verdict.artifacts.map((artifact) => artifact.error?.code)).toEqual([
+      undefined,
+      "aborted",
+      "aborted",
+    ]);
+    expect(await readFile(join(dir, "illustration.png"))).toEqual(Buffer.from(PNG_BYTES));
   });
 
   it("refuses a declared oversize and cuts an undeclared one mid-stream, unlinking the partial file", async () => {
@@ -920,6 +1010,52 @@ describe("downloadArtifacts", () => {
     expect(verdict.artifacts[2]!.error).toMatchObject({ code: "total_limit_exceeded" });
     expect(verdict.artifacts[2]!.error!.detail).toMatch(/^Skipped/);
     expect(await readdir(dir)).toEqual(["illustration.png"]);
+  });
+
+  it("reserves a declared length, so parallel files never cut each other past the total cap", async () => {
+    const client = makeClient();
+    mockFetch(() =>
+      streamed([new Uint8Array(35), new Uint8Array(35)], { headers: { "content-length": "70" } }),
+    );
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: { pipeline_run_id: RUN_ID, main_stuff: [{ url: PICTURE_URI }, { url: REPORT_URI }] },
+      dir,
+      concurrency: 2,
+      maxTotalBytes: 100,
+    });
+
+    // Either file fits alone and both do not: one is saved whole, the other refused up front.
+    const codes = verdict.artifacts.map((artifact) => artifact.error?.code ?? "saved").sort();
+    expect(codes).toEqual(["saved", "total_limit_exceeded"]);
+    expect(verdict.saved_paths).toHaveLength(1);
+    expect((await readFile(verdict.saved_paths[0]!)).byteLength).toBe(70);
+  });
+
+  it("gives an unlinked partial file's bytes back to the total cap", async () => {
+    const client = makeClient();
+    mockFetch((url) =>
+      url.pathname.includes("illustration")
+        ? streamed([new Uint8Array(60), new Uint8Array(60)])
+        : streamed([new Uint8Array(80)]),
+    );
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: { pipeline_run_id: RUN_ID, main_stuff: [{ url: PICTURE_URI }, { url: REPORT_URI }] },
+      dir,
+      concurrency: 1,
+      maxBytes: 100,
+      maxTotalBytes: 100,
+    });
+
+    // The picture crosses its own cap after 60 bytes were written; those do not count against the report.
+    expect(verdict.artifacts.map((artifact) => artifact.error?.code)).toEqual([
+      "too_large",
+      undefined,
+    ]);
+    expect(await readdir(dir)).toEqual(["report"]);
   });
 
   it("enforces the total cap mid-stream on an undeclared body, unlinking the partial file", async () => {

@@ -72,7 +72,7 @@ Resolves the reference fresh and returns the object store's response as a bounde
 - **No credentials forwarded**: the request carries no headers of ours. The link's authorization is in its query string, and nothing else may ride along to the store.
 - **Plain `http:` refused** unless `allowHttp: true`. A general-purpose library does not fetch over plain http silently; the local compose stack's object store hands out such links, and that is what the option opts into.
 
-It is **header-neutral**: the status, status text and headers are the store's own, untouched. A proxy relaying it therefore owns the response hygiene — `X-Content-Type-Options: nosniff`, a sandboxing CSP on the asset response, a controlled `Content-Disposition`, private caching — and must set them itself, as the example does.
+It is **header-neutral**: the status, status text and headers are the store's own. The one change is that a `Content-Encoding` the fetch already decoded is dropped with the encoded `Content-Length`, since the body handed on is the decoded bytes. A proxy relaying it therefore owns the response hygiene — `X-Content-Type-Options: nosniff`, a sandboxing CSP on the asset response, a controlled `Content-Disposition`, private caching — and must set them itself, as the example does.
 
 Only a `2xx` is returned. Anything else throws an `ArtifactFetchError` whose `code` says why, in the same closed vocabulary the download verdict uses per item: the route's `invalid_storage_uri` / `forbidden`, then `unsupported_url` (not a URL, not http(s), or carrying credentials), `plain_http_refused`, `redirect_refused`, `store_refused` (a 401/403 from the store — the link is freshly minted, so this is the store refusing a fresh signature, not an expired link), `not_found` (404/410), `store_error` (any other non-2xx, with `status`), `too_large`, `timeout` and `network`. The caller's abort propagates as-is, and the body reader is cancelled with it. `downloadArtifacts` and a proxy share this boundary: the download is the same fetch followed by a write.
 
@@ -127,7 +127,7 @@ Per-item `error.code` is the fetch vocabulary above plus the download's own: `re
 
 - `RunStillRunningError` (with the retry hint) or `RunFailedError` — a `run_id` naming a run that has not completed;
 - `ScopeUnavailableError` — the requested scope's artifact is `null` or missing from the body (`scope` and `runId` on the error). Reading by `run_id`, a null `main_stuff` is already `MissingMainStuffError` from `getRunResult`;
-- `ArtifactAuthenticationError` — the resolve route refused the credential (`401` / `403`), on the first resolve or on a re-resolve part-way through. It carries `verdict`, the result as it stood: the files saved before the refusal are real and listed, and the rest are marked `aborted` with a detail naming the credential failure;
+- `ArtifactAuthenticationError` — the resolve route refused the credential (`401` / `403`), on the first resolve or on a re-resolve part-way through. It carries `verdict`, the result as it stood: the refusal stops the workers taking new items but lets the fetches already running finish, since they are on presigned links that do not carry the credential, so every file saved is real and listed and the rest are marked `aborted` with a detail naming the credential failure;
 - `ArtifactOperationError` — outside Node, an unusable `dir`, both selectors or neither, or nonsense bounds;
 - and the transport and lifecycle errors of the reads it makes, unchanged: `ApiResponseError` for a deployment without the bulk route, `RunLifecycleUnavailableError` for a bare runner asked by `run_id`, `ApiUnreachableError`.
 
@@ -141,7 +141,7 @@ Everything else that can go wrong with one reference is that reference's `error`
 | `concurrency`   | `4`            | artifacts in flight at once                                                                                                                              |
 | `maxBytes`      | 1 GiB          | one file, from `Content-Length` and again mid-stream                                                                                                     |
 | `timeoutMs`     | 120 s          | one file's whole exchange, plus the dispatcher's per-stall timeouts                                                                                      |
-| `maxTotalBytes` | 4 GiB          | the bytes written by the whole call                                                                                                                      |
+| `maxTotalBytes` | 4 GiB          | the bytes the whole call saves, a file in flight counting its declared length                                                                            |
 | `allowHttp`     | `false`        | whether a plain `http:` link is fetched                                                                                                                  |
 | `signal`        | —              | cancels the call: in-flight fetches are cancelled and their partial files unlinked, the rest are marked, and the verdict comes back with `aborted: true` |
 

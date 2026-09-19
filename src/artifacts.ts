@@ -407,7 +407,8 @@ export async function resolveArtifacts(
  * and nothing must ride along to the object store), a budget covering the
  * headers and the body, and a byte cap checked against `Content-Length` before
  * a byte is read and again on every chunk. The status, status text and headers
- * are the store's own, untouched: a proxy relaying this response sets its own
+ * are the store's own, except that a `Content-Encoding` the fetch already decoded
+ * is dropped with the encoded `Content-Length`: a proxy relaying this response sets its own
  * `Content-Disposition`, `X-Content-Type-Options`, CSP and caching headers,
  * because this function does not.
  *
@@ -424,11 +425,11 @@ export async function fetchArtifact(
   uri: string,
   options: FetchArtifactOptions = {},
 ): Promise<Response> {
+  const bounds = fetchBounds(options);
   const [resolved] = await resolveArtifacts(client, [uri], { signal: options.signal });
   if (resolved!.error !== null) {
     throw new ArtifactFetchError(resolved!.error.detail, uri, resolved!.error.code);
   }
-  const bounds = fetchBounds(options);
   const dispatcher = await dispatcherFor(bounds.timeoutMs);
   return fetchResolvedUrl(uri, resolved!.url, bounds, dispatcher, () => {
     void dispatcher?.close().catch(() => undefined);
@@ -604,7 +605,7 @@ async function fetchResolvedUrl(
     throw failure(err);
   }
 
-  const refusal = statusRefusal(uri, response.status);
+  const refusal = statusRefusal(uri, response);
   if (refusal !== undefined) {
     await discard(response);
     releaseOnce();
@@ -687,12 +688,29 @@ async function fetchResolvedUrl(
   return new Response(bounded, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
+    headers: decodedHeaders(response.headers),
   });
 }
 
-function statusRefusal(uri: string, status: number): ArtifactFetchError | undefined {
-  if (status >= 300 && status < 400) {
+/**
+ * The store's headers as they describe the body we hand on. `fetch` decodes a
+ * `Content-Encoding` it knows, so the stream is the decoded bytes: the encoding
+ * and the encoded length are dropped, or a proxy relaying the response would
+ * label plain bytes as compressed and give the wrong length.
+ */
+function decodedHeaders(headers: Headers): Headers {
+  if (!headers.has("content-encoding")) return headers;
+  const decoded = new Headers(headers);
+  decoded.delete("content-encoding");
+  decoded.delete("content-length");
+  return decoded;
+}
+
+function statusRefusal(uri: string, response: Response): ArtifactFetchError | undefined {
+  const status = response.status;
+  // Node's fetch hands a manual redirect back as the 3xx itself; a browser hands
+  // back an opaque-redirect response whose status is 0.
+  if ((status >= 300 && status < 400) || response.type === "opaqueredirect") {
     return new ArtifactFetchError(
       `The resolved link redirected (HTTP ${status}); redirects are not followed.`,
       uri,
@@ -955,9 +973,14 @@ export async function downloadArtifacts(
     { length: uris.length },
     () => undefined,
   );
+  // The content type the resolve gave each reference, so an item never reached
+  // still carries it; empty until the first resolve answers.
+  let knownTypes: readonly (string | null)[] = [];
   const verdictSoFar = (): DownloadArtifactsResult => {
     const artifacts = outcomes.map(
-      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_CREDENTIAL),
+      (outcome, index) =>
+        outcome ??
+        itemError(uris[index]!, knownTypes[index] ?? null, "aborted", SKIPPED_CREDENTIAL),
     );
     return assembleVerdict(scope, artifacts, request.signal?.aborted === true);
   };
@@ -976,17 +999,25 @@ export async function downloadArtifacts(
     }
     throw err;
   }
+  knownTypes = resolved.map((entry) => entry.content_type);
 
   // One dispatcher for the whole batch, so the workers share connections to the
   // store; closed once every worker has settled.
   const dispatcher = await dispatcherFor(bounds.timeoutMs);
-  // Every fetch listens to this one signal: the caller's, plus the internal stop
-  // a credential failure pulls so the other workers do not keep spending it.
-  const stop = new AbortController();
-  const signal = request.signal ? AbortSignal.any([request.signal, stop.signal]) : stop.signal;
+  const signal = request.signal;
+  // A call, not a property read: the flag flips across an await, so it must not be narrowed.
+  const aborted = (): boolean => signal?.aborted === true;
   const workerBounds: FetchBounds = { ...bounds, signal };
+  // A credential refusal on a re-resolve stops the workers taking new items, and
+  // nothing else: a fetch already running is on a presigned link that does not
+  // carry the credential, so it is left to finish and its file is kept.
   let credentialFailure: ApiResponseError | undefined;
-  let totalBytes = 0;
+  // What the total cap is held against: the bytes of every file saved or being
+  // saved, a file in flight counting as the larger of its declared length and
+  // what it has written. Reserving the declared length up front is what stops
+  // parallel files from each passing the check and then all being cut together;
+  // a file that is unlinked gives its share back.
+  let committedBytes = 0;
   let limitReached = false;
   let next = 0;
 
@@ -1003,23 +1034,28 @@ export async function downloadArtifacts(
       return itemError(uri, contentType, ...classifyFailure(err, signal));
     }
 
-    const declared = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declared) && totalBytes + declared > maxTotalBytes) {
+    const declaredLength = Number(response.headers.get("content-length"));
+    const reserved = Number.isFinite(declaredLength) ? declaredLength : 0;
+    if (committedBytes + reserved > maxTotalBytes) {
       limitReached = true;
       await discard(response);
       return itemError(
         uri,
         contentType,
         "total_limit_exceeded",
-        `Saving this ${formatMiB(declared)} artifact would take the download past its ` +
+        `Saving this ${formatMiB(reserved)} artifact would take the download past its ` +
           `${formatMiB(maxTotalBytes)} total limit.`,
       );
     }
+    committedBytes += reserved;
+    let written = 0;
+    const share = (): number => Math.max(written, reserved);
 
     let target: { handle: NodeFileHandle; path: string };
     try {
       target = await openUniqueFile(fs, path, dir, artifactFilename(uri, contentType, index));
     } catch (err) {
+      committedBytes -= share();
       await discard(response);
       return itemError(
         uri,
@@ -1030,11 +1066,11 @@ export async function downloadArtifacts(
     }
 
     const removePartial = async (): Promise<void> => {
+      committedBytes -= share();
       await target.handle.close().catch(() => undefined);
       await fs.unlink(target.path).catch(() => undefined);
     };
 
-    let written = 0;
     if (response.body === null) {
       try {
         await target.handle.close();
@@ -1054,7 +1090,9 @@ export async function downloadArtifacts(
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (totalBytes + value.byteLength > maxTotalBytes) {
+        // Only the bytes past this file's reservation are new to the total.
+        const growth = Math.max(written + value.byteLength, reserved) - share();
+        if (committedBytes + growth > maxTotalBytes) {
           limitReached = true;
           await reader.cancel().catch(() => undefined);
           await removePartial();
@@ -1065,7 +1103,7 @@ export async function downloadArtifacts(
             `This artifact took the download past its ${formatMiB(maxTotalBytes)} total limit.`,
           );
         }
-        totalBytes += value.byteLength;
+        committedBytes += growth;
         written += value.byteLength;
         try {
           await writeFully(target.handle, value);
@@ -1098,6 +1136,8 @@ export async function downloadArtifacts(
         `The file could not be closed: ${err instanceof Error ? err.message : String(err)}.`,
       );
     }
+    // A body shorter than it declared gives the unused reservation back.
+    committedBytes -= share() - written;
     return { uri, path: target.path, content_type: contentType, size: written, error: null };
   };
 
@@ -1108,7 +1148,7 @@ export async function downloadArtifacts(
       if (index >= uris.length) return;
       const uri = uris[index]!;
       let entry = resolved[index]!;
-      if (signal.aborted) {
+      if (credentialFailure !== undefined || aborted()) {
         outcomes[index] = itemError(
           uri,
           entry.content_type,
@@ -1128,11 +1168,10 @@ export async function downloadArtifacts(
         } catch (err) {
           if (isCredentialRefusal(err)) {
             credentialFailure = err;
-            stop.abort(err);
             outcomes[index] = itemError(uri, entry.content_type, "aborted", SKIPPED_CREDENTIAL);
-            return;
+            continue;
           }
-          if (signal.aborted) {
+          if (aborted()) {
             outcomes[index] = itemError(uri, entry.content_type, "aborted", SKIPPED_ABORTED);
             continue;
           }
@@ -1172,7 +1211,8 @@ export async function downloadArtifacts(
   return assembleVerdict(
     scope,
     outcomes.map(
-      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_ABORTED),
+      (outcome, index) =>
+        outcome ?? itemError(uris[index]!, knownTypes[index] ?? null, "aborted", SKIPPED_ABORTED),
     ),
     request.signal?.aborted === true,
   );
@@ -1197,9 +1237,9 @@ function assembleVerdict(
 }
 
 /** An item's `[code, detail]` for an error thrown while fetching or reading it. */
-function classifyFailure(err: unknown, signal: AbortSignal): [string, string] {
+function classifyFailure(err: unknown, signal: AbortSignal | undefined): [string, string] {
   if (err instanceof ArtifactFetchError) return [err.code, err.message];
-  if (signal.aborted)
+  if (signal?.aborted === true)
     return ["aborted", "The download was aborted while this artifact was being fetched."];
   return [
     "network",

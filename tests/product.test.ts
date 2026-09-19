@@ -596,7 +596,7 @@ describe("storage", () => {
     expect(result).toEqual(resolved);
   });
 
-  it("POSTs /v1/resolve-storage-url/bulk with the list, forwarding the signal", async () => {
+  it("POSTs /v1/resolve-storage-url/bulk with the list", async () => {
     const client = makeClient();
     const items = [
       {
@@ -627,6 +627,23 @@ describe("storage", () => {
     expect(req.method).toBe("POST");
     expect(req.body).toEqual({ uris: ["pipelex-storage://o/a.png", "pipelex-storage://x/b"] });
     expect(result).toEqual({ items });
+  });
+
+  it("forwards the caller's signal to the bulk resolve request", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    let forwarded: boolean | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      controller.abort();
+      forwarded = init?.signal?.aborted;
+      return jsonResponse(200, { items: [] });
+    });
+
+    await client
+      .resolveStorageUrls({ uris: [] }, { signal: controller.signal })
+      .catch(() => undefined);
+
+    expect(forwarded).toBe(true);
   });
 
   it("resolveArtifacts rides the bulk route through the client", async () => {
