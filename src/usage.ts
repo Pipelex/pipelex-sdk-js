@@ -143,7 +143,8 @@ function foldRecords(records: readonly TokensUsageRecord[]): UsageFold {
   let outputSum: number | null = null;
 
   for (const record of records) {
-    // `typeof` rather than `!= null`: a pre-contract record has no `cost` key at all.
+    // `typeof` rather than `!= null`: artifacts are relayed unvalidated, and a non-numeric `cost`
+    // on a malformed one must count as unrated, not turn the sum into string concatenation.
     if (typeof record.cost === "number") {
       pricedSum += record.cost;
       anyPriced = true;
