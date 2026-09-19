@@ -97,6 +97,19 @@ import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
 import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
+import {
+  downloadArtifacts as downloadArtifactsImpl,
+  fetchArtifact as fetchArtifactImpl,
+  resolveArtifacts as resolveArtifactsImpl,
+} from "./artifacts.js";
+import type {
+  BulkResolveStorageUrlsInput,
+  BulkResolvedStorageUrls,
+  DownloadArtifactsRequest,
+  DownloadArtifactsResult,
+  FetchArtifactOptions,
+  ResolvedArtifact,
+} from "./artifacts.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
@@ -1585,6 +1598,58 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /** Resolve a storage URI to a presigned URL — `POST /v1/resolve-storage-url`. */
   async resolveStorageUrl(input: { uri: string }): Promise<ResolvedStorageUrl> {
     return this.requestProduct("POST", "resolve-storage-url", input);
+  }
+
+  /**
+   * Resolve a list of storage URIs in one request — `POST /v1/resolve-storage-url/bulk`,
+   * the single route applied to a list. One item per reference, in request order,
+   * duplicates included; a refused reference is a value on its item (`error`),
+   * and the request is a `200` whenever every reference got a verdict. At most
+   * `BULK_RESOLVE_MAX_URIS` references per call (a longer list is a `422`) —
+   * {@link resolveArtifacts} chunks a longer set. Served by the hosted platform
+   * only: a deployment without the route answers a `404` `ApiResponseError`.
+   */
+  async resolveStorageUrls(
+    input: BulkResolveStorageUrlsInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<BulkResolvedStorageUrls> {
+    return this.requestProduct("POST", "resolve-storage-url/bulk", input, options);
+  }
+
+  /**
+   * Resolve a whole list of `pipelex-storage://` references through the bulk
+   * route, chunked at its bound, answering one `ResolvedArtifact` per reference
+   * in request order with per-reference failure as a value. The reading layer of
+   * the artifact stack: pair it with `collectArtifacts` to mint fresh links for
+   * everything a run produced. See `docs/artifact-download.md`.
+   */
+  async resolveArtifacts(
+    uris: string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<ResolvedArtifact[]> {
+    return resolveArtifactsImpl(this, uris, options);
+  }
+
+  /**
+   * A bounded `Response` for one `pipelex-storage://` reference: resolved fresh,
+   * a timeout, redirects refused, the byte cap enforced mid-stream, no credentials
+   * forwarded, the store's headers untouched. What `downloadArtifacts` and a
+   * same-origin proxy share. See `docs/artifact-download.md`.
+   */
+  async fetchArtifact(uri: string, options?: FetchArtifactOptions): Promise<Response> {
+    return fetchArtifactImpl(this, uri, options);
+  }
+
+  /**
+   * Save a run's produced files under a directory — the download twin of
+   * {@link prepareInputs}, Node-only. Keyed on a `run_id` (the results are
+   * re-read, so it works days after the run) or a `RunResults` in hand; walks the
+   * `main_stuff` scope by default, `working_memory` on request; resolves every
+   * link fresh (never the embedded `public_url`); and returns a produced verdict,
+   * one entry per reference, errors as values. See `docs/artifact-download.md`.
+   */
+  async downloadArtifacts(request: DownloadArtifactsRequest): Promise<DownloadArtifactsResult> {
+    return downloadArtifactsImpl(this, request);
   }
 
   /** Upload a base64 file — `POST /v1/upload`. */

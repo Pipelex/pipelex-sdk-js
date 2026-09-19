@@ -60,6 +60,7 @@
   },
   "dependencies": {
     "mthds": "^0.25.0",
-    "smol-toml": "^1.6.0"
+    "smol-toml": "^1.6.0",
+    "undici": "^7.29.1"
   }
 }

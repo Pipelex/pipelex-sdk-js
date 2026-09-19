@@ -128,4 +128,6 @@ const resolved = await client.resolveStorageUrl({ uri: "pipelex-storage://..." }
 // { url, expires_at, content_type } — fetch `url` now; re-resolve for the next reader.
 ```
 
-The same rule holds in a browser: resolve on the server, hand the client a link it uses immediately, and never let a presigned URL outlive the request it was minted for. The upload direction — turning local files into `pipelex-storage://` references before a run — is the mirror of this and has its own page, [`input-preparation.md`](./input-preparation.md).
+The same rule holds in a browser: resolve on the server, hand the client a link it uses immediately, and never let a presigned URL outlive the request it was minted for.
+
+Bringing the files down is the SDK's job, not something to re-implement over `resolveStorageUrl`: `collectArtifacts` lists a result's references without touching the network, `resolveArtifacts` mints fresh links for a whole list in one bulk call, `fetchArtifact` streams one file within safe bounds, and `downloadArtifacts` saves everything a run produced under a directory, by run id even days later. All four are on their own page, [`artifact-download.md`](./artifact-download.md). The upload direction — turning local files into `pipelex-storage://` references before a run — is the mirror of this and has its own page too, [`input-preparation.md`](./input-preparation.md).
