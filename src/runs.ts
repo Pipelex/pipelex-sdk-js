@@ -171,7 +171,10 @@ export interface RunResults {
    * `working_memory.json` artifact verbatim, and on the blocking path the SDK lifts it off
    * `pipe_output`. `main_stuff` is the content of one of its entries, already resolved. Null on the
    * hosted path when the artifact was not yet written. `DictWorkingMemory` mirrors the MTHDS
-   * standard's `DictWorkingMemory` field for field. See `docs/run-results.md`.
+   * standard's `DictWorkingMemory` field for field. A run delivered by a runtime older than the
+   * release that names concepts by ref carries each `concept` as an object instead, and a stored
+   * artifact is relayed as written, never migrated — check `typeof stuff.concept` when reading
+   * older runs. See `docs/run-results.md`.
    */
   working_memory?: DictWorkingMemory | null;
   /**

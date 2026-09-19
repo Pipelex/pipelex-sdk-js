@@ -70,6 +70,8 @@ for (const [name, stuff] of Object.entries(results.working_memory?.root ?? {})) 
 }
 ```
 
+**Older runs carry the concept as an object.** A runtime older than the release that names concepts by ref wrote each stuff's `concept` as the full concept object rather than its ref string: every hosted run whose `working_memory.json` was written before the hosted plane moved to that release, and every run of a bare runner still pinned below it. The artifact is relayed as it was written and never migrated, so the type's `string` is what a current run carries, not a promise about every stored one — a consumer listing past runs checks `typeof stuff.concept === "string"` before treating it as a ref, as [Old artifacts type-check too](./run-usage.md#old-artifacts-type-check-too) does for usage records.
+
 ## `graph_spec` — the executed graph
 
 `graph_spec` is the graph the run actually executed: `mode: "live"`, one node per pipe with its execution status, its start and end timestamps, its inputs and outputs, and the inference models and cost attributed to it. It is the same document a local `pipelex` run writes as `graphspec.json`, so anything that reads one of those files reads this value unchanged.
