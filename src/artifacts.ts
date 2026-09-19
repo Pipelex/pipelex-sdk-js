@@ -693,13 +693,27 @@ async function fetchResolvedUrl(
 }
 
 /**
- * The store's headers as they describe the body we hand on. `fetch` decodes a
- * `Content-Encoding` it knows, so the stream is the decoded bytes: the encoding
- * and the encoded length are dropped, or a proxy relaying the response would
- * label plain bytes as compressed and give the wrong length.
+ * The codings every runtime's `fetch` decodes. `zstd` is left out: whether it is
+ * decoded depends on the runtime (Node 22's zlib has none), and a coding fetch
+ * did not decode must keep its header, since the bytes are still encoded.
+ */
+const FETCH_DECODED_CODINGS = new Set(["gzip", "x-gzip", "deflate", "br"]);
+
+/**
+ * The store's headers as they describe the body we hand on. When `fetch` has
+ * decoded every coding the `Content-Encoding` lists, the stream is the decoded
+ * bytes: the encoding and the encoded length are dropped, or a proxy relaying
+ * the response would label plain bytes as compressed and give the wrong length.
+ * Any other encoding is passed through with the still-encoded body it describes.
  */
 function decodedHeaders(headers: Headers): Headers {
-  if (!headers.has("content-encoding")) return headers;
+  const codings = (headers.get("content-encoding") ?? "")
+    .split(",")
+    .map((coding) => coding.trim().toLowerCase())
+    .filter((coding) => coding !== "" && coding !== "identity");
+  if (codings.length === 0 || !codings.every((coding) => FETCH_DECODED_CODINGS.has(coding))) {
+    return headers;
+  }
   const decoded = new Headers(headers);
   decoded.delete("content-encoding");
   decoded.delete("content-length");
@@ -708,9 +722,16 @@ function decodedHeaders(headers: Headers): Headers {
 
 function statusRefusal(uri: string, response: Response): ArtifactFetchError | undefined {
   const status = response.status;
-  // Node's fetch hands a manual redirect back as the 3xx itself; a browser hands
-  // back an opaque-redirect response whose status is 0.
-  if ((status >= 300 && status < 400) || response.type === "opaqueredirect") {
+  // A browser hands a manual redirect back as an opaque-redirect response, whose
+  // status is 0 and says nothing; Node's fetch hands back the 3xx itself.
+  if (response.type === "opaqueredirect") {
+    return new ArtifactFetchError(
+      "The resolved link redirected; redirects are not followed.",
+      uri,
+      "redirect_refused",
+    );
+  }
+  if (status >= 300 && status < 400) {
     return new ArtifactFetchError(
       `The resolved link redirected (HTTP ${status}); redirects are not followed.`,
       uri,
@@ -973,14 +994,9 @@ export async function downloadArtifacts(
     { length: uris.length },
     () => undefined,
   );
-  // The content type the resolve gave each reference, so an item never reached
-  // still carries it; empty until the first resolve answers.
-  let knownTypes: readonly (string | null)[] = [];
   const verdictSoFar = (): DownloadArtifactsResult => {
     const artifacts = outcomes.map(
-      (outcome, index) =>
-        outcome ??
-        itemError(uris[index]!, knownTypes[index] ?? null, "aborted", SKIPPED_CREDENTIAL),
+      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_CREDENTIAL),
     );
     return assembleVerdict(scope, artifacts, request.signal?.aborted === true);
   };
@@ -999,7 +1015,6 @@ export async function downloadArtifacts(
     }
     throw err;
   }
-  knownTypes = resolved.map((entry) => entry.content_type);
 
   // One dispatcher for the whole batch, so the workers share connections to the
   // store; closed once every worker has settled.
@@ -1018,6 +1033,11 @@ export async function downloadArtifacts(
   // parallel files from each passing the check and then all being cut together;
   // a file that is unlinked gives its share back.
   let committedBytes = 0;
+  // The bytes of the files saved so far. The limit is reached for good, and the
+  // items not yet started skipped, only when these leave no room: a refusal
+  // against another file's reservation is that item's alone, since the file in
+  // flight may still fail and give its share back.
+  let savedBytes = 0;
   let limitReached = false;
   let next = 0;
 
@@ -1037,7 +1057,7 @@ export async function downloadArtifacts(
     const declaredLength = Number(response.headers.get("content-length"));
     const reserved = Number.isFinite(declaredLength) ? declaredLength : 0;
     if (committedBytes + reserved > maxTotalBytes) {
-      limitReached = true;
+      if (savedBytes + reserved > maxTotalBytes) limitReached = true;
       await discard(response);
       return itemError(
         uri,
@@ -1083,6 +1103,7 @@ export async function downloadArtifacts(
           `The file could not be closed: ${err instanceof Error ? err.message : String(err)}.`,
         );
       }
+      committedBytes -= share();
       return { uri, path: target.path, content_type: contentType, size: 0, error: null };
     }
     const reader = response.body.getReader();
@@ -1093,7 +1114,7 @@ export async function downloadArtifacts(
         // Only the bytes past this file's reservation are new to the total.
         const growth = Math.max(written + value.byteLength, reserved) - share();
         if (committedBytes + growth > maxTotalBytes) {
-          limitReached = true;
+          if (savedBytes + written + value.byteLength > maxTotalBytes) limitReached = true;
           await reader.cancel().catch(() => undefined);
           await removePartial();
           return itemError(
@@ -1138,6 +1159,7 @@ export async function downloadArtifacts(
     }
     // A body shorter than it declared gives the unused reservation back.
     committedBytes -= share() - written;
+    savedBytes += written;
     return { uri, path: target.path, content_type: contentType, size: written, error: null };
   };
 
@@ -1211,8 +1233,7 @@ export async function downloadArtifacts(
   return assembleVerdict(
     scope,
     outcomes.map(
-      (outcome, index) =>
-        outcome ?? itemError(uris[index]!, knownTypes[index] ?? null, "aborted", SKIPPED_ABORTED),
+      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_ABORTED),
     ),
     request.signal?.aborted === true,
   );

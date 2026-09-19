@@ -121,7 +121,7 @@ if (!verdict.all_saved) {
 
 `artifacts.length` is the count of references walked, errors included. An empty walk over a present scope — an output that references no stored file — is a verdict with empty lists and `all_saved: true`, not an error, and it touches neither the network nor the disk. `content_type` is the platform's guess from the reference, known before the fetch, on both arms.
 
-Per-item `error.code` is the fetch vocabulary above plus the download's own: `resolve_failed` (an expired link could not be re-resolved, for a reason that is not the credential), `total_limit_exceeded` (the item that would take the call past `maxTotalBytes`, and every item not yet started, whose `detail` says it was skipped), `write_failed` (the file could not be created, written or closed) and `aborted` (in flight or not yet started when the signal fired).
+Per-item `error.code` is the fetch vocabulary above plus the download's own: `resolve_failed` (an expired link could not be re-resolved, for a reason that is not the credential), `total_limit_exceeded` (the item that would take the call past `maxTotalBytes`, and, once the files already saved leave no room, every item not yet started, whose `detail` says it was skipped; an item refused only because files still in flight hold the room stops nothing else, since one of them may yet fail and give it back), `write_failed` (the file could not be created, written or closed) and `aborted` (in flight or not yet started when the signal fired).
 
 **What it throws.** Only conditions with no verdict, all typed:
 

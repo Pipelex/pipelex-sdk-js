@@ -525,6 +525,7 @@ describe("fetchArtifact", () => {
 
     await expect(fetchArtifact(client, PICTURE_URI)).rejects.toMatchObject({
       code: "redirect_refused",
+      status: undefined,
     });
   });
 
@@ -542,6 +543,20 @@ describe("fetchArtifact", () => {
     expect(response.headers.get("content-length")).toBeNull();
     expect(response.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG_BYTES);
+  });
+
+  it("keeps an encoding the fetch does not decode, with its length, beside the still-encoded body", async () => {
+    const client = makeClient();
+    mockFetch(() =>
+      streamed([PNG_BYTES], {
+        headers: { "content-encoding": "gzip, zstd", "content-length": "8" },
+      }),
+    );
+
+    const response = await fetchArtifact(client, PICTURE_URI);
+
+    expect(response.headers.get("content-encoding")).toBe("gzip, zstd");
+    expect(response.headers.get("content-length")).toBe("8");
   });
 });
 
@@ -1031,6 +1046,69 @@ describe("downloadArtifacts", () => {
     expect(codes).toEqual(["saved", "total_limit_exceeded"]);
     expect(verdict.saved_paths).toHaveLength(1);
     expect((await readFile(verdict.saved_paths[0]!)).byteLength).toBe(70);
+  });
+
+  it("stops nothing else when an item is refused only against a file still in flight", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const client = makeClient();
+    mockFetch((url) => {
+      if (url.pathname.includes("illustration")) {
+        // The picture holds its 70 bytes of room while the report is weighed.
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            async pull(controller): Promise<void> {
+              await gate;
+              controller.enqueue(new Uint8Array(70));
+              controller.close();
+            },
+          }),
+          { headers: { "content-length": "70" } },
+        );
+      }
+      // Released once the report has been weighed against the picture's reservation.
+      if (url.pathname.includes("report")) setTimeout(release, 0);
+      const size = url.pathname.includes("report") ? 50 : 20;
+      return streamed([new Uint8Array(size)], { headers: { "content-length": String(size) } });
+    });
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: {
+        pipeline_run_id: RUN_ID,
+        main_stuff: [{ url: PICTURE_URI }, { url: REPORT_URI }, { url: INPUT_URI }],
+      },
+      dir,
+      concurrency: 2,
+      maxTotalBytes: 100,
+    });
+
+    expect(verdict.artifacts.map((artifact) => artifact.error?.code)).toEqual([
+      undefined,
+      "total_limit_exceeded",
+      undefined,
+    ]);
+    expect(verdict.artifacts[1]!.error!.detail).not.toMatch(/^Skipped/);
+  });
+
+  it("gives a bodiless success's declared length back to the total cap", async () => {
+    const client = makeClient();
+    mockFetch((url) =>
+      url.pathname.includes("illustration")
+        ? new Response(null, { status: 204, headers: { "content-length": "90" } })
+        : streamed([new Uint8Array(90)], { headers: { "content-length": "90" } }),
+    );
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: { pipeline_run_id: RUN_ID, main_stuff: [{ url: PICTURE_URI }, { url: REPORT_URI }] },
+      dir,
+      concurrency: 1,
+      maxTotalBytes: 100,
+    });
+
+    expect(verdict.all_saved).toBe(true);
+    expect(verdict.artifacts.map((artifact) => artifact.size)).toEqual([0, 90]);
   });
 
   it("gives an unlinked partial file's bytes back to the total cap", async () => {
