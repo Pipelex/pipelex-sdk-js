@@ -1,6 +1,6 @@
 # Input preparation (`uploadFile` / `prepareInputs`)
 
-> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract (design source: `wip/upload/README.md` in the workspace). The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
+> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract, and is the public account of it. The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
 > **Current scope.** `prepareInputs` names the method the same three ways every other method-taking operation does — inline `files`, a `method_ref` address, or a stored `method_id` — exactly one per call, all three resolved server-side by the one `validate` call it composes. One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
@@ -21,7 +21,7 @@ Uploads one asset and returns its upload record. It is the language-native conve
 - A string that is an **HTTP(S) URL** or an existing **`pipelex-storage://` URI** is not a local asset and passes through in any runtime (see pass-through rules below).
 - Open file objects and streams are **deferred** — they can be added later without removing anything.
 
-> **Runtime acceptance vs. bundling.** These source types are accepted at *runtime* in every environment, but at the *packaging* level `@pipelex/sdk` is **Node-first**: it statically references `node:fs/promises` (to read path strings), so bundling the SDK for a browser or edge target currently requires marking `node:*` external. This is a deliberate stance — every consumer runs the SDK server-side in Node (Next.js Server Actions, the MCP server, the plugins hook) — revisited only if the SDK is ever imported into a browser client bundle or an edge route (see `wip/pr-16-review-notes.md`).
+> **Runtime acceptance vs. bundling.** These source types are accepted at *runtime* in every environment, but at the *packaging* level `@pipelex/sdk` is **Node-first**: it statically references `node:fs/promises` (to read path strings), so bundling the SDK for a browser or edge target currently requires marking `node:*` external. This is a deliberate stance — every consumer runs the SDK server-side in Node (Next.js Server Actions, the MCP server, the plugins hook) — revisited only if the SDK is ever imported into a browser client bundle or an edge route.
 
 The returned **upload record** guarantees, beyond the source identity:
 
