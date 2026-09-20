@@ -135,6 +135,8 @@ if (results.graph_assembly_error != null) {
 
 The usage pair reports what each inference call consumed and cost — one `TokensUsageRecord` per call, in completion order — and reads identically on both paths. The null-versus-empty semantics, the cost rules (`null` is unrated, `0` is priced at zero), the non-additive token categories and the pre-contract artifacts that still type-check all have their own page: [`run-usage.md`](./run-usage.md).
 
+For the run's totals, call `summarizeUsage(results)` rather than adding the records up by hand: it returns the total cost, the input and output token totals and a per-pipe rollup, with a `state` that tells a run with records from one that did no inference and from one whose usage is unavailable. See [Summarizing a run](./run-usage.md#summarizing-a-run--summarizeusage).
+
 ## `pipe_output` — the runner's native output
 
 `pipe_output` is the bare runner's whole native output, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, `working_memory`, the graph and the usage pair are all lifted out of it onto fields that read the same on both paths, so a consumer that wants every named stuff of the run reads `working_memory`, not `pipe_output.working_memory`, and its code keeps working against the hosted API. What `pipe_output` adds is the runner's output exactly as it arrived. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.

@@ -181,6 +181,16 @@ export type {
   WaitForResultOptions,
 } from "./runs.js";
 
+// ── Usage summary (pure — folds a run's usage pair into one null-aware reading) ──
+export { summarizeUsage } from "./usage.js";
+export type {
+  PipeUsageSummary,
+  RunUsagePair,
+  UsageSummary,
+  UsageSummaryState,
+  UsageTokenTotals,
+} from "./usage.js";
+
 // ── Typed errors (PipelineRequestError rides the protocol re-export above) ──
 export {
   ApiResponseError,
