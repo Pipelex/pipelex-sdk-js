@@ -32,8 +32,8 @@ const report = await client.validate(["domain = 'demo'"]);
 if (report.is_valid) {
   // Run it and wait for the result (durable start + poll on the hosted API).
   const result = await client.startAndWaitForResult({ pipe_code: "demo.greet" });
-  // Every completed run delivers a resolved `main_stuff` (the full working memory
-  // also rides `pipe_output` on the blocking path).
+  // Every completed run delivers a resolved `main_stuff`, and every named stuff of
+  // the run in `working_memory`.
   console.log(result.main_stuff);
 }
 

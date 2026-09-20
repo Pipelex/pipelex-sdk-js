@@ -102,6 +102,40 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     expect(fetchSpy.mock.calls[2]![0]).toBe("http://localhost:8081/v1/runs/run-1/results");
   });
 
+  it("passes the relayed working memory through as it arrives", async () => {
+    const client = makeClient();
+    // The `working_memory.json` artifact the platform relays verbatim: every named stuff of the
+    // run, inputs included, each carrying its concept as a ref string.
+    const workingMemory = {
+      root: {
+        text: { concept: "native.Text", content: { text: "a long article" } },
+        summary: { concept: "my_domain.Summary", content: { title: "Short" } },
+      },
+      aliases: { main_stuff: "summary" },
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, HOSTED_VERSION))
+      .mockResolvedValueOnce(
+        jsonResponse(202, { pipeline_run_id: "run-1", state: "STARTED", created_at: "t0" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-1",
+          main_stuff: { title: "Short" },
+          working_memory: workingMemory,
+          graph_spec: null,
+        }),
+      );
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    expect(result.working_memory).toEqual(workingMemory);
+    // Typed from the declaration — reached without a cast, the concept a string.
+    expect(result.working_memory!.root.text!.concept).toBe("native.Text");
+    // The hosted body carries no native output: `working_memory` is the one accessor here.
+    expect(result.pipe_output).toBeUndefined();
+  });
+
   it("caches the version handshake across calls", async () => {
     const client = makeClient();
     const fetchSpy = vi
@@ -293,6 +327,60 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     expect(result.graph_spec).toBeNull();
     expect(result.graph_assembly_error).toBe("failed to assemble the graph for the run");
   });
+
+  it("lifts the working memory off the blocking pipe_output", async () => {
+    const client = makeClient();
+    const body = executeBody("run-x");
+    const pipeOutput = body["pipe_output"] as Record<string, unknown>;
+    // An input beside the main output — the named stuffs `main_stuff` alone does not carry.
+    const workingMemory = {
+      root: {
+        topic: { concept: "native.Text", content: { text: "tides" } },
+        result: { concept: "native.Text", content: { text: "hello" } },
+      },
+      aliases: { main_stuff: "result" },
+    };
+    body["pipe_output"] = { ...pipeOutput, working_memory: workingMemory };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // The same accessor as the hosted path, reading the same value the hosted path relays.
+    expect(result.working_memory).toEqual(workingMemory);
+    expect(result.working_memory!.root.topic!.concept).toBe("native.Text");
+    // `pipe_output` stays as it is: the lift reads it, it does not move the value out of it.
+    expect(result.pipe_output!.working_memory).toEqual(workingMemory);
+    expect(result.main_stuff).toEqual({ text: "hello" });
+  });
+
+  it.each([
+    ["null", null],
+    ["absent", undefined],
+  ])(
+    "never maps a blocking pipe_output whose working memory is %s — it throws MissingMainStuffError",
+    async (_label, workingMemory) => {
+      const client = makeClient();
+      const body = executeBody("run-x");
+      const pipeOutput = { ...(body["pipe_output"] as Record<string, unknown>) };
+      if (workingMemory === undefined) {
+        delete pipeOutput["working_memory"];
+      } else {
+        pipeOutput["working_memory"] = workingMemory;
+      }
+      body["pipe_output"] = pipeOutput;
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+        .mockResolvedValueOnce(jsonResponse(200, body));
+
+      // `main_stuff` is resolved out of the working memory, so a response that carries none can
+      // deliver no output: the blocking path never hands back a `RunResults` without the field.
+      await expect(
+        client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] }),
+      ).rejects.toBeInstanceOf(MissingMainStuffError);
+    },
+  );
 
   it("throws MissingMainStuffError when a blocking response names no locatable main stuff", async () => {
     const client = makeClient();

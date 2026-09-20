@@ -5,7 +5,8 @@
 ### Added
 
 - **`RunResults.graph_assembly_error`** — the graph's twin of `usage_assembly_error`: non-null when the runner's graph assembly failed, which is the only thing that tells a broken graph apart from a run that produced none. It is lifted off `pipe_output` on the blocking path; the hosted results body relays no such key, so on that path the key is absent and the field reads `undefined` until the platform writes and relays it, and the field is declared ahead of that so consumers have one accessor to write against.
-- **`docs/run-results.md`** — "Reading a run's results", a page walking every field of `RunResults`: the run id as the durable handle, `main_stuff` with a worked `getRunResult` example, what `graph_spec` is and how to render it with `@pipelex/mthds-ui`'s `GraphViewer` or keep it as JSON, the usage pair, and the produced files whose signed `public_url` is short-lived and must be re-minted with `resolveStorageUrl` rather than stored.
+- **`RunResults.working_memory`**: every named stuff of the run as `{ root, aliases }`, typed `DictWorkingMemory`, which reads the same on both paths — the hosted results body relays the `working_memory.json` artifact, and the blocking path lifts it off `pipe_output`. Read it rather than `pipe_output.working_memory`, which exists on the blocking path only; a run from a runtime older than pipelex 0.60.0 still carries each `concept` as an object.
+- **`docs/run-results.md`** — "Reading a run's results", a page walking every field of `RunResults`: the run id as the durable handle, `main_stuff` with a worked `getRunResult` example, `working_memory` and how it relates to `main_stuff`, what `graph_spec` is and how to render it with `@pipelex/mthds-ui`'s `GraphViewer` or keep it as JSON, the usage pair, and the produced files whose signed `public_url` is short-lived and must be re-minted with `resolveStorageUrl` rather than stored.
 
 ### Changed
 
