@@ -10,6 +10,8 @@ Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execu
 
 Besides the client, the package exports `runCodegenCheck` — a **pure** offline check that verifies a committed `codegen()` tree still matches its `codegen.lock`. It needs no server, no key, and no client instance, so it fits a CI job. See [`docs/crate-routes.md`](./docs/crate-routes.md#the-offline-check--runcodegencheck).
 
+It also exports `summarizeUsage`, which folds a completed run's usage records into one null-aware summary — total cost, input and output tokens, and a per-pipe rollup — without any I/O. See [`docs/run-usage.md`](./docs/run-usage.md#summarizing-a-run--summarizeusage).
+
 ## Install
 
 ```bash
@@ -32,8 +34,8 @@ const report = await client.validate(["domain = 'demo'"]);
 if (report.is_valid) {
   // Run it and wait for the result (durable start + poll on the hosted API).
   const result = await client.startAndWaitForResult({ pipe_code: "demo.greet" });
-  // Every completed run delivers a resolved `main_stuff` (the full working memory
-  // also rides `pipe_output` on the blocking path).
+  // Every completed run delivers a resolved `main_stuff`, and every named stuff of
+  // the run in `working_memory`.
   console.log(result.main_stuff);
 }
 

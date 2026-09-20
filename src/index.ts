@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.17.0";
+export const SDK_VERSION = "0.18.0";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -44,6 +44,33 @@ export type {
   PrepareInputsRequest,
   PreparedInputs,
 } from "./prepare-inputs.js";
+
+// ── Artifacts (the download twin of input preparation) ──────────────
+// `collectArtifacts` and `artifactFilename` are pure and standalone; the network
+// operations (`resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`) are client
+// methods, and only their public types and bounds travel with the barrel.
+export {
+  collectArtifacts,
+  artifactFilename,
+  PIPELEX_STORAGE_SCHEME,
+  BULK_RESOLVE_MAX_URIS,
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  DEFAULT_ARTIFACT_TIMEOUT_MS,
+  DEFAULT_DOWNLOAD_MAX_TOTAL_BYTES,
+  DEFAULT_DOWNLOAD_CONCURRENCY,
+} from "./artifacts.js";
+export type {
+  ArtifactItemError,
+  ArtifactScope,
+  BulkResolveStorageUrlsInput,
+  BulkResolvedStorageUrls,
+  DownloadArtifactsOptions,
+  DownloadArtifactsRequest,
+  DownloadArtifactsResult,
+  DownloadedArtifact,
+  FetchArtifactOptions,
+  ResolvedArtifact,
+} from "./artifacts.js";
 
 // ── Wire models (Dict concretes, validate surface, tools + build + crate routes) ──
 export type {
@@ -181,6 +208,16 @@ export type {
   WaitForResultOptions,
 } from "./runs.js";
 
+// ── Usage summary (pure — folds a run's usage pair into one null-aware reading) ──
+export { summarizeUsage } from "./usage.js";
+export type {
+  PipeUsageSummary,
+  RunUsagePair,
+  UsageSummary,
+  UsageSummaryState,
+  UsageTokenTotals,
+} from "./usage.js";
+
 // ── Typed errors (PipelineRequestError rides the protocol re-export above) ──
 export {
   ApiResponseError,
@@ -199,4 +236,8 @@ export {
   UnsupportedUploadCapabilityError,
   UploadAuthenticationError,
   UploadTransportError,
+  ArtifactOperationError,
+  ArtifactAuthenticationError,
+  ArtifactFetchError,
+  ScopeUnavailableError,
 } from "./errors.js";

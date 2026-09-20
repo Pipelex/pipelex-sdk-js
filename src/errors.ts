@@ -6,6 +6,7 @@
 
 import { PipelineRequestError } from "mthds/protocol";
 import type { ValidationErrorItem } from "./models.js";
+import type { ArtifactScope, DownloadArtifactsResult } from "./artifacts.js";
 
 export { PipelineRequestError };
 
@@ -116,6 +117,102 @@ export class UploadTransportError extends InputPreparationError {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
     this.name = "UploadTransportError";
+  }
+}
+
+/**
+ * Base class for the failures the artifact operations raise on their own
+ * (`fetchArtifact` / `downloadArtifacts`) — the download twin of
+ * `InputPreparationError`. Catch this to handle any artifact failure; catch a
+ * subclass to branch on the category. A per-reference failure inside a
+ * `downloadArtifacts` verdict is a value on the item, never one of these: the
+ * operation throws only when it can produce no verdict at all. Transport
+ * failures on the resolve route (`ApiResponseError`, `ApiUnreachableError`)
+ * and the run-lifecycle errors propagate unchanged, so they are not subclasses.
+ */
+export class ArtifactOperationError extends PipelineRequestError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ArtifactOperationError";
+  }
+}
+
+/**
+ * The scope `downloadArtifacts` was asked to walk has no artifact on the run's
+ * results: `main_stuff` or `working_memory` is `null`, or the key is missing
+ * from the body altogether. Distinct from an empty walk over a present scope,
+ * which is a produced verdict with no artifacts. `scope` names the scope,
+ * `runId` the run.
+ */
+export class ScopeUnavailableError extends ArtifactOperationError {
+  public readonly scope: ArtifactScope;
+  public readonly runId: string;
+
+  constructor(scope: ArtifactScope, runId: string, options?: { cause?: unknown }) {
+    super(
+      `Run "${runId}" carries no "${scope}" artifact to walk for produced files — ` +
+        "it is null or absent from the results body.",
+      options,
+    );
+    this.name = "ScopeUnavailableError";
+    this.scope = scope;
+    this.runId = runId;
+  }
+}
+
+/**
+ * One reference could not be turned into a bounded response by `fetchArtifact`.
+ * `code` says why, in a closed vocabulary the download verdict shares for its
+ * per-item errors: the resolve route's own per-reference codes
+ * (`invalid_storage_uri`, `forbidden`), then the fetch boundary's —
+ * `unsupported_url`, `plain_http_refused`, `redirect_refused`, `store_refused`
+ * (a 401/403 from the object store), `not_found` (404/410), `store_error`
+ * (any other non-2xx), `too_large`, `timeout`, `network`. `status` is the
+ * store's HTTP status when one was received. `downloadArtifacts` never lets
+ * this escape: it becomes the item's `error`.
+ */
+export class ArtifactFetchError extends ArtifactOperationError {
+  public readonly uri: string;
+  public readonly code: string;
+  public readonly status: number | undefined;
+
+  constructor(
+    message: string,
+    uri: string,
+    code: string,
+    status?: number,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ArtifactFetchError";
+    this.uri = uri;
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * The resolve route refused the caller's credential (`401` / `403`) during a
+ * `downloadArtifacts` call. No further reference can be resolved with it, so
+ * the download stops — but the files already saved are real, and `verdict`
+ * carries the result as it stood: every item saved before the refusal, and
+ * the rest marked `aborted`. `status` is the route's status; the wrapped
+ * `ApiResponseError` is reachable via `cause`.
+ */
+export class ArtifactAuthenticationError extends ArtifactOperationError {
+  public readonly status: number;
+  public readonly verdict: DownloadArtifactsResult;
+
+  constructor(
+    message: string,
+    status: number,
+    verdict: DownloadArtifactsResult,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "ArtifactAuthenticationError";
+    this.status = status;
+    this.verdict = verdict;
   }
 }
 
