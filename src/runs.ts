@@ -160,8 +160,10 @@ export interface RunResults {
   pipeline_run_id: string;
   /**
    * The resolved main output content — always present for a completed run. Typed `unknown`
-   * because the content is polymorphic (a list output renders to a top-level array, a structured
-   * output to an object) and may be a valid falsy value (empty array, `0`); it is never absent.
+   * because the content is polymorphic: a structured output is an object of the concept's fields,
+   * a multiple output the envelope `{ items: [...] }` the runtime's `ListContent` serialises to,
+   * and a native is wrapped too (`{ text }`, `{ number }`). It may be a valid empty value — an
+   * empty `items`, an empty `text` — but it is never absent. See `docs/run-results.md`.
    */
   main_stuff: unknown;
   /**
