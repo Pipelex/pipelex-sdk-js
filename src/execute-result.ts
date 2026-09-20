@@ -76,8 +76,9 @@ export class PipelexExecuteResult implements DictRunResultExecute {
 
   /**
    * The resolved main output content, dug out of the working memory via `main_stuff_name`.
-   * Throws `MissingMainStuffError` if the completed run named no locatable main stuff. A
-   * falsy-but-present value (empty array, `0`) is a valid output and is returned as-is.
+   * Throws `MissingMainStuffError` if the completed run named no locatable main stuff. An
+   * empty-but-present value (`{ items: [] }`, `{ text: "" }`) is a valid output and is returned
+   * as-is.
    */
   get main_stuff(): unknown {
     const name = this.main_stuff_name;
