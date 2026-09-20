@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **`docs/run-results.md` names the envelope a multiple output arrives in**: the page said a list output arrives as a top-level array, when it arrives as `{ items: [...] }` — the runtime's `ListContent` serialised — so a reader who narrowed `main_stuff` as the page described wrote a parse that throws on every run whose output multiplicity is `variable` or `fixed`.
+- **`main_stuff`'s documented shape is the shape it has**: the TSDoc on `RunResults.main_stuff`, which ships in the type declarations and is what an editor shows on hover, and `docs/run-results.md` beside it, both said a list output arrives as a top-level array. It arrives as `{ items: [...] }`, the runtime's `ListContent` serialised, and every content type serialises to an object — natives included — so a guard written for a bare `""` or `0` never fires. The page now says to read `items` off the object and map the generated per-concept parser over its members, and warns that a schema whose fields are all optional swallows the envelope into `{}` rather than rejecting it, since the generated schemas are not strict.
 
 ## [v0.18.0] - 2026-09-20
 

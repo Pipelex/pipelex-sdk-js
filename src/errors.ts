@@ -289,8 +289,8 @@ export class RunFailedError extends PipelineRequestError {
  * hands consumers a non-null `RunResults.main_stuff`. This surfaces the contract violation when it
  * cannot: the hosted results endpoint answered a `200` with a null `main_stuff`, or a blocking
  * `execute` response named a `main_stuff_name` whose stuff is absent from the returned working
- * memory. `runId` locates the run. (A falsy-but-present main stuff — an empty array, `0` — is a
- * valid output and does NOT throw; only a genuinely absent one does.)
+ * memory. `runId` locates the run. (An empty-but-present main stuff — `{ items: [] }`, `{ text:
+ * "" }` — is a valid output and does NOT throw; only a genuinely absent one does.)
  */
 export class MissingMainStuffError extends PipelineRequestError {
   public readonly runId: string;
