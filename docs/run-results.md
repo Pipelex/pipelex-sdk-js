@@ -33,7 +33,7 @@ Against a bare runner the id identifies the call the runner just answered, but t
 
 `main_stuff` is the resolved content of the run's main output and is always present for a completed run. On the hosted path it is the `main_stuff.json` artifact; on the blocking path the SDK resolves it out of the returned working memory through the response's `main_stuff_name`. Both deliver the same content shape, so there is no shape-guessing and no path-dependent branch to write. A completed run that cannot deliver one throws `MissingMainStuffError` rather than handing back a half-filled result.
 
-It is typed `unknown` because the content is polymorphic — a structured output arrives as an object, a list output as a top-level array — and because it may legitimately be a falsy value such as `0` or `[]`. Narrow it where you read it, ideally through the types generated for the method rather than a hand-written cast.
+It is typed `unknown` because the content is polymorphic — a structured output arrives as an object, and so does a multiple one, as the envelope `{ items: [...] }` that the runtime's `ListContent` serialises to — and because it may legitimately be a falsy value such as `0` or an empty string. Narrow it where you read it, ideally through the types generated for the method rather than a hand-written cast. For a multiple output that means reading `items` off the object and mapping the generated per-concept parser over its members: codegen emits a parser per concept and no wrapper type for the envelope, so a parser applied to `main_stuff` whole rejects it, and an empty multiple output is `{ "items": [] }` rather than `[]`.
 
 ```ts
 const state = await client.getRunResult(runId);

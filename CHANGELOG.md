@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **`docs/run-results.md` names the envelope a multiple output arrives in**: the page said a list output arrives as a top-level array, when it arrives as `{ items: [...] }` — the runtime's `ListContent` serialised — so a reader who narrowed `main_stuff` as the page described wrote a parse that throws on every run whose output multiplicity is `variable` or `fixed`.
+
 ## [v0.18.0] - 2026-09-20
 
 ### Added
