@@ -68,6 +68,10 @@ await build({
   platform: "node",
   target: "node22",
   format: "esm",
+  // `undici` is reached only by the artifact fetch path (`src/artifacts.ts`), which
+  // the hook never runs; it is loaded there by a dynamic import, so leaving it
+  // external keeps the bundle from inlining the whole HTTP client for nothing.
+  external: ["undici"],
   ...(toolsWasmAlias ? { alias: toolsWasmAlias } : {}),
   banner: { js: banner },
   legalComments: "none",

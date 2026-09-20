@@ -45,6 +45,33 @@ export type {
   PreparedInputs,
 } from "./prepare-inputs.js";
 
+// ── Artifacts (the download twin of input preparation) ──────────────
+// `collectArtifacts` and `artifactFilename` are pure and standalone; the network
+// operations (`resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`) are client
+// methods, and only their public types and bounds travel with the barrel.
+export {
+  collectArtifacts,
+  artifactFilename,
+  PIPELEX_STORAGE_SCHEME,
+  BULK_RESOLVE_MAX_URIS,
+  DEFAULT_ARTIFACT_MAX_BYTES,
+  DEFAULT_ARTIFACT_TIMEOUT_MS,
+  DEFAULT_DOWNLOAD_MAX_TOTAL_BYTES,
+  DEFAULT_DOWNLOAD_CONCURRENCY,
+} from "./artifacts.js";
+export type {
+  ArtifactItemError,
+  ArtifactScope,
+  BulkResolveStorageUrlsInput,
+  BulkResolvedStorageUrls,
+  DownloadArtifactsOptions,
+  DownloadArtifactsRequest,
+  DownloadArtifactsResult,
+  DownloadedArtifact,
+  FetchArtifactOptions,
+  ResolvedArtifact,
+} from "./artifacts.js";
+
 // ── Wire models (Dict concretes, validate surface, tools + build + crate routes) ──
 export type {
   DiagnosticKind,
@@ -209,4 +236,8 @@ export {
   UnsupportedUploadCapabilityError,
   UploadAuthenticationError,
   UploadTransportError,
+  ArtifactOperationError,
+  ArtifactAuthenticationError,
+  ArtifactFetchError,
+  ScopeUnavailableError,
 } from "./errors.js";
