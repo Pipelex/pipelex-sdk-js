@@ -36,7 +36,8 @@
     "prepare": "tsc"
   },
   "files": [
-    "dist/"
+    "dist/",
+    "docs/"
   ],
   "engines": {
     "node": ">=22.12.0"
