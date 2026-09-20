@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.18.2] - 2026-09-21
+
+### Fixed
+
+- **The documentation pages ship with the package**: `files` carried `dist/` alone, so every `docs/*.md` page stayed behind in the repository and the README's links to them resolved to nothing in an installed tree. `docs/` now joins the tarball, a developer who has only installed `@pipelex/sdk` reads the pages under `node_modules/@pipelex/sdk/docs/` at the version they are calling, and the README gained a table naming each page and what it covers.
+
 ## [v0.18.1] - 2026-09-20
 
 ### Fixed

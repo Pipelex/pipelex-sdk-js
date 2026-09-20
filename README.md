@@ -77,6 +77,20 @@ try {
 
 The full client surface is documented in [`docs/architecture.md`](./docs/architecture.md).
 
+## Documentation
+
+These pages ship inside the published package, so a reader who has only installed it opens them under `node_modules/@pipelex/sdk/docs/` — at the version being called, rather than whatever the repository's default branch says today. They are also browsable at [`Pipelex/pipelex-sdk-js/tree/main/docs`](https://github.com/Pipelex/pipelex-sdk-js/tree/main/docs), which is the address to give someone who has not installed the package.
+
+| Page | What it covers |
+| --- | --- |
+| [`docs/architecture.md`](./docs/architecture.md) | The whole client surface: the request pipeline, every route, the typed errors |
+| [`docs/run-results.md`](./docs/run-results.md) | Every field of `RunResults` — the run id as a durable handle, `main_stuff`, `working_memory`, `graph_spec`, the usage pair, produced files |
+| [`docs/run-usage.md`](./docs/run-usage.md) | What a run consumed, record by record, and `summarizeUsage` which folds them into one reading |
+| [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts` |
+| [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take |
+| [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
+| [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
+
 ## Develop
 
 ```bash
