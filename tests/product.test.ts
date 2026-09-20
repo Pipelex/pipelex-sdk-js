@@ -596,6 +596,75 @@ describe("storage", () => {
     expect(result).toEqual(resolved);
   });
 
+  it("POSTs /v1/resolve-storage-url/bulk with the list", async () => {
+    const client = makeClient();
+    const items = [
+      {
+        uri: "pipelex-storage://o/a.png",
+        url: "https://s3/a",
+        expires_at: "t",
+        content_type: "image/png",
+        error: null,
+      },
+      {
+        uri: "pipelex-storage://x/b",
+        url: null,
+        expires_at: null,
+        content_type: null,
+        error: { code: "forbidden", detail: "another org" },
+      },
+    ];
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, { items }));
+    const signal = new AbortController().signal;
+
+    const result = await client.resolveStorageUrls(
+      { uris: ["pipelex-storage://o/a.png", "pipelex-storage://x/b"] },
+      { signal },
+    );
+
+    const req = lastRequest(spy);
+    expect(req.url).toBe("http://localhost:8081/v1/resolve-storage-url/bulk");
+    expect(req.method).toBe("POST");
+    expect(req.body).toEqual({ uris: ["pipelex-storage://o/a.png", "pipelex-storage://x/b"] });
+    expect(result).toEqual({ items });
+  });
+
+  it("forwards the caller's signal to the bulk resolve request", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    let forwarded: boolean | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      controller.abort();
+      forwarded = init?.signal?.aborted;
+      return jsonResponse(200, { items: [] });
+    });
+
+    await client
+      .resolveStorageUrls({ uris: [] }, { signal: controller.signal })
+      .catch(() => undefined);
+
+    expect(forwarded).toBe(true);
+  });
+
+  it("resolveArtifacts rides the bulk route through the client", async () => {
+    const client = makeClient();
+    const items = [
+      {
+        uri: "pipelex-storage://o/a.png",
+        url: "https://s3/a",
+        expires_at: "t",
+        content_type: "image/png",
+        error: null,
+      },
+    ];
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, { items }));
+
+    const resolved = await client.resolveArtifacts(["pipelex-storage://o/a.png"]);
+
+    expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/resolve-storage-url/bulk");
+    expect(resolved).toEqual(items);
+  });
+
   it("POSTs /v1/upload with the base64 payload", async () => {
     const client = makeClient();
     const spy = vi

@@ -97,6 +97,19 @@ import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
 import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
 import type { PrepareInputsRequest, PreparedInputs } from "./prepare-inputs.js";
+import {
+  downloadArtifacts as downloadArtifactsImpl,
+  fetchArtifact as fetchArtifactImpl,
+  resolveArtifacts as resolveArtifactsImpl,
+} from "./artifacts.js";
+import type {
+  BulkResolveStorageUrlsInput,
+  BulkResolvedStorageUrls,
+  DownloadArtifactsRequest,
+  DownloadArtifactsResult,
+  FetchArtifactOptions,
+  ResolvedArtifact,
+} from "./artifacts.js";
 import { PipelexExecuteResult } from "./execute-result.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
@@ -1587,6 +1600,58 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestProduct("POST", "resolve-storage-url", input);
   }
 
+  /**
+   * Resolve a list of storage URIs in one request — `POST /v1/resolve-storage-url/bulk`,
+   * the single route applied to a list. One item per reference, in request order,
+   * duplicates included; a refused reference is a value on its item (`error`),
+   * and the request is a `200` whenever every reference got a verdict. At most
+   * `BULK_RESOLVE_MAX_URIS` references per call (a longer list is a `422`) —
+   * {@link resolveArtifacts} chunks a longer set. Served by the hosted platform
+   * only: a deployment without the route answers a `404` `ApiResponseError`.
+   */
+  async resolveStorageUrls(
+    input: BulkResolveStorageUrlsInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<BulkResolvedStorageUrls> {
+    return this.requestProduct("POST", "resolve-storage-url/bulk", input, options);
+  }
+
+  /**
+   * Resolve a whole list of `pipelex-storage://` references through the bulk
+   * route, chunked at its bound, answering one `ResolvedArtifact` per reference
+   * in request order with per-reference failure as a value. The reading layer of
+   * the artifact stack: pair it with `collectArtifacts` to mint fresh links for
+   * everything a run produced. See `docs/artifact-download.md`.
+   */
+  async resolveArtifacts(
+    uris: string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<ResolvedArtifact[]> {
+    return resolveArtifactsImpl(this, uris, options);
+  }
+
+  /**
+   * A bounded `Response` for one `pipelex-storage://` reference: resolved fresh,
+   * a timeout, redirects refused, the byte cap enforced mid-stream, no credentials
+   * forwarded, the store's headers untouched. What `downloadArtifacts` and a
+   * same-origin proxy share. See `docs/artifact-download.md`.
+   */
+  async fetchArtifact(uri: string, options?: FetchArtifactOptions): Promise<Response> {
+    return fetchArtifactImpl(this, uri, options);
+  }
+
+  /**
+   * Save a run's produced files under a directory — the download twin of
+   * {@link prepareInputs}, Node-only. Keyed on a `run_id` (the results are
+   * re-read, so it works days after the run) or a `RunResults` in hand; walks the
+   * `main_stuff` scope by default, `working_memory` on request; resolves every
+   * link fresh (never the embedded `public_url`); and returns a produced verdict,
+   * one entry per reference, errors as values. See `docs/artifact-download.md`.
+   */
+  async downloadArtifacts(request: DownloadArtifactsRequest): Promise<DownloadArtifactsResult> {
+    return downloadArtifactsImpl(this, request);
+  }
+
   /** Upload a base64 file — `POST /v1/upload`. */
   async upload(input: UploadInput): Promise<UploadedFile> {
     return this.requestProduct("POST", "upload", input);
@@ -1789,22 +1854,30 @@ function isValidBaseUrl(value: string): boolean {
  * `RunResults`. `response.main_stuff` resolves the main output out of the returned
  * working memory (and throws `MissingMainStuffError` if the run named no locatable
  * main stuff), so the durable and blocking paths hand back the same `main_stuff`
- * content shape — the same shape the hosted path relays from S3. The full working
- * memory rides `pipe_output` (blocking only).
+ * content shape — the same shape the hosted path relays from S3. The working memory, the graph
+ * pair and the usage pair are lifted off `pipe_output` onto their own fields, so
+ * `working_memory`, `graph_spec` and the usage pair read the same on both paths, and
+ * `pipe_output` itself still rides whole (blocking only). `graph_assembly_error` does not read
+ * the same yet: it is lifted here but absent from the hosted body.
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
-  // The usage pair rides `pipe_output` as Pipelex extension fields, beside `working_memory`
-  // — `DictPipeOutput` is extension-open, mirroring the Python model's `extra="allow"`, so
-  // it is read through the type rather than by casting the whole value away. Lifting the
-  // pair onto the two top-level fields is what makes `.tokens_usages` read the same on the
-  // blocking and durable paths. The remaining casts are unavoidable: an index-signature read
-  // is `unknown`, and this is unvalidated server JSON.
+  // `working_memory` is a declared field of `DictPipeOutput`, so it lifts without a cast. By the
+  // time it is read, `main_stuff` has already been resolved out of it, so a response that carries
+  // no working memory has thrown `MissingMainStuffError` above; the `?? null` keeps the blocking
+  // path's convention for an absent key all the same. The graph pair and the usage pair ride
+  // `pipe_output` as Pipelex extension fields, beside `working_memory` — `DictPipeOutput` is
+  // extension-open, mirroring the Python model's `extra="allow"`, so they are read through the
+  // type rather than by casting the whole value away. Lifting every one of them onto its
+  // top-level field is what makes `.working_memory`, `.graph_spec` and `.tokens_usages` read the
+  // same on the blocking and durable paths. The remaining casts are unavoidable: an
+  // index-signature read is `unknown`, and this is unvalidated server JSON.
   return {
     pipeline_run_id: response.pipeline_run_id,
     main_stuff: response.main_stuff,
-    // The bare-runner blocking `pipe_output` carries no graph artifact; the
-    // hosted graph_spec rides the durable `/v1/runs/{id}/results` payload.
-    graph_spec: null,
+    working_memory: response.pipe_output.working_memory ?? null,
+    graph_spec: response.pipe_output["graph_spec"] ?? null,
+    graph_assembly_error: (response.pipe_output["graph_assembly_error"] ??
+      null) as RunResults["graph_assembly_error"],
     pipe_output: response.pipe_output,
     tokens_usages: (response.pipe_output["tokens_usages"] ?? null) as RunResults["tokens_usages"],
     usage_assembly_error: (response.pipe_output["usage_assembly_error"] ??
