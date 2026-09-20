@@ -1789,21 +1789,27 @@ function isValidBaseUrl(value: string): boolean {
  * `RunResults`. `response.main_stuff` resolves the main output out of the returned
  * working memory (and throws `MissingMainStuffError` if the run named no locatable
  * main stuff), so the durable and blocking paths hand back the same `main_stuff`
- * content shape — the same shape the hosted path relays from S3. The full working
- * memory rides `pipe_output` (blocking only), and the graph and usage pairs are lifted off it
- * onto their own fields, so `graph_spec` and the usage pair read the same on both paths.
- * `graph_assembly_error` does not yet: it is lifted here but absent from the hosted body.
+ * content shape — the same shape the hosted path relays from S3. The working memory, the graph
+ * pair and the usage pair are lifted off `pipe_output` onto their own fields, so
+ * `working_memory`, `graph_spec` and the usage pair read the same on both paths, and
+ * `pipe_output` itself still rides whole (blocking only). `graph_assembly_error` does not read
+ * the same yet: it is lifted here but absent from the hosted body.
  */
 function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
-  // The graph pair and the usage pair ride `pipe_output` as Pipelex extension fields, beside
-  // `working_memory` — `DictPipeOutput` is extension-open, mirroring the Python model's
-  // `extra="allow"`, so they are read through the type rather than by casting the whole value
-  // away. Lifting both pairs onto their top-level fields is what makes `.graph_spec` and
-  // `.tokens_usages` read the same on the blocking and durable paths. The remaining casts are
-  // unavoidable: an index-signature read is `unknown`, and this is unvalidated server JSON.
+  // `working_memory` is a declared field of `DictPipeOutput`, so it lifts without a cast. By the
+  // time it is read, `main_stuff` has already been resolved out of it, so a response that carries
+  // no working memory has thrown `MissingMainStuffError` above; the `?? null` keeps the blocking
+  // path's convention for an absent key all the same. The graph pair and the usage pair ride
+  // `pipe_output` as Pipelex extension fields, beside `working_memory` — `DictPipeOutput` is
+  // extension-open, mirroring the Python model's `extra="allow"`, so they are read through the
+  // type rather than by casting the whole value away. Lifting every one of them onto its
+  // top-level field is what makes `.working_memory`, `.graph_spec` and `.tokens_usages` read the
+  // same on the blocking and durable paths. The remaining casts are unavoidable: an
+  // index-signature read is `unknown`, and this is unvalidated server JSON.
   return {
     pipeline_run_id: response.pipeline_run_id,
     main_stuff: response.main_stuff,
+    working_memory: response.pipe_output.working_memory ?? null,
     graph_spec: response.pipe_output["graph_spec"] ?? null,
     graph_assembly_error: (response.pipe_output["graph_assembly_error"] ??
       null) as RunResults["graph_assembly_error"],
