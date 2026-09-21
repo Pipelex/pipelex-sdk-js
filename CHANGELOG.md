@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
+
 ## [v0.18.2] - 2026-09-21
 
 ### Fixed
