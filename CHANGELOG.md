@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.20.0] - 2026-09-22
+
+### Highlights
+
+**A run now describes its own data.** Beside the graph it already carried, `RunResults` hands back the three I/O artifacts that say what that graph's nodes hold — which is what lets a renderer show a run's actual values instead of the concepts' structure tables.
+
+### Added
+
+- **`RunResults` carries the three I/O artifacts that describe a run's data**: `pipe_io_contracts`, `input_form` and `output_form`, typed as the standard's `PipeIOContracts`, `InputForm` and `OutputForm` imported from `mthds/protocol` rather than restated, built over the library the run executed against and keyed by namespaced `pipe_ref`. They are what makes `@pipelex/mthds-ui`'s `GraphViewer` show a data node's value instead of the concept's structure table, which it does only when it holds `contracts` and `outputForm` together. The blocking path unwraps the runner's `pipe_io_artifacts` envelope onto the three fields so each has one accessor whichever path ran, while on the hosted path they read `undefined` until the platform relays the keys; documented on `docs/run-results.md`.
+- **`RunResults.pipe_io_artifacts_error`** — the artifacts' twin of `graph_assembly_error`: non-null when the runner's build of the three failed, which is the only thing that separates a broken build from a run that described no data. Lifted off `pipe_output` on the blocking path; absent on the hosted path until the platform relays it.
+
 ## [v0.19.0] - 2026-09-21
 
 ### Changed
