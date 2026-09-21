@@ -230,17 +230,21 @@ export interface PipelexValidationReport extends ValidationReport {
   /** Pipes the runtime may skip when an optional slot resolves absent. */
   liftable_pipes: LiftablePipeEntry[];
   /**
-   * The qualified `pipe_ref` a caller gets by omitting the pipe selector on the run
-   * and build routes — the bundle's declared `main_pipe` qualified by its domain and,
-   * for a `method_ref` package, the manifest's `main_pipe` the way the runner's
-   * `resolve_requested_pipe` reads it. `null` when the closure declares none or
-   * several.
+   * The qualified ref of the pipe a selector-less run of THIS request would execute —
+   * the primary blueprint's declared `main_pipe` qualified by its domain and, for a
+   * `method_ref` package, the manifest's `main_pipe` qualified against the closure the
+   * way the runner's `resolve_requested_pipe` reads it. `null` when the server
+   * determined no entry pipe: no blueprint declares a `main_pipe`, or the manifest
+   * names a pipe the closure does not declare or declares in several domains. It
+   * carries the RUN default, so a closure whose domains each declare a `main_pipe`
+   * gets the first declaring blueprint's ref rather than `null` — that is the pipe
+   * `execute` would take.
    *
-   * OPTIONAL because it is younger than the report: a server that predates it sends
-   * nothing, and a consumer that needs a default (`prepareInputs`) reads it when
-   * present and falls back to the opaque `bundle_blueprint.main_pipe`. It exists so
-   * that descriptor consumers stop reading a blueprint this SDK types opaque on
-   * purpose.
+   * Read it on PRESENCE, in three arms: a non-empty string is the default; a stated
+   * `null` is the server's verdict that there is none, and a consumer stops there
+   * rather than deriving one of its own; an ABSENT field means the server predates
+   * the field, and only then does a blueprint-derived default stand. That is the rule
+   * `prepareInputs` applies and the one `pipelex-mcp` states in its `SPEC.md`.
    */
   default_pipe_ref?: string | null;
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
