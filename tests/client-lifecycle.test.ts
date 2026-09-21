@@ -328,6 +328,69 @@ describe("PipelexApiClient against a bare runner (no run store)", () => {
     expect(result.graph_assembly_error).toBe("failed to assemble the graph for the run");
   });
 
+  it("unwraps the I/O artifacts envelope off the blocking pipe_output", async () => {
+    const client = makeClient();
+    // The runner carries the three in one envelope — they share a key set and are built
+    // together — where the hosted results body relays them as three siblings.
+    const pipeIoArtifacts = {
+      pipe_io_contracts: {
+        "x.greet": {
+          inputs: {},
+          output: {
+            concept_ref: "native.Text",
+            multiplicity: "single",
+            item_count: null,
+            optional: false,
+            json_schema: { type: "object", properties: { text: { type: "string" } } },
+          },
+        },
+      },
+      input_form: { "x.greet": { fields: [] } },
+      output_form: {
+        "x.greet": { field: { name: "text", kind: "prose", required: true } },
+      },
+    };
+    const body = executeBody("run-x");
+    body["pipe_output"] = {
+      ...(body["pipe_output"] as Record<string, unknown>),
+      pipe_io_artifacts: pipeIoArtifacts,
+      pipe_io_artifacts_error: null,
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // Unwrapped onto the hosted shape, so each artifact has one accessor whichever path ran.
+    expect(result.pipe_io_contracts).toEqual(pipeIoArtifacts.pipe_io_contracts);
+    expect(result.input_form).toEqual(pipeIoArtifacts.input_form);
+    expect(result.output_form).toEqual(pipeIoArtifacts.output_form);
+    expect(result.pipe_io_artifacts_error).toBeNull();
+  });
+
+  it("lifts an I/O artifacts build failure off the blocking pipe_output", async () => {
+    const client = makeClient();
+    const body = executeBody("run-x");
+    body["pipe_output"] = {
+      ...(body["pipe_output"] as Record<string, unknown>),
+      pipe_io_artifacts: null,
+      pipe_io_artifacts_error: "failed to build the I/O artifacts for the run",
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse(200, BARE_VERSION))
+      .mockResolvedValueOnce(jsonResponse(200, body));
+
+    const result = await client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] });
+
+    // A null envelope leaves all three null, and the error is what separates a broken build
+    // from a run that described nothing.
+    expect(result.pipe_io_contracts).toBeNull();
+    expect(result.input_form).toBeNull();
+    expect(result.output_form).toBeNull();
+    expect(result.pipe_io_artifacts_error).toBe("failed to build the I/O artifacts for the run");
+  });
+
   it("lifts the working memory off the blocking pipe_output", async () => {
     const client = makeClient();
     const body = executeBody("run-x");
