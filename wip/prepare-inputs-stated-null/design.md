@@ -102,4 +102,4 @@ Filed on the ledger, blocked by this decision, so that the consumers converge on
 - [x] `docs/input-preparation.md`: the pipe-selection section.
 - [x] `CHANGELOG.md`: the Changed and Fixed entries.
 - [x] `make check` and `make test` green; the e2e suite green against `https://api-dev.pipelex.com` (the repo has no `agent-test` target, and its unit target is `make test`).
-- [ ] `/rev`, then the pull request with `Closes L-260921-3e22c6` and `Closes L-260831-7c325d`.
+- [x] `/rev`, then the pull request with `Closes L-260921-3e22c6` and `Closes L-260831-7c325d`. Two passes: round 1 at profile 2 (cubic, codex:review, code-review) fixed one confirmed finding — the e2e header's missing pipelex-api >= 0.22.0 floor — and round 2 at profile 1 was clean, which converged the branch. Merged as pipelex-sdk-js#56, squashed onto `dev` at d565ce2; L-260831-7c325d closed with it, and L-260921-3e22c6 stays open until the person who took the decision closes it `decided`.
