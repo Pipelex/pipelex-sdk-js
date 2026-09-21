@@ -2,8 +2,12 @@
  * E2E suite for `prepareInputs` — exercised against a LIVE pipelex-api (no fetch mocks).
  *
  * Run with `make test-e2e` (or `npm run test:e2e`) against a runner that serves the
- * input-form descriptor (pipelex-api >= 0.18.0), and, for the `method_ref` cases, one
- * that resolves an address server-side (>= 0.21.0):
+ * input-form descriptor (pipelex-api >= 0.18.0), resolves an address server-side for the
+ * `method_ref` cases (>= 0.21.0), and reports the resolved entry pipe as
+ * `default_pipe_ref` for the two pipe-defaulting cases (>= 0.22.0). Below that last
+ * floor the field is absent, so the blueprint and single-pipe fallbacks stand and both
+ * of those cases fail — the `documents` one by refusing, the no-`main_pipe` one by
+ * preparing:
  *
  *     PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com npm run test:e2e
  *
@@ -29,7 +33,7 @@ import { InputPreparationError } from "../../src/errors.js";
 
 const BASE_URL = process.env.PIPELEX_E2E_BASE_URL ?? "http://localhost:8081";
 
-/** A published package whose entry pipe is named in METHODS.toml alone — see the last case. */
+/** A published package whose entry pipe is named in METHODS.toml alone — see the defaulting case. */
 const METHOD_REF = "github.com/Pipelex/methods/documents";
 const METHOD_REF_PIPE = "documents.extract_document_text";
 
@@ -47,6 +51,21 @@ inputs = { doc = "Document", note = "Text" }
 output = "Text"
 prompt = """
 Describe the document, taking $note into account.
+
+@doc
+"""
+`;
+
+/** One domain, one pipe, and no `main_pipe` — a closure a selector-less run cannot resolve. */
+const NO_MAIN_BUNDLE = `domain = "smoke_prepare_no_main"
+
+[pipe.describe_doc]
+type = "PipeLLM"
+description = "Describe a document"
+inputs = { doc = "Document" }
+output = "Text"
+prompt = """
+Describe the document.
 
 @doc
 """
@@ -82,15 +101,31 @@ describe("prepareInputs against a live runner", () => {
     expect(prepared.uploads).toHaveLength(0);
   });
 
-  it("refuses a manifest-only main_pipe package with no pipe_ref, naming the candidates", async () => {
+  it("defaults a manifest-only main_pipe package through the report's resolved default", async () => {
     // `Pipelex/methods/documents` declares its entry pipe in METHODS.toml, not in the
-    // bundle, and the validate report carries no manifest — so the helper cannot default
-    // and says so with the qualified refs listed. Pinned as behaviour until the report
-    // carries a typed resolved default (L-260829-0208c7), after which this call succeeds.
-    const failure = client.prepareInputs({ method_ref: METHOD_REF, inputs: {} });
+    // bundle, and the validate report carries no manifest — the runner qualifies the
+    // manifest's `main_pipe` server-side onto `default_pipe_ref`, so preparation
+    // defaults to the pipe a selector-less run would execute, with no `pipe_ref`.
+    const prepared = await client.prepareInputs({
+      method_ref: METHOD_REF,
+      inputs: { document: REMOTE_DOC },
+    });
+
+    expect(prepared.inputs).toEqual({ document: { url: REMOTE_DOC } });
+    expect(prepared.uploads).toHaveLength(0);
+  });
+
+  it("refuses a closure with one pipe and no main_pipe, which the server answers with a null default", async () => {
+    // The run route has no single-pipe fallback: a selector-less run of this bundle is
+    // refused, and a runner serving `default_pipe_ref` says so with a stated `null`.
+    // Preparation stops there instead of walking the only pipe declared.
+    const failure = client.prepareInputs({
+      files: [{ content: NO_MAIN_BUNDLE, source: "smoke_prepare_no_main.mthds" }],
+      inputs: { doc: REMOTE_DOC },
+    });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
     await expect(failure).rejects.toThrow(/pipe_ref/);
-    await expect(failure).rejects.toThrow(new RegExp(METHOD_REF_PIPE.replace(".", "\\.")));
+    await expect(failure).rejects.toThrow(/smoke_prepare_no_main\.describe_doc/);
   });
 });
