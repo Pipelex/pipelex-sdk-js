@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import type { InputForm, OutputForm, PipeIOContracts } from "mthds/protocol";
 import { PipelexApiClient } from "../src/client.js";
 import {
   ApiResponseError,
@@ -180,6 +181,54 @@ describe("PipelexApiClient.getRunResult", () => {
     if (relayed.state === "completed") {
       expect(relayed.result.graph_spec).toBeNull();
       expect(relayed.result.graph_assembly_error).toBe("failed to assemble the graph for the run");
+    }
+  });
+
+  it("reads the three I/O artifacts off the results body", async () => {
+    const client = makeClient();
+    // What the platform relays once it carries the keys: the validate report's own artifacts,
+    // keyed by `pipe_ref` over the library the run executed against. Then a run delivered before
+    // the relay existed, where all three are simply absent.
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-1",
+          main_stuff: { text: "hello" },
+          graph_spec: { nodes: [] },
+          pipe_io_contracts: CONTRACTS,
+          input_form: INPUT_FORM,
+          output_form: OUTPUT_FORM,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          pipeline_run_id: "run-2",
+          main_stuff: { text: "hello" },
+          graph_spec: { nodes: [] },
+        }),
+      );
+
+    const state = await client.getRunResult("run-1");
+    expect(state.state).toBe("completed");
+    if (state.state === "completed") {
+      expect(state.result.pipe_io_contracts).toEqual(CONTRACTS);
+      expect(state.result.output_form).toEqual(OUTPUT_FORM);
+      // The renderer takes the contracts and the output form together or neither, so the pair
+      // has to be keyed over the same pipe refs to be usable at all.
+      expect(Object.keys(state.result.output_form ?? {})).toEqual(
+        Object.keys(state.result.pipe_io_contracts ?? {}),
+      );
+      expect(state.result.input_form?.["x.greet"]?.fields[0]?.name).toBe("subject");
+    }
+
+    const preRelay = await client.getRunResult("run-2");
+    expect(preRelay.state).toBe("completed");
+    if (preRelay.state === "completed") {
+      // Absent, not null: the key is not on the wire yet, and a consumer that compares with
+      // `!= null` keeps working unchanged the day it is.
+      expect(preRelay.result.pipe_io_contracts).toBeUndefined();
+      expect(preRelay.result.input_form).toBeUndefined();
+      expect(preRelay.result.output_form).toBeUndefined();
     }
   });
 
@@ -459,6 +508,50 @@ describe("TokensUsageRecord", () => {
   });
 });
 
+/**
+ * The three I/O artifacts of one single-input pipe, as a run carries them — the validate
+ * report's own shapes, keyed by `pipe_ref` over the library the run executed against.
+ */
+const CONTRACTS: PipeIOContracts = {
+  "x.greet": {
+    inputs: {
+      subject: {
+        concept_ref: "native.Text",
+        json_schema: { type: "object", properties: { text: { type: "string" } } },
+        presence: "plain",
+        multiplicity: "single",
+        item_count: null,
+      },
+    },
+    output: {
+      concept_ref: "native.Text",
+      multiplicity: "single",
+      item_count: null,
+      optional: false,
+      json_schema: { type: "object", properties: { text: { type: "string" } } },
+    },
+  },
+};
+
+const INPUT_FORM: InputForm = {
+  "x.greet": {
+    fields: [
+      {
+        name: "subject",
+        kind: "prose",
+        concept_ref: "native.Text",
+        required: true,
+        presence: "plain",
+        gating: true,
+      },
+    ],
+  },
+};
+
+const OUTPUT_FORM: OutputForm = {
+  "x.greet": { field: { name: "text", kind: "prose", concept_ref: "native.Text", required: true } },
+};
+
 describe("RunResults graph fields", () => {
   it("keeps the graph null semantics distinct", () => {
     // A run with no graph and a run whose graph assembly broke both carry a null `graph_spec`.
@@ -474,5 +567,42 @@ describe("RunResults graph fields", () => {
     // `graph_assembly_error` is the ONLY field that tells the two apart.
     expect(noGraph.graph_assembly_error).toBeUndefined();
     expect(assemblyBroke.graph_assembly_error).toBe("failed to assemble the graph for the run");
+  });
+});
+
+describe("RunResults I/O artifact fields", () => {
+  it("types the three as the standard's artifacts, imported rather than restated", () => {
+    // Compile-time, and `npm run typecheck:test` is where they bite: a later widening back to
+    // `unknown` or a bare record would still pass vitest. Optional AND nullable — absent on a
+    // path that does not relay the key, null on a run that carries no artifacts.
+    expectTypeOf<RunResults["pipe_io_contracts"]>().toEqualTypeOf<
+      PipeIOContracts | null | undefined
+    >();
+    expectTypeOf<RunResults["input_form"]>().toEqualTypeOf<InputForm | null | undefined>();
+    expectTypeOf<RunResults["output_form"]>().toEqualTypeOf<OutputForm | null | undefined>();
+    expect(Object.keys(CONTRACTS)).toEqual(Object.keys(OUTPUT_FORM));
+  });
+
+  it("keeps the artifact null semantics distinct", () => {
+    // A run that described no data and a run whose artifact build broke both carry all three null.
+    const undescribed: RunResults = {
+      pipeline_run_id: "run-1",
+      main_stuff: {},
+      pipe_io_contracts: null,
+      input_form: null,
+      output_form: null,
+    };
+    const buildBroke: RunResults = {
+      ...undescribed,
+      pipe_io_artifacts_error: "failed to build the I/O artifacts for the run",
+    };
+
+    expect(undescribed.pipe_io_contracts).toBeNull();
+    // `pipe_io_artifacts_error` is the ONLY field that tells the two apart, exactly as
+    // `graph_assembly_error` does for the graph.
+    expect(undescribed.pipe_io_artifacts_error).toBeUndefined();
+    expect(buildBroke.pipe_io_artifacts_error).toBe(
+      "failed to build the I/O artifacts for the run",
+    );
   });
 });

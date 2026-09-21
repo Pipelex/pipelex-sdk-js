@@ -11,6 +11,10 @@ Two paths produce it. Against the hosted API the SDK starts a durable run and po
 | `working_memory` | `DictWorkingMemory \| null` | the `working_memory.json` artifact | lifted off `pipe_output` |
 | `graph_spec` | `unknown` | the `graphspec.json` artifact | lifted off `pipe_output` |
 | `graph_assembly_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
+| `pipe_io_contracts` | `PipeIOContracts \| null \| undefined` | the `pipe_io_contracts.json` artifact, once relayed | lifted off `pipe_output` |
+| `input_form` | `InputForm \| null \| undefined` | the `input_form.json` artifact, once relayed | lifted off `pipe_output` |
+| `output_form` | `OutputForm \| null \| undefined` | the `output_form.json` artifact, once relayed | lifted off `pipe_output` |
+| `pipe_io_artifacts_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
 | `tokens_usages` | `TokensUsageRecord[] \| null` | the `tokens_usages.json` artifact | lifted off `pipe_output` |
 | `usage_assembly_error` | `string \| null` | relayed | lifted off `pipe_output` |
 | `pipe_output` | `DictPipeOutput \| null \| undefined` | absent | the runner's whole native output |
@@ -103,7 +107,14 @@ export function RunGraph({ results }: { results: RunResults }) {
   if (!results.graph_spec) return null;
   return (
     <div style={{ position: "relative", height: "600px" }}>
-      <GraphViewer graphspec={results.graph_spec as GraphSpec} />
+      <GraphViewer
+        graphspec={results.graph_spec as GraphSpec}
+        // The I/O artifacts are what make a data node show its VALUE rather than the concept's
+        // structure table. The viewer takes `contracts` and `outputForm` together or neither.
+        contracts={results.pipe_io_contracts ?? undefined}
+        outputForm={results.output_form ?? undefined}
+        inputForm={results.input_form ?? undefined}
+      />
     </div>
   );
 }
@@ -132,6 +143,30 @@ if (results.graph_assembly_error != null) {
   // no graph: assembly was off, the artifact was not written, or (hosted) the error is not relayed
 }
 ```
+
+## `pipe_io_contracts`, `input_form` and `output_form` — what the graph's data is
+
+`graph_spec` carries the values a run produced; these three say what those values ARE. They are the validate report's own artifacts — the standard's `PipeIOContracts`, `InputForm` and `OutputForm`, imported from `mthds/protocol` rather than restated here, under the same ruling that governs them on the validate report ([`architecture.md`](./architecture.md#standard-artifacts-on-the-validate-report)) — built over the library the run actually executed against and keyed by namespaced `pipe_ref` (`domain.code`) over one shared key set. They are the same documents a local `pipelex` run writes beside its `graphspec.json` as `pipe_io_contracts.json`, `input_form.json` and `output_form.json`, so a consumer reads one thing whether the artifacts came from `/v1/validate`, from a results directory, or from a hosted run.
+
+The contract names each pipe's inputs and its output — the concept, the multiplicity, the JSON Schema of the payload — and the two form descriptors say what each of those slots IS as a typed field, which is what a renderer needs to lay a value out without inspecting it.
+
+**Read the contracts and the output form together.** `@pipelex/mthds-ui`'s `GraphViewer` gates a data node's value on holding both: given the pair it renders the payload, and given one or neither it falls back to the concept's structure table with no data tab. That is why they arrive as a set rather than one at a time. `input_form` is optional even then — it is what lets the method's own inputs show their values, since no pipe produced them and no output descriptor describes them.
+
+```ts
+const contracts = results.pipe_io_contracts;
+const outputForm = results.output_form;
+if (contracts && outputForm) {
+  const summarize = contracts["my_domain.summarize"];
+  console.log(summarize?.output.concept_ref); // e.g. "my_domain.Summary"
+  console.log(outputForm["my_domain.summarize"]?.field.kind); // e.g. "object"
+}
+```
+
+**When they are absent.** On the blocking path the SDK unwraps the runner's `pipe_io_artifacts` envelope — the runner carries the three together, since they share a key set and are built in one pass — onto these three fields, so each has one accessor whichever path ran. On the hosted path the platform does not relay the keys yet, so all three read `undefined` there today; they are declared ahead of that relay so consumers have one accessor to write against and nothing breaks the day the wire gains them. They read `null` when the run described no data at all — graph tracing off, or a runtime older than the artifacts. Compare with `!= null` rather than `=== null`, exactly as with the graph pair.
+
+## `pipe_io_artifacts_error` — why there is no description
+
+`pipe_io_artifacts_error` is the three artifacts' twin of `graph_assembly_error`, and it exists for the same reason: three null artifacts alone cannot say whether the run described no data or whether building the description broke. When the runner's build failed, this field carries its message. It is lifted off `pipe_output` on the blocking path and, like `graph_assembly_error`, the hosted results body relays no such key — so treat `undefined` there as "no information", not as "the build succeeded".
 
 ## `tokens_usages` and `usage_assembly_error` — what the run consumed
 
