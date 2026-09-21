@@ -79,12 +79,15 @@ A `method_ref` makes the server clone a repository first; `validate` needs no sp
 `validate` has no pipe selector — its report describes every pipe, keyed by qualified `pipe_ref` — so the helper picks one, in this order:
 
 1. **`pipe_ref` when given.** Qualified-only: `domain.pipe_code`. A bare code, or a ref the method does not declare, is an `InputPreparationError` listing the qualified refs — one step to fix. The helper never grows a searched `pipe_code`: search is a run-route affordance, and the descriptor is keyed by qualified refs. An `alias->domain.pipe_code` ref is refused for a different reason: the descriptor describes the method's *own* pipes, and an alias names one belonging to a dependency package, which the report never carries a descriptor for — the run route takes such a ref, preparation cannot.
-2. **The report's typed resolved default** (`default_pipe_ref`), once the runner serves it: the ref a caller gets by omitting the selector on the run and build routes, manifest-aware for a fetched package. Read when present; a server that predates it sends nothing.
-3. **The bundle's declared `main_pipe`**, read defensively from the opaque `bundle_blueprint` and qualified by its `domain`.
-4. **The single pipe**, when the method declares exactly one.
+2. **The report's resolved default** (`default_pipe_ref`): the qualified ref of the pipe a selector-less run of *this same method* would execute, manifest-aware for a fetched package. It is read on the field's **presence**, never on its truthiness, and has three arms:
+   - a **non-empty string** is the default and is walked — and if the descriptor does not describe it, preparation refuses rather than falling through, since one report keyed by one pipe set naming a pipe it does not describe is the report contradicting itself;
+   - a **stated `null`** — or any stated value that is not a non-empty string — is the server saying it determined no entry pipe: no blueprint declares a `main_pipe`, or the package manifest names a pipe the closure does not declare or declares in several domains. A run naming no pipe is refused in exactly those cases, so preparation refuses too and asks for `pipe_ref`. Steps 3 and 4 are **not** consulted behind it;
+   - an **absent field** means the runner predates it, and only then do steps 3 and 4 stand.
+3. **The bundle's declared `main_pipe`** — behind an absent field only — read defensively from the opaque `bundle_blueprint` and qualified by its `domain`.
+4. **The single pipe** — behind an absent field only — when the method declares exactly one.
 5. Otherwise an `InputPreparationError` naming the candidates and asking for `pipe_ref`.
 
-> **The manifest-only `main_pipe` gap.** A published package may name its entry pipe in `METHODS.toml` alone — `github.com/Pipelex/methods/documents` and `.../image_generation` do — and the validate report never carries a manifest. Until step 2's field ships, such a package needs an explicit `pipe_ref`; the error lists the candidates, so the fix is one line.
+> **The manifest-only `main_pipe` gap is what step 2 closes.** A published package may name its entry pipe in `METHODS.toml` alone — `github.com/Pipelex/methods/documents` and `.../image_generation` do — and the validate report carries no manifest; the runner resolves the manifest server-side and states the result in `default_pipe_ref`, so such a package prepares with no `pipe_ref`. A manifest naming a pipe the closure does not declare, or declares in several domains, is the stated `null` instead: the run would fail on that code, and preparation says so before anything is uploaded.
 
 ## `getMethodClosure` — the explicit expansion utility
 

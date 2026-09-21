@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **`prepareInputs` stops at a stated `default_pipe_ref: null` (Breaking)**: a report stating the field as `null` is the server saying it determined no entry pipe — no blueprint declares a `main_pipe`, or the package manifest names a pipe the closure does not declare or declares in several domains — and a run naming no pipe is refused in exactly those cases, so preparation now refuses with an `InputPreparationError` naming the candidates instead of falling through to the bundle's `main_pipe` or to the only declared pipe. Pass `pipe_ref`. A stated ref the report's `input_form` does not describe is refused for the same reason, and only an ABSENT field — a runner predating it — still leaves the blueprint and single-pipe fallbacks standing.
+
+### Fixed
+
+- **`PipelexValidationReport.default_pipe_ref` is documented as what it carries**: its TSDoc, and the v0.17.0 entry announcing the field, both said `null` meant the closure declares "none or several" `main_pipe` — the build routes' stricter rule, never the one the API shipped. The field carries the RUN default, so a closure whose domains each declare a `main_pipe` gets the first declaring blueprint's ref — the pipe `execute` would take — and `null` means no entry pipe was determined at all. The three-arm reading a consumer applies (string / stated `null` / absent) is stated there and on `docs/input-preparation.md`.
+
 ## [v0.18.2] - 2026-09-21
 
 ### Fixed

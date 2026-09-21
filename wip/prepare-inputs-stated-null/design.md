@@ -1,5 +1,5 @@
 ---
-status: draft
+status: active
 item: L-260921-3e22c6
 ---
 
@@ -30,7 +30,7 @@ In both arms the caller cannot even compensate: `PreparedInputs` carries `inputs
 
 ## The decision
 
-**Option A from the item, proposed for ratification.** A stated `default_pipe_ref: null` is the server answering the question `selectPipeRef` asks, and reading an answer as silence is the defect. `prepareInputs` then always walks the pipe a selector-less run would execute, or refuses and names the candidates, and the SDK, the MCP's validate capability, the MCP's prepare mirror and the Python SDK sit on one rule instead of two that agree only in the common case.
+**Option A from the item, ratified on 2026-09-21 and implemented on this branch.** A stated `default_pipe_ref: null` is the server answering the question `selectPipeRef` asks, and reading an answer as silence is the defect. `prepareInputs` then always walks the pipe a selector-less run would execute, or refuses and names the candidates, and the SDK, the MCP's validate capability, the MCP's prepare mirror and the Python SDK sit on one rule instead of two that agree only in the common case.
 
 Option B, making `mthds_validate` lenient instead, would have the verdict advertise an input form and a `main_pipe` signature for a pipe the run refuses, which is the concern that put the three-arm rule in `validate.ts`. Option C, declaring the two questions different, leaves the disagreement the item exists to end, and the questions are not different: preparation exists to feed a run.
 
@@ -59,7 +59,7 @@ The existing "no single default pipe" refusal stays for the absent-field path wi
 
 - The TSDoc on `default_pipe_ref` in `src/models.ts` says `null` "when the closure declares none or several", the build strictness. It becomes the run semantic the server ships, with the three-arm reading as the consumer's contract.
 - The v0.17.0 changelog entry mirrors that wording; a changelog is history and is not rewritten, so the new entry states the corrected meaning and names the field's earlier description as the one being corrected.
-- `tests/e2e/prepare-inputs.e2e.ts` pins a refusal for `github.com/Pipelex/methods/documents` with no `pipe_ref`, with a comment saying the call succeeds once the field ships. It has shipped, and the case fails against any runner carrying the field, as that item's log records. The case flips to the pass it now is: the manifest's `main_pipe` resolves, the server states `documents.extract_document_text`, and preparation walks it.
+- `tests/e2e/prepare-inputs.e2e.ts` pins a refusal for `github.com/Pipelex/methods/documents` with no `pipe_ref`, with a comment saying the call succeeds once the field ships. It has shipped, and the case fails against any runner carrying the field, as that item's log records. The case flips to the pass it now is: the manifest's `main_pipe` resolves, the server states `documents.extract_document_markdown`, and preparation walks it.
 
 ## Tests
 
@@ -95,11 +95,11 @@ Filed on the ledger, blocked by this decision, so that the consumers converge on
 
 ## Implementation checklist
 
-- [ ] `src/prepare-inputs.ts`: the three-arm default in `selectPipeRef`, with the two new refusals.
-- [ ] `src/models.ts`: the `default_pipe_ref` TSDoc.
-- [ ] `tests/prepare-inputs.test.ts`: the cases above.
-- [ ] `tests/e2e/prepare-inputs.e2e.ts`: flip the `documents` refusal to a pass; add the single-pipe-no-`main_pipe` refusal.
-- [ ] `docs/input-preparation.md`: the pipe-selection section.
-- [ ] `CHANGELOG.md`: the Changed and Fixed entries.
-- [ ] `make check` and `make agent-test` green; `make test-e2e` against api-dev for the two live cases.
+- [x] `src/prepare-inputs.ts`: the three-arm default in `selectPipeRef`, with the two new refusals.
+- [x] `src/models.ts`: the `default_pipe_ref` TSDoc.
+- [x] `tests/prepare-inputs.test.ts`: the cases above.
+- [x] `tests/e2e/prepare-inputs.e2e.ts`: flip the `documents` refusal to a pass; add the single-pipe-no-`main_pipe` refusal.
+- [x] `docs/input-preparation.md`: the pipe-selection section.
+- [x] `CHANGELOG.md`: the Changed and Fixed entries.
+- [x] `make check` and `make test` green; the e2e suite green against `https://api-dev.pipelex.com` (the repo has no `agent-test` target, and its unit target is `make test`).
 - [ ] `/rev`, then the pull request with `Closes L-260921-3e22c6` and `Closes L-260831-7c325d`.
