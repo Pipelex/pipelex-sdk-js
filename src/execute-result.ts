@@ -1,12 +1,16 @@
 /**
- * The blocking `execute()` result — a `DictRunResultExecute` that resolves its `.main_stuff`.
+ * The blocking `execute()` result — a `DictRunResultExecute` that resolves its `.main_stuff` — and
+ * the public lift from that result onto `RunResults`.
  *
  * Kept in its own module (mirroring the Python SDK's `execute_result.py`) so the
- * resolved-output concern sits apart from the raw wire models in `models.ts`.
+ * resolved-output concern sits apart from the raw wire models in `models.ts`. The lift lives here
+ * for the same reason and in the same direction: it takes a `PipelexExecuteResult` and builds a
+ * `RunResults`, so it belongs on the side that already depends on `runs.ts`.
  */
 
 import type { DictPipeOutput, DictRunResultExecute, MethodProvenance } from "./models.js";
 import { MissingMainStuffError } from "./errors.js";
+import type { RunResults } from "./runs.js";
 
 /**
  * Keys the extension-copy loop must never assign from wire data:
@@ -97,4 +101,67 @@ export class PipelexExecuteResult implements DictRunResultExecute {
     }
     return stuff.content;
   }
+}
+
+/**
+ * Lift a blocking `execute()` result onto the lifecycle's `RunResults` — the same shape a durable
+ * run hands back.
+ *
+ * `execute()` returns the runner's whole typed envelope, where the usage pair, the graph pair, the
+ * working memory and the three I/O artifacts ride the extension-open `pipe_output` as Pipelex
+ * extension fields. This function is the one place that lifts each onto the declared field of the
+ * same name, so a caller driving the blocking route itself reaches `summarizeUsage`,
+ * `collectArtifacts` and every other run-results field exactly as it would on the hosted path,
+ * instead of re-reading `pipe_output` by hand. It is pure: no client, no network, no I/O.
+ * `startAndWaitForResult` calls it on its bare-runner fallback, which is the only caller inside
+ * the SDK.
+ *
+ * `response.main_stuff` resolves the main output out of the returned working memory (and throws
+ * `MissingMainStuffError` if the run named no locatable main stuff), so the durable and blocking
+ * paths hand back the same `main_stuff` content shape — the same shape the hosted path relays from
+ * S3. The working memory, the graph pair, the three I/O artifacts and the usage pair are lifted off
+ * `pipe_output` onto their own fields, so `working_memory`, `graph_spec`, the artifacts and the
+ * usage pair read the same on both paths, and `pipe_output` itself still rides whole (blocking
+ * only). `graph_assembly_error` and `pipe_io_artifacts_error` do not read the same yet: both are
+ * lifted here but absent from the hosted body.
+ */
+export function resultsFromExecute(response: PipelexExecuteResult): RunResults {
+  // `working_memory` is a declared field of `DictPipeOutput`, so it lifts without a cast. By the
+  // time it is read, `main_stuff` has already been resolved out of it, so a response that carries
+  // no working memory has thrown `MissingMainStuffError` above; the `?? null` keeps the blocking
+  // path's convention for an absent key all the same. The graph pair and the usage pair ride
+  // `pipe_output` as Pipelex extension fields, beside `working_memory` — `DictPipeOutput` is
+  // extension-open, mirroring the Python model's `extra="allow"`, so they are read through the
+  // type rather than by casting the whole value away. Lifting every one of them onto its
+  // top-level field is what makes `.working_memory`, `.graph_spec` and `.tokens_usages` read the
+  // same on the blocking and durable paths. The remaining casts are unavoidable: an
+  // index-signature read is `unknown`, and this is unvalidated server JSON.
+  //
+  // The runner carries the three I/O artifacts in one envelope (`PipeIOArtifacts`: they share a
+  // key set and are always built together), while the hosted results body relays them as three
+  // sibling artifacts. `RunResults` follows the hosted shape and this unwraps the envelope onto
+  // it, so `.pipe_io_contracts` and its two siblings read the same whichever path ran — the same
+  // lift `working_memory` and the graph get.
+  const pipeIoArtifacts = (response.pipe_output["pipe_io_artifacts"] ?? null) as {
+    pipe_io_contracts?: RunResults["pipe_io_contracts"];
+    input_form?: RunResults["input_form"];
+    output_form?: RunResults["output_form"];
+  } | null;
+  return {
+    pipeline_run_id: response.pipeline_run_id,
+    main_stuff: response.main_stuff,
+    working_memory: response.pipe_output.working_memory ?? null,
+    graph_spec: response.pipe_output["graph_spec"] ?? null,
+    graph_assembly_error: (response.pipe_output["graph_assembly_error"] ??
+      null) as RunResults["graph_assembly_error"],
+    pipe_io_contracts: pipeIoArtifacts?.pipe_io_contracts ?? null,
+    input_form: pipeIoArtifacts?.input_form ?? null,
+    output_form: pipeIoArtifacts?.output_form ?? null,
+    pipe_io_artifacts_error: (response.pipe_output["pipe_io_artifacts_error"] ??
+      null) as RunResults["pipe_io_artifacts_error"],
+    pipe_output: response.pipe_output,
+    tokens_usages: (response.pipe_output["tokens_usages"] ?? null) as RunResults["tokens_usages"],
+    usage_assembly_error: (response.pipe_output["usage_assembly_error"] ??
+      null) as RunResults["usage_assembly_error"],
+  };
 }

@@ -24,7 +24,7 @@ For the run's totals, do not add the records up by hand: [`summarizeUsage`](#sum
 The accessor is the same whichever path ran. `startAndWaitForResult` picks a path from the `GET /v1/version` handshake:
 
 - **Hosted (durable) path** — the records come from the runner's `tokens_usages.json` artifact, which `GET /v1/runs/{id}/results` unpacks onto the results body as top-level keys and relays verbatim.
-- **Bare runner (blocking) path** — the records ride the execute response's extension-open `pipe_output` as Pipelex extension fields; the SDK lifts them onto the same two top-level fields.
+- **Bare runner (blocking) path** — the records ride the execute response's extension-open `pipe_output` as Pipelex extension fields; the SDK lifts them onto the same two top-level fields. A caller that drives the blocking `execute()` itself applies that same lift with `resultsFromExecute(result)` (`src/execute-result.ts`), which hands back the `RunResults` this page's accessors are written against — there is no need to read the records off `pipe_output` by hand. See [`run-results.md`](./run-results.md).
 
 Because the runtime emits both surfaces through one helper, the two cannot structurally diverge.
 
