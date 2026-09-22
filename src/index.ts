@@ -32,8 +32,9 @@ export type {
 // Canonical parser: a stored method's polymorphic `MethodData.mthds` source → bundle contents.
 export { methodSourceToContents } from "./method-source.js";
 
-// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
-export { PipelexExecuteResult } from "./execute-result.js";
+// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff` — and
+// the lift from it onto `RunResults`, for a caller who drives `execute()` itself.
+export { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
 
 // ── Input preparation (client.uploadFile / client.prepareInputs — hosted upload capability) ──
 // The operations are client methods; only their public types travel with the barrel.

@@ -4,6 +4,16 @@ A completed run hands back one object, `RunResults` (`src/runs.ts`), and every f
 
 Two paths produce it. Against the hosted API the SDK starts a durable run and polls `GET /v1/runs/{id}/results`, where the platform relays the run's S3 artifacts verbatim. Against a bare `pipelex-api` runner, which has no run store, the SDK falls back to the blocking `POST /v1/execute` and maps the runner's native `pipe_output` onto the same shape, lifting the artifacts that ride it onto their own fields. `startAndWaitForResult` picks between the two from the `GET /v1/version` handshake, so a consumer does not choose.
 
+**Calling the blocking route yourself.** `execute()` returns a `PipelexExecuteResult` rather than a `RunResults`, because that object is the runner's whole typed envelope and nothing of it is thrown away. To read such a result through this page's fields, lift it: `resultsFromExecute(result)` (`src/execute-result.ts`) is the same mapping `startAndWaitForResult` applies on its fallback, exposed for the caller who drives `execute()` directly. It is pure — no client, no network — and what it buys is everything written against `RunResults`: `summarizeUsage`, `downloadArtifacts`, the graph pair and the three I/O artifacts, instead of re-reading `pipe_output` by hand.
+
+```ts
+import { resultsFromExecute, summarizeUsage } from "@pipelex/sdk";
+
+const executeResult = await client.execute({ pipe_code: "my_domain.my_pipe", mthds_contents: [source] });
+const results = resultsFromExecute(executeResult);
+console.log(results.main_stuff, summarizeUsage(results).total_cost_usd);
+```
+
 | field | type | hosted (durable) path | bare-runner (blocking) path |
 |---|---|---|---|
 | `pipeline_run_id` | `string` | the run store's id | the runner's own id for the call |
@@ -176,7 +186,7 @@ For the run's totals, call `summarizeUsage(results)` rather than adding the reco
 
 ## `pipe_output` — the runner's native output
 
-`pipe_output` is the bare runner's whole native output, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, `working_memory`, the graph and the usage pair are all lifted out of it onto fields that read the same on both paths, so a consumer that wants every named stuff of the run reads `working_memory`, not `pipe_output.working_memory`, and its code keeps working against the hosted API. What `pipe_output` adds is the runner's output exactly as it arrived. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away.
+`pipe_output` is the bare runner's whole native output, and it is present on the blocking path only — the hosted results body carries no such key, so on that path it reads `undefined`. It is supplementary: `main_stuff`, `working_memory`, the graph and the usage pair are all lifted out of it onto fields that read the same on both paths, so a consumer that wants every named stuff of the run reads `working_memory`, not `pipe_output.working_memory`, and its code keeps working against the hosted API. What `pipe_output` adds is the runner's output exactly as it arrived. It is typed `DictPipeOutput`, which is extension-open — the runner's Pipelex extension fields are reachable through the index signature without casting the whole value away. A caller holding an `execute()` result rather than a `RunResults` does that lift with `resultsFromExecute`, described at the top of this page, instead of reading the extension fields itself.
 
 ## Produced files
 
