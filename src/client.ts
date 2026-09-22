@@ -110,7 +110,7 @@ import type {
   FetchArtifactOptions,
   ResolvedArtifact,
 } from "./artifacts.js";
-import { PipelexExecuteResult } from "./execute-result.js";
+import { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
 //
@@ -1824,7 +1824,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       method_id: options.method_id ?? undefined,
       extra: options.extra ?? undefined,
     });
-    return mapRunResultToRunResults(response);
+    return resultsFromExecute(response);
   }
 }
 
@@ -1847,59 +1847,6 @@ function isValidBaseUrl(value: string): boolean {
   if (parsed.pathname !== "/" && parsed.pathname !== "") return false;
   if (parsed.username || parsed.password) return false;
   return !parsed.search && !parsed.hash;
-}
-
-/**
- * Map the protocol's blocking `POST /v1/execute` response onto the lifecycle's
- * `RunResults`. `response.main_stuff` resolves the main output out of the returned
- * working memory (and throws `MissingMainStuffError` if the run named no locatable
- * main stuff), so the durable and blocking paths hand back the same `main_stuff`
- * content shape — the same shape the hosted path relays from S3. The working memory, the graph
- * pair, the three I/O artifacts and the usage pair are lifted off `pipe_output` onto their own
- * fields, so `working_memory`, `graph_spec`, the artifacts and the usage pair read the same on
- * both paths, and `pipe_output` itself still rides whole (blocking only). `graph_assembly_error`
- * and `pipe_io_artifacts_error` do not read the same yet: both are lifted here but absent from
- * the hosted body.
- */
-function mapRunResultToRunResults(response: PipelexExecuteResult): RunResults {
-  // `working_memory` is a declared field of `DictPipeOutput`, so it lifts without a cast. By the
-  // time it is read, `main_stuff` has already been resolved out of it, so a response that carries
-  // no working memory has thrown `MissingMainStuffError` above; the `?? null` keeps the blocking
-  // path's convention for an absent key all the same. The graph pair and the usage pair ride
-  // `pipe_output` as Pipelex extension fields, beside `working_memory` — `DictPipeOutput` is
-  // extension-open, mirroring the Python model's `extra="allow"`, so they are read through the
-  // type rather than by casting the whole value away. Lifting every one of them onto its
-  // top-level field is what makes `.working_memory`, `.graph_spec` and `.tokens_usages` read the
-  // same on the blocking and durable paths. The remaining casts are unavoidable: an
-  // index-signature read is `unknown`, and this is unvalidated server JSON.
-  //
-  // The runner carries the three I/O artifacts in one envelope (`PipeIOArtifacts`: they share a
-  // key set and are always built together), while the hosted results body relays them as three
-  // sibling artifacts. `RunResults` follows the hosted shape and this unwraps the envelope onto
-  // it, so `.pipe_io_contracts` and its two siblings read the same whichever path ran — the same
-  // lift `working_memory` and the graph get.
-  const pipeIoArtifacts = (response.pipe_output["pipe_io_artifacts"] ?? null) as {
-    pipe_io_contracts?: RunResults["pipe_io_contracts"];
-    input_form?: RunResults["input_form"];
-    output_form?: RunResults["output_form"];
-  } | null;
-  return {
-    pipeline_run_id: response.pipeline_run_id,
-    main_stuff: response.main_stuff,
-    working_memory: response.pipe_output.working_memory ?? null,
-    graph_spec: response.pipe_output["graph_spec"] ?? null,
-    graph_assembly_error: (response.pipe_output["graph_assembly_error"] ??
-      null) as RunResults["graph_assembly_error"],
-    pipe_io_contracts: pipeIoArtifacts?.pipe_io_contracts ?? null,
-    input_form: pipeIoArtifacts?.input_form ?? null,
-    output_form: pipeIoArtifacts?.output_form ?? null,
-    pipe_io_artifacts_error: (response.pipe_output["pipe_io_artifacts_error"] ??
-      null) as RunResults["pipe_io_artifacts_error"],
-    pipe_output: response.pipe_output,
-    tokens_usages: (response.pipe_output["tokens_usages"] ?? null) as RunResults["tokens_usages"],
-    usage_assembly_error: (response.pipe_output["usage_assembly_error"] ??
-      null) as RunResults["usage_assembly_error"],
-  };
 }
 
 // The protocol's own request fields — `extra` is for extension args only.
