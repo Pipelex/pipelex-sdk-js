@@ -71,8 +71,10 @@ export async function uploadWithGrant(
   options: UploadWithGrantOptions = {},
 ): Promise<GrantedUpload> {
   const label = fileLabel(grant, file);
-  const target = storageTarget(grant, label);
   const { signal } = options;
+  // A caller's abort wins over a grant this would refuse, as it does over a failed request.
+  if (signal?.aborted) throw signal.reason;
+  const target = storageTarget(grant, label);
   let response: Response;
   try {
     response = await fetch(grant.url, {
@@ -178,19 +180,24 @@ function storageTarget(grant: UploadGrant, label: string): URL {
 }
 
 /**
- * A network failure described by the names and codes along its cause chain, which carry
- * no URL: "TypeError, caused by Error ENOTFOUND".
+ * A network failure described by the names and codes along its cause chain:
+ * "TypeError, caused by Error ENOTFOUND". Both are mutable, so each is kept only when it
+ * is a bare identifier, which cannot hold a URL.
  */
 function describeNetworkFailure(error: unknown): string {
   const parts: string[] = [];
   let current: unknown = error;
   for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const name = isIdentifier(current.name) ? current.name : "Error";
     const code = (current as { code?: unknown }).code;
-    const safeCode = typeof code === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code);
-    parts.push(safeCode ? `${current.name} ${code}` : current.name);
+    parts.push(isIdentifier(code) ? `${name} ${code}` : name);
     current = current.cause;
   }
   return parts.length > 0 ? parts.join(", caused by ") : "a non-Error rejection";
+}
+
+function isIdentifier(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(value);
 }
 
 /** Storage's own error, read off the S3 XML body. Either field is absent on another body. */

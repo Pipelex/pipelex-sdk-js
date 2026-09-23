@@ -319,6 +319,36 @@ describe("uploadWithGrant — transport failures", () => {
     expectNoSentinel(error);
   });
 
+  it("keeps an error name only when it is a bare identifier, since a wrapper may rename it", async () => {
+    const url = `https://pipelex-app-dev.s3.amazonaws.com/k.pdf?X-Amz-Signature=${SIGNATURE_SENTINEL}`;
+    const inner = Object.assign(new Error("socket closed"), { name: `SocketError ${url}` });
+    const failure = Object.assign(new Error("failed", { cause: inner }), {
+      name: `FetchError(${url})`,
+    });
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
+
+    const error = await uploadWithGrant({ ...GRANT, url }, pdfFile()).catch((e: unknown) => e);
+
+    expect((error as Error).message).toContain("(Error, caused by Error)");
+    expectNoSentinel(error);
+  });
+
+  it("lets an abort that came first win over a grant url it would refuse", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("fetch must not be called"));
+    const controller = new AbortController();
+    const reason = new Error("The user cancelled.");
+    controller.abort(reason);
+
+    const error = await uploadWithGrant({ ...GRANT, url: "/relative/k.pdf" }, pdfFile(), {
+      signal: controller.signal,
+    }).catch((e: unknown) => e);
+
+    expect(error).toBe(reason);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["carries user info", `https://user:pass@pipelex-app-dev.s3.amazonaws.com/k.pdf`],
     ["does not parse", `https://pipelex-app-dev.s3.amazonaws.com:99999/k.pdf`],
