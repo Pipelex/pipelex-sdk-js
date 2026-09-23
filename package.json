@@ -18,6 +18,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./upload": {
+      "types": "./dist/upload-grant.d.ts",
+      "import": "./dist/upload-grant.js",
+      "default": "./dist/upload-grant.js"
     }
   },
   "scripts": {

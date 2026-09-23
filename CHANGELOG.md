@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`requestUploadGrant`, and the browser-safe `@pipelex/sdk/upload` entry with `uploadWithGrant`**: `PipelexApiClient.requestUploadGrant({ filename, content_type, size })` calls `POST /v1/upload/grant` and returns an `UploadGrant` — a presigned, create-only `PUT` for one new object, its signed headers, the `pipelex-storage://` URI the object will carry, its expiry and the service's `max_bytes`. The standalone `uploadWithGrant(grant, file)` sends a `Blob` or `File` straight to storage with it and returns `{ uri }`, so a browser page that holds a file but no API key can store it without the bytes crossing a server or the API gateway's size ceiling; storage's refusals map onto `RejectedAssetError` (a used grant's `412`, a signature mismatch's `403`, an expired grant) and `UploadTransportError`. It ships from the new `@pipelex/sdk/upload` subpath, which reaches no Node builtin and bundles for the browser with nothing marked external, as well as from the main entry. Documented on `docs/input-preparation.md`.
+
 ## [v0.21.0] - 2026-09-23
 
 ### Added

@@ -97,9 +97,10 @@ export function guessContentType(filename: string): string {
  * being silently misread as text or a URL. `node:fs/promises` is imported
  * dynamically and guarded by `isNodeRuntime()`, so it is only *loaded* in Node.
  * Note: the dynamic import defers execution, not bundling — a browser-targeting
- * bundler still statically resolves this literal specifier, so browser consumers
- * must currently mark `node:*` external. Making the byte-only path bundle for the
- * browser out of the box is an open packaging decision (see wip/pr-16-review-notes.md).
+ * bundler still statically resolves this literal specifier, so a browser consumer
+ * of the main entry must mark `node:*` external. A page that stores a file uses the
+ * browser-safe `@pipelex/sdk/upload` entry (`upload-grant.ts`) instead, which never
+ * reaches this module; making the main entry browser-safe as a whole stays open.
  */
 export async function readLocalPath(path: string): Promise<Uint8Array> {
   if (!isNodeRuntime()) {
