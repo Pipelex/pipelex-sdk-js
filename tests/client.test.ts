@@ -1440,6 +1440,36 @@ describe("PipelexApiClient.validateFiles", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(await failure).toBe(walkAway);
     });
+
+    it("propagates the caller's reason when an abort cuts the body short with a generic AbortError", async () => {
+      // A browser answers the headers, then errors the body stream with its own
+      // AbortError when the request is aborted, not with the signal's reason.
+      vi.spyOn(globalThis, "fetch").mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode('{"is_valid":'));
+            init?.signal?.addEventListener("abort", () =>
+              stream.error(new DOMException("The user aborted a request.", "AbortError")),
+            );
+          },
+        });
+        return new Response(body, { status: 200 });
+      }) as typeof fetch);
+      const client = makeClient();
+
+      const controller = new AbortController();
+      const walkAway = new Error("caller walked away");
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { signal: controller.signal })
+        .catch((e: unknown) => e);
+
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      controller.abort(walkAway);
+      expect(await failure).toBe(walkAway);
+    });
   });
 });
 

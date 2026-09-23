@@ -6,6 +6,17 @@
 
 - **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
 
+## [v0.22.0] - 2026-09-23
+
+### Added
+
+- **`requestUploadGrant`, and the browser-safe `@pipelex/sdk/upload` entry with `uploadWithGrant`**: `PipelexApiClient.requestUploadGrant({ filename, content_type, size })` calls `POST /v1/upload/grant` and returns an `UploadGrant` — a presigned, create-only `PUT` for one new object, its signed headers, the `pipelex-storage://` URI the object will carry, its expiry and the service's `max_bytes`. The standalone `uploadWithGrant(grant, file)` sends a `Blob` or `File` straight to storage with it and returns `{ uri }`, so a browser page that holds a file but no API key can store it without the bytes crossing a server or the API gateway's size ceiling; storage's refusals map onto `RejectedAssetError` (a used grant's `412`, a signature mismatch's `403`, an expired grant) and `UploadTransportError` (a `5xx`, storage's `400 RequestTimeout`, no response, or a grant `url` that is not an absolute `http(s)` URL free of user info, refused before anything is sent). No error it throws carries the grant's URL, the bearer credential: an unreachable storage is described by its origin and the error names and codes, never by the runtime's message or error, which can name the whole URL. It ships from the new `@pipelex/sdk/upload` subpath, which reaches no Node builtin and bundles for the browser with nothing marked external, as well as from the main entry. Documented on `docs/input-preparation.md`.
+- **`RejectedAssetError.code` and `UploadTransportError.status`**: a rejected asset now says why in a closed `RejectedAssetCode` vocabulary — `too_large` for `uploadFile`'s `413`, and `grant_used`, `grant_expired`, `signature_mismatch`, `unsigned_header` or `store_refused` for storage refusing an upload with a grant — so a caller branches on a field rather than on the message. `UploadTransportError` carries the HTTP status when a response produced it. Both are set through the options bag, so existing constructor calls still compile.
+
+### Fixed
+
+- **A caller's abort now reaches it as its own reason in a browser too**: when an abort cut short a response body that was still arriving, the client rethrew the runtime's error, and Chrome and Firefox error that body with a generic `AbortError` rather than the signal's reason — so a caller comparing the rejection to its reason, or using `AbortSignal.timeout()`, saw the wrong error. The client's request pipeline and `fetchArtifact` (whose returned body is read after the call resolves) now throw `signal.reason` whenever the caller's signal has aborted. Node's `fetch` already passed the reason through.
+
 ## [v0.21.0] - 2026-09-23
 
 ### Added

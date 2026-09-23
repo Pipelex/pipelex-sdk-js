@@ -1,6 +1,6 @@
 {
   "name": "@pipelex/sdk",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "TypeScript SDK for the Pipelex hosted API — execute methods, manage runs, and call the product surface.",
   "license": "MIT",
   "repository": {
@@ -18,6 +18,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./upload": {
+      "types": "./dist/upload-grant.d.ts",
+      "import": "./dist/upload-grant.js",
+      "default": "./dist/upload-grant.js"
     }
   },
   "scripts": {

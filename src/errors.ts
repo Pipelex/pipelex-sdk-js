@@ -68,19 +68,45 @@ export class InvalidLocalSourceError extends InputPreparationError {
 }
 
 /**
- * The server refused the asset — most commonly a `413` past the service-defined
- * size cap. The SDK does not impose a client-side cap; it surfaces the server's
- * rejection. `filename` and `status` locate it.
+ * Why an asset was refused, in a closed vocabulary a caller branches on rather than
+ * on the message: `too_large` — past the service-defined size cap (`uploadFile`'s
+ * `413`); `grant_used` — the upload grant already wrote its object (`412`);
+ * `grant_expired` — the grant's validity window has passed; `signature_mismatch` —
+ * the file's size, content type or metadata differ from what the grant signed;
+ * `unsigned_header` — the request carried a storage header the grant did not sign;
+ * `store_refused` — any other refusal from storage.
+ */
+export type RejectedAssetCode =
+  | "too_large"
+  | "grant_used"
+  | "grant_expired"
+  | "signature_mismatch"
+  | "unsigned_header"
+  | "store_refused";
+
+/**
+ * The server or storage refused the asset — most commonly a `413` past the
+ * service-defined size cap, or storage refusing an upload with a grant. The SDK
+ * does not impose a client-side cap; it surfaces the refusal. `filename` and
+ * `status` locate it, and `code` says why: the SDK sets it on every one it raises,
+ * so it is undefined only on one a caller constructs without it.
  */
 export class RejectedAssetError extends InputPreparationError {
   public readonly filename: string;
   public readonly status: number;
+  public readonly code: RejectedAssetCode | undefined;
 
-  constructor(message: string, filename: string, status: number, options?: { cause?: unknown }) {
+  constructor(
+    message: string,
+    filename: string,
+    status: number,
+    options?: { cause?: unknown; code?: RejectedAssetCode },
+  ) {
     super(message, options);
     this.name = "RejectedAssetError";
     this.filename = filename;
     this.status = status;
+    this.code = options?.code;
   }
 }
 
@@ -108,15 +134,20 @@ export class UploadAuthenticationError extends InputPreparationError {
 }
 
 /**
- * A network or server fault reaching the upload route — an unreachable host, a
- * `5xx`, or any other unexpected `upload()` failure. It carries no `status` field
- * of its own: when a `5xx` produced it, the response and its status are reachable
- * on the wrapped `ApiResponseError` via `cause`.
+ * A network or server fault reaching the upload route or storage — an unreachable
+ * host, a `5xx`, a refused redirect, storage timing out on the body, or any other
+ * unexpected `upload()` failure. `status` is the HTTP status when a response
+ * produced it, and undefined when none did. From `uploadFile` the wrapped
+ * `ApiResponseError` is also reachable via `cause`; `uploadWithGrant` wraps no
+ * response, because storage's error body can echo the grant's credential.
  */
 export class UploadTransportError extends InputPreparationError {
-  constructor(message: string, options?: { cause?: unknown }) {
+  public readonly status: number | undefined;
+
+  constructor(message: string, options?: { cause?: unknown; status?: number }) {
     super(message, options);
     this.name = "UploadTransportError";
+    this.status = options?.status;
   }
 }
 
