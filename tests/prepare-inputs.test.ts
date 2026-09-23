@@ -828,6 +828,69 @@ describe("prepareInputs pipe selection", () => {
     expect(prepared.inputs.first_only).toBeInstanceOf(Uint8Array);
   });
 
+  it("refuses a stated null default, whatever the blueprint's main_pipe says", async () => {
+    // The manifest arm: the server qualified a package manifest's `main_pipe` against
+    // the closure and found no pipe to run, so a selector-less run would fail on the
+    // manifest's code. The bundle still declares a `main_pipe` of its own — walking it
+    // would prepare a pipe the run never takes, which is what the stated `null` forbids.
+    const client = makeClient(TWO_PIPES, {
+      report: {
+        default_pipe_ref: null,
+        bundle_blueprint: { domain: "demo", main_pipe: "first" },
+      },
+    });
+
+    const failure = prepareInputs(client, {
+      files: FILES,
+      inputs: { first_only: new Uint8Array([1]) },
+    });
+
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/no entry pipe/);
+    await expect(failure).rejects.toThrow(/pipe_ref/);
+    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
+  it("refuses a stated null default even when the method declares exactly one pipe", async () => {
+    // The run route has no single-pipe fallback either: a bundle declaring one pipe and
+    // no `main_pipe` is refused a selector-less run, so preparation does not succeed
+    // where the run would fail.
+    const client = makeClient([topLevel("photo", image())], {
+      report: { default_pipe_ref: null },
+    });
+
+    const failure = prepareInputs(client, { files: FILES, inputs: { photo: new Uint8Array([1]) } });
+
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/no entry pipe/);
+    expect(client.uploadCalls).toHaveLength(0);
+  });
+
+  it("lets an explicit pipe_ref outrank a stated null default", async () => {
+    const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: null } });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      pipe_ref: "demo.second",
+      inputs: { second_only: new Uint8Array([1]) },
+    });
+
+    expect(prepared.uploads).toHaveLength(1);
+  });
+
+  it("refuses a stated default ref the descriptor does not describe", async () => {
+    // One report, one pipe set: a default the `input_form` does not key is the report
+    // contradicting itself, and falling through would silently prepare another pipe.
+    const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: "demo.gone" } });
+
+    const failure = prepareInputs(client, { files: FILES, inputs: {} });
+
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/demo\.gone/);
+    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+  });
+
   it("falls back to the blueprint's main_pipe, qualified by its domain", async () => {
     const client = makeClient(TWO_PIPES, {
       report: { bundle_blueprint: { domain: "demo", main_pipe: "first" } },
@@ -875,11 +938,12 @@ describe("prepareInputs pipe selection", () => {
     await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
   });
 
-  it("refuses a manifest-only main_pipe package until the typed default ships", async () => {
+  it("refuses a manifest-only main_pipe package when the runner predates the typed default", async () => {
     // `github.com/Pipelex/methods/image_generation` names its entry pipe in
     // METHODS.toml alone: the bundle declares `main_pipe: null` and the validate
-    // report never carries a manifest. Pinned as behaviour — the caller passes
-    // `pipe_ref` — until L-260829-0208c7 puts the resolved default on the report.
+    // report carries no manifest. A runner older than `default_pipe_ref` sends the
+    // field not at all, so nothing names a default and the caller passes `pipe_ref`.
+    // Against a runner serving the field, the same package gets the resolved ref.
     const client = makeClient(TWO_PIPES, {
       report: { bundle_blueprint: { domain: "demo", main_pipe: null } },
     });

@@ -6,6 +6,40 @@
 
 - **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
 
+## [v0.21.0] - 2026-09-23
+
+### Added
+
+- **`User-Agent` on every API request, and the `appInfo` option**: `PipelexApiClient` now identifies itself as `pipelex-sdk-js/<version> <runtime>/<version> (<os>; <arch>)` on every request to the API, the `health()` probe included, following the workspace's client-identification convention, and sets no header in a browser; the fetch of a presigned object-store link is unchanged. `PipelexApiClientOptions.appInfo` (the exported `AppInfo`: `name`, optional `version`, `url` and `details`) puts the caller's own product token in front, and an invalid field is refused at construction with a `TypeError`. Documented on `docs/client-identification.md`.
+- **The bundled `.mthds` check hook names itself**: the hook's validate calls carry `pipelex-mthds-check/<version>` in front of the SDK's token, so the platform attributes them to the hook.
+
+## [v0.20.1] - 2026-09-22
+
+### Added
+
+- **`resultsFromExecute`, the lift from a blocking result onto `RunResults`, made public**: `resultsFromExecute(result)` turns a `PipelexExecuteResult` into the `RunResults` the durable path hands back, lifting the usage pair, the graph pair, the working memory and the three I/O artifacts off the runner's extension-open `pipe_output` onto their declared fields. It is the same mapping `startAndWaitForResult` has always applied on its bare-runner fallback, which until now was private: a caller driving the blocking `execute()` itself had to re-read `pipe_output`'s extension fields by hand to reach `summarizeUsage`, `collectArtifacts` or any parity field. `execute()` still returns `PipelexExecuteResult`, since that object carries the runner's whole typed envelope. The function is pure — no client, no network — and is documented in `docs/run-results.md` and `docs/run-usage.md`.
+
+## [v0.20.0] - 2026-09-22
+
+### Highlights
+
+**A run now describes its own data.** Beside the graph it already carried, `RunResults` hands back the three I/O artifacts that say what that graph's nodes hold — which is what lets a renderer show a run's actual values instead of the concepts' structure tables.
+
+### Added
+
+- **`RunResults` carries the three I/O artifacts that describe a run's data**: `pipe_io_contracts`, `input_form` and `output_form`, typed as the standard's `PipeIOContracts`, `InputForm` and `OutputForm` imported from `mthds/protocol` rather than restated, built over the library the run executed against and keyed by namespaced `pipe_ref`. They are what makes `@pipelex/mthds-ui`'s `GraphViewer` show a data node's value instead of the concept's structure table, which it does only when it holds `contracts` and `outputForm` together. The blocking path unwraps the runner's `pipe_io_artifacts` envelope onto the three fields so each has one accessor whichever path ran, while on the hosted path they read `undefined` until the platform relays the keys; documented on `docs/run-results.md`.
+- **`RunResults.pipe_io_artifacts_error`** — the artifacts' twin of `graph_assembly_error`: non-null when the runner's build of the three failed, which is the only thing that separates a broken build from a run that described no data. Lifted off `pipe_output` on the blocking path; absent on the hosted path until the platform relays it.
+
+## [v0.19.0] - 2026-09-21
+
+### Changed
+
+- **`prepareInputs` stops at a stated `default_pipe_ref: null` (Breaking)**: a report stating the field as `null` is the server saying it determined no entry pipe — no blueprint declares a `main_pipe`, or the package manifest names a pipe the closure does not declare or declares in several domains — and a run naming no pipe is refused in exactly those cases, so preparation now refuses with an `InputPreparationError` naming the candidates instead of falling through to the bundle's `main_pipe` or to the only declared pipe. Pass `pipe_ref`. A stated ref the report's `input_form` does not describe is refused for the same reason, and only an ABSENT field — a runner predating it — still leaves the blueprint and single-pipe fallbacks standing.
+
+### Fixed
+
+- **`PipelexValidationReport.default_pipe_ref` is documented as what it carries**: its TSDoc, and the v0.17.0 entry announcing the field, both said `null` meant the closure declares "none or several" `main_pipe` — the build routes' stricter rule, never the one the API shipped. The field carries the RUN default, so a closure whose domains each declare a `main_pipe` gets the first declaring blueprint's ref — the pipe `execute` would take — and `null` means no entry pipe was determined at all. The three-arm reading a consumer applies (string / stated `null` / absent) is stated there and on `docs/input-preparation.md`.
+
 ## [v0.18.2] - 2026-09-21
 
 ### Fixed

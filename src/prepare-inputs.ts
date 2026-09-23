@@ -365,10 +365,21 @@ async function fetchSignature(
 }
 
 /**
- * Pick the pipe whose descriptor guides the walk, in the order `docs/input-preparation.md`
- * documents: an explicit qualified `pipe_ref`, then the report's typed resolved
- * default, then the bundle's declared `main_pipe`, then the single pipe — else an
- * error naming the candidates.
+ * Pick the pipe whose descriptor guides the walk, in the order
+ * `docs/input-preparation.md` documents: an explicit qualified `pipe_ref`, then
+ * the report's resolved default — read on the field's PRESENCE, never on its
+ * truthiness — and, behind an ABSENT field only, the bundle's declared
+ * `main_pipe` then the single pipe.
+ *
+ * `default_pipe_ref` answers the very question this function asks: the qualified
+ * ref of the pipe a selector-less run of THIS request would execute. A stated
+ * `null` is that answer too — the server determined no entry pipe, and such a run
+ * is refused by the run route — so reading it as silence and falling through would
+ * prepare a pipe the run will not execute. Only a field the report does not carry
+ * at all (a runner predating it) leaves the blueprint and single-pipe arms
+ * standing. A JSON body cannot carry an own property holding `undefined`, and the
+ * parsed body is handed through untouched, so strict `=== undefined` is the whole
+ * absence test.
  */
 function selectPipeRef(
   report: PipelexValidationReport,
@@ -393,13 +404,35 @@ function selectPipeRef(
     return requested;
   }
 
-  // The typed resolved default, when the runner serves it (manifest-aware for a
-  // `method_ref` package, which is why it outranks the blueprint read below).
-  const typedDefault = nonEmptyString(report.default_pipe_ref);
-  if (typedDefault !== undefined && typedDefault in inputForm) return typedDefault;
+  // The resolved default, when the runner serves the field at all (manifest-aware
+  // for a `method_ref` package, which is why it outranks the blueprint read below).
+  if (report.default_pipe_ref !== undefined) {
+    const statedDefault = nonEmptyString(report.default_pipe_ref);
+    if (statedDefault === undefined) {
+      // A stated `null` — or anything else that is not a non-empty string — is the
+      // server's verdict, not a gap: no entry pipe was determined, so a run naming
+      // no pipe would not resolve one either. Neither fallback stands behind it.
+      throw new InputPreparationError(
+        `Cannot prepare inputs: the server determined no entry pipe for this method, so a run that ` +
+          `names no pipe would not resolve one (no \`main_pipe\` is declared, or the package manifest ` +
+          `names a pipe the closure does not declare or declares in several domains). Pass ` +
+          `\`pipe_ref\`. It declares: ${candidates}.`,
+      );
+    }
+    if (!(statedDefault in inputForm)) {
+      // The default and the descriptor come from one report keyed by one pipe set, so
+      // a miss is the report contradicting itself — falling through would silently
+      // prepare a different pipe than the one the run would execute.
+      throw new InputPreparationError(
+        `Cannot prepare inputs: the validate report names "${statedDefault}" as the default pipe, but ` +
+          `its \`input_form\` descriptor does not describe it. Pass \`pipe_ref\`. It declares: ${candidates}.`,
+      );
+    }
+    return statedDefault;
+  }
 
-  // `bundle_blueprint` is opaque transport in this SDK on purpose, so read it
-  // defensively and fall through rather than trust it.
+  // Behind an ABSENT field only. `bundle_blueprint` is opaque transport in this SDK
+  // on purpose, so read it defensively and fall through rather than trust it.
   const blueprintDefault = readBlueprintMainPipeRef(report.bundle_blueprint);
   if (blueprintDefault !== undefined && blueprintDefault in inputForm) return blueprintDefault;
 

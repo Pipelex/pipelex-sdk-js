@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.18.2";
+export { SDK_VERSION } from "./version.js";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -18,6 +18,7 @@ export * from "mthds/protocol";
 
 // ── Pipelex product client ───────────────────────────────────────────
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
+export type { AppInfo } from "./user-agent.js";
 export type {
   MthdsFile,
   PipelexApiRunExtensions,
@@ -32,8 +33,9 @@ export type {
 // Canonical parser: a stored method's polymorphic `MethodData.mthds` source → bundle contents.
 export { methodSourceToContents } from "./method-source.js";
 
-// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff`.
-export { PipelexExecuteResult } from "./execute-result.js";
+// The blocking `execute()` result — a `DictRunResultExecute` with a resolved `.main_stuff` — and
+// the lift from it onto `RunResults`, for a caller who drives `execute()` itself.
+export { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
 
 // ── Input preparation (client.uploadFile / client.prepareInputs — hosted upload capability) ──
 // The operations are client methods; only their public types travel with the barrel.
