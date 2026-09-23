@@ -682,6 +682,68 @@ describe("storage", () => {
     expect(req.body).toEqual({ filename: "f.pdf", data: "Zm9v", content_type: "application/pdf" });
     expect(result.uri).toBe("s3://x");
   });
+
+  it("POSTs /v1/upload/grant with the file's description and returns the grant as sent", async () => {
+    const client = makeClient();
+    const grant = {
+      uri: "pipelex-storage://org_1/assets/5f0c.pdf",
+      url: "https://pipelex-app-dev.s3.amazonaws.com/org_1/assets/5f0c.pdf?X-Amz-Signature=abc",
+      headers: { "If-None-Match": "*", "Content-Type": "application/pdf" },
+      expires_at: "2026-09-23T10:05:00Z",
+      max_bytes: 52428800,
+    };
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(200, grant));
+
+    const result = await client.requestUploadGrant({
+      filename: "report.pdf",
+      content_type: "application/pdf",
+      size: 5,
+    });
+
+    const req = lastRequest(spy);
+    expect(req.url).toBe("http://localhost:8081/v1/upload/grant");
+    expect(req.method).toBe("POST");
+    expect(req.body).toEqual({ filename: "report.pdf", content_type: "application/pdf", size: 5 });
+    expect(result).toEqual(grant);
+  });
+
+  it("forwards the caller's signal to the grant request", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    let forwarded: boolean | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      controller.abort();
+      forwarded = init?.signal?.aborted;
+      return jsonResponse(200, {});
+    });
+
+    await client
+      .requestUploadGrant({ filename: "a.pdf", size: 1 }, { signal: controller.signal })
+      .catch(() => undefined);
+
+    expect(forwarded).toBe(true);
+  });
+
+  it("surfaces an oversized declaration as a 413 ApiResponseError with its code", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(413, {
+        type: "about:blank",
+        title: "Payload too large",
+        status: 413,
+        detail: "Declared file size exceeds the 50 MiB limit.",
+        code: "payload_too_large",
+      }),
+    );
+
+    const error = await client
+      .requestUploadGrant({ filename: "big.pdf", size: 52428801 })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiResponseError);
+    expect((error as ApiResponseError).status).toBe(413);
+    expect((error as ApiResponseError).code).toBe("payload_too_large");
+  });
 });
 
 describe("runs list / update", () => {

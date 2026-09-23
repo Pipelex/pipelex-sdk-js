@@ -151,7 +151,7 @@ describe("uploadFile", () => {
     );
   });
 
-  it("maps a 413 to RejectedAssetError carrying the filename and status", async () => {
+  it("maps a 413 to RejectedAssetError carrying the filename, status and code", async () => {
     const client = throwingClient(apiError(413, "too big"));
     const bytes = new Uint8Array([1]);
 
@@ -159,6 +159,7 @@ describe("uploadFile", () => {
       name: "RejectedAssetError",
       filename: "big.pdf",
       status: 413,
+      code: "too_large",
     });
     await expect(uploadFile(client, bytes, { filename: "big.pdf" })).rejects.toBeInstanceOf(
       RejectedAssetError,
@@ -186,6 +187,7 @@ describe("uploadFile", () => {
     await expect(uploadFile(server, new Uint8Array([1]))).rejects.toBeInstanceOf(
       UploadTransportError,
     );
+    await expect(uploadFile(server, new Uint8Array([1]))).rejects.toMatchObject({ status: 500 });
 
     const unreachable = throwingClient(
       new ApiUnreachableError("down", "https://api.pipelex.com", "ECONNREFUSED"),
@@ -193,6 +195,9 @@ describe("uploadFile", () => {
     await expect(uploadFile(unreachable, new Uint8Array([1]))).rejects.toBeInstanceOf(
       UploadTransportError,
     );
+    await expect(uploadFile(unreachable, new Uint8Array([1]))).rejects.toMatchObject({
+      status: undefined,
+    });
   });
 
   it("wraps an unexpected non-transport error as UploadTransportError, preserving the cause", async () => {

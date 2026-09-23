@@ -495,6 +495,55 @@ describe("fetchArtifact", () => {
     );
   });
 
+  it("propagates the caller's reason when the fetch rejects with a generic AbortError", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    const reason = new DOMException("caller timeout", "TimeoutError");
+    // The abort lands once the fetch is in flight, and a browser rejects it with its
+    // own AbortError rather than the signal's reason.
+    mockFetch((_url, init) => {
+      setTimeout(() => controller.abort(reason), 10);
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener(
+          "abort",
+          () => reject(new DOMException("The user aborted a request.", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+
+    await expect(fetchArtifact(client, PICTURE_URI, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+  });
+
+  it("propagates the caller's reason when an abort cuts the body short with a generic AbortError", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    const reason = new DOMException("caller timeout", "TimeoutError");
+    // The headers arrived; the body is still streaming when the caller aborts, and a
+    // browser errors it with its own AbortError rather than the signal's reason.
+    mockFetch((_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(stream) {
+          stream.enqueue(PNG_BYTES.subarray(0, 4));
+          init.signal!.addEventListener(
+            "abort",
+            () => stream.error(new DOMException("The user aborted a request.", "AbortError")),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "image/png" } });
+    });
+
+    const response = await fetchArtifact(client, PICTURE_URI, { signal: controller.signal });
+    const reading = response.arrayBuffer();
+    controller.abort(reason);
+
+    await expect(reading).rejects.toBe(reason);
+  });
+
   it("reports a transport failure as a network fault", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));

@@ -78,6 +78,8 @@ import type {
   ResolvedStorageUrl,
   SubscriptionResponse,
   UpdateRunInput,
+  UploadGrant,
+  UploadGrantInput,
   UploadInput,
   UploadedFile,
   UserProfile,
@@ -456,8 +458,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     } catch (err) {
       // A caller-initiated abort (not our timeout) propagates untouched so
       // `waitForResult` callers can distinguish "I stopped waiting" from a
-      // network failure.
-      if (userSignal?.aborted) throw err;
+      // network failure. It is the signal's reason rather than `err`: a browser
+      // errors a body stream cut short by an abort with a generic AbortError.
+      if (userSignal?.aborted) throw userSignal.reason;
       // undici (Node fetch) wraps DNS/connect/TLS failures as
       // `TypeError("fetch failed")` with the system error attached as `cause`.
       // Our timeout aborts the controller with a "TimeoutError" DOMException.
@@ -1679,6 +1682,29 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /** Upload a base64 file — `POST /v1/upload`. */
   async upload(input: UploadInput): Promise<UploadedFile> {
     return this.requestProduct("POST", "upload", input);
+  }
+
+  /**
+   * Request a grant to upload one file straight to storage — `POST /v1/upload/grant`.
+   * `upload` for a caller that holds the bytes but not this client's credential, such
+   * as a browser page: the credential-holding side asks for the grant, hands it over,
+   * and the holder of the bytes sends them with `uploadWithGrant`, from the
+   * browser-safe `@pipelex/sdk/upload` entry. The bytes cross neither this client nor
+   * the API gateway, so the gateway's request quota does not cap the file below the
+   * service's own limit (`max_bytes`).
+   *
+   * The grant describes one new object: its `uri` exists once the `PUT` succeeds, and
+   * not before. It is create-only and short-lived, and it is a bearer capability, so
+   * keep it out of logs. The route never replays a grant: ask again for a new one
+   * rather than retrying. A declared `size` over the cap is a `413` `ApiResponseError`
+   * (`code` `payload_too_large`); a deployment without the route answers a `404`. See
+   * `docs/input-preparation.md`.
+   */
+  async requestUploadGrant(
+    input: UploadGrantInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<UploadGrant> {
+    return this.requestProduct("POST", "upload/grant", input, options);
   }
 
   /**
