@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`User-Agent` on every API request, and the `appInfo` option**: `PipelexApiClient` now identifies itself as `pipelex-sdk-js/<version> <runtime>/<version> (<os>; <arch>)` on every request to the API, the `health()` probe included, following the workspace's client-identification convention, and sets no header in a browser; the fetch of a presigned object-store link is unchanged. `PipelexApiClientOptions.appInfo` (the exported `AppInfo`: `name`, optional `version`, `url` and `details`) puts the caller's own product token in front, and an invalid field is refused at construction with a `TypeError`. Documented on `docs/client-identification.md`.
+- **The bundled `.mthds` check hook names itself**: the hook's validate calls carry `pipelex-mthds-check/<version>` in front of the SDK's token, so the platform attributes them to the hook.
+
 ## [v0.20.1] - 2026-09-22
 
 ### Added

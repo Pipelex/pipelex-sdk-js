@@ -75,6 +75,15 @@ try {
 }
 ```
 
+### Client identification
+
+Every request to the API carries a `User-Agent` such as `pipelex-sdk-js/0.21.0 node/22.4.0 (darwin; arm64)`, which the hosted platform reads to attribute traffic to a client surface in its analytics. A program built on the SDK can put its own name in front with `appInfo`, shaped like Stripe's option of that name; an invalid field is refused at construction with a `TypeError`. In a browser the SDK sets no `User-Agent`. The convention is the workspace spec `docs/specs/client-identification.md`, and [`docs/client-identification.md`](./docs/client-identification.md) describes this SDK's side of it.
+
+```ts
+const client = new PipelexApiClient({ appInfo: { name: "acme-invoicer", version: "1.4.0" } });
+// User-Agent: acme-invoicer/1.4.0 pipelex-sdk-js/<version> node/<version> (<os>; <arch>)
+```
+
 The full client surface is documented in [`docs/architecture.md`](./docs/architecture.md).
 
 ## Documentation
@@ -90,6 +99,7 @@ These pages ship inside the published package, so a reader who has only installe
 | [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take |
 | [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
 | [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
+| [`docs/client-identification.md`](./docs/client-identification.md) | The `User-Agent` every API request carries, and `appInfo`, the option that puts your program's name in front of it |
 
 ## Develop
 
