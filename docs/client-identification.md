@@ -43,7 +43,7 @@ const client = new PipelexApiClient({ appInfo });
 | `url` | no | A URL, rendered in the comment as `+url` |
 | `details` | no | Comment parameters, each a token or `token=value` (the value may be `name/version`), rendered before `+url` |
 
-It renders as `name/version (<details>; +url)`, dropping the `/version` and the comment when they are empty. The constructor validates it and throws a `TypeError` naming the field when a value falls outside the grammar, and a `RangeError` when the whole header would exceed the spec's 512-character ceiling; the SDK never silently drops or rewrites a field. The header must never carry a secret, a user identifier, an email or a hostname.
+It renders as `name/version (<details>; +url)`, dropping the `/version` and the comment when they are empty. The constructor validates it and throws a `TypeError` naming the field when a value falls outside the grammar, and a `RangeError` when the whole header would exceed the spec's 512-character ceiling, in a browser as on a server although no header is sent there; the SDK never silently drops or rewrites a field. The header must never carry a secret, a user identifier, an email or a hostname.
 
 First-party programs name themselves the same way. The coding-agent validation hook bundled in `dist-hooks/check.mjs` constructs its client with `appInfo: { name: "pipelex-mthds-check", version: SDK_VERSION }` (`src/hooks/validate-client.ts`), so its requests read:
 

@@ -187,18 +187,22 @@ export function buildUserAgent(
   runtime: RuntimeInfo = detectRuntime(),
 ): string | undefined {
   if (appInfo !== undefined) validateAppInfo(appInfo);
-  if (runtime.kind === "browser") return undefined;
   const parts: string[] = [];
   if (appInfo !== undefined) parts.push(renderAppInfo(appInfo));
   parts.push(`${SDK_TOKEN_NAME}/${SDK_VERSION}`);
-  const runtimePart = renderRuntime(runtime);
-  if (runtimePart) parts.push(runtimePart);
+  if (runtime.kind === "server") {
+    const runtimePart = renderRuntime(runtime);
+    if (runtimePart) parts.push(runtimePart);
+  }
   const value = parts.join(" ");
+  // Checked before the browser return, so an `appInfo` refused on a server is refused
+  // in a browser too: the refusal is a property of the `appInfo`, not of the runtime.
   if (value.length > MAX_USER_AGENT_LENGTH) {
     throw new RangeError(
       `The User-Agent built from appInfo is ${value.length} characters; the ceiling is ` +
         `${MAX_USER_AGENT_LENGTH}. Shorten appInfo.details or appInfo.url.`,
     );
   }
+  if (runtime.kind === "browser") return undefined;
   return value;
 }

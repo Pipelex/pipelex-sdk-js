@@ -152,6 +152,13 @@ describe("buildUserAgent", () => {
     expect(() => buildUserAgent({ name: "bad name" }, { kind: "browser" })).toThrow(TypeError);
   });
 
+  it("still refuses an appInfo over the ceiling in a browser", () => {
+    const details = Array.from({ length: 60 }, (_, i) => `detail-${i}=value`);
+    expect(() => buildUserAgent({ name: "acme", details }, { kind: "browser" })).toThrow(
+      RangeError,
+    );
+  });
+
   it("refuses a header over the ceiling with a RangeError instead of truncating", () => {
     const details = Array.from({ length: 60 }, (_, i) => `detail-${i}=value`);
     expect(() => buildUserAgent({ name: "acme", details }, NODE)).toThrow(RangeError);
