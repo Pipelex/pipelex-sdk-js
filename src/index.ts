@@ -8,7 +8,7 @@
  */
 
 /** Package version. Kept in sync with `package.json` — enforced by `tests/index.test.ts`. */
-export const SDK_VERSION = "0.20.1";
+export { SDK_VERSION } from "./version.js";
 
 // ── Pure MTHDS Protocol surface (re-exported from the `mthds/protocol` subpath) ──
 // The standard's interface, wire models, request/options surface, abstract domain
@@ -18,6 +18,7 @@ export * from "mthds/protocol";
 
 // ── Pipelex product client ───────────────────────────────────────────
 export { PipelexApiClient, DEFAULT_API_BASE_URL } from "./client.js";
+export type { AppInfo } from "./user-agent.js";
 export type {
   MthdsFile,
   PipelexApiRunExtensions,

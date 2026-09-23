@@ -29,7 +29,6 @@
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
-import { PipelexApiClient } from "../client.js";
 import {
   decideAfterLint,
   decideAfterValidate,
@@ -44,6 +43,7 @@ import {
   type ValidateStage,
 } from "./check-core.js";
 import { gatherBundle } from "./bundle-gather.js";
+import { createHookClient } from "./validate-client.js";
 
 /** Per-request ceiling on the one network call — well under the hook's overall timeout. */
 const VALIDATE_TIMEOUT_MS = 10_000;
@@ -134,7 +134,7 @@ async function runValidateStage(filePath: string): Promise<ValidateStage> {
     return { status: "unavailable" };
   }
   try {
-    const client = new PipelexApiClient();
+    const client = createHookClient();
     // The client owns the ceiling: on timeout it aborts the fetch itself, so the
     // request does not keep running after the hook has given up on it.
     const result = await client.validateFiles(gathered.files, {

@@ -38,7 +38,7 @@ A re-run cannot finish a half-done release. Once the package is on npm the alrea
 ## Version files and the lock
 
 - **`package.json`** — the top-level `"version"`, with no `v` prefix. Read by `version-check.yml` and `publish.yml` alike through `node -p "require('./package.json').version"`, so it is the number everything else is compared against.
-- **`src/index.ts`** — `export const SDK_VERSION = "X.Y.Z";`, bumped in lockstep and with no `v` prefix. It is a hand-maintained literal on purpose, so the constant ships bundler-safe with no runtime file read in consumer code.
+- **`src/version.ts`** — `export const SDK_VERSION = "X.Y.Z";`, bumped in lockstep and with no `v` prefix. It is a hand-maintained literal on purpose, so the constant ships bundler-safe with no runtime file read in consumer code.
 - **The lock** — `npm install --package-lock-only` after the bump, which rewrites `package-lock.json`'s version fields without touching `node_modules`. Stop and report a failure rather than committing a stale lock.
 - **Also stamped:** nothing else. The number lives in those two files alone — no README badge, no literal in the docs. (`docs/architecture.md` and `src/models.ts` cite `pipelex-api` version numbers, and `src/client.ts` cites those alongside a historical note on this package's own `v0.10.0`, when `listRuns` changed shape — prose about the past, never a stamp to move.)
 
@@ -48,13 +48,13 @@ Run in the worktree, in this order:
 
 1. **`/contract-check`**, this repo's own skill — it compares the `PipelexApiClient` wire surface against the workspace-root specs `docs/specs/pipelex-mthds-protocol.md` and `docs/specs/pipelex-validation-api.md`, which it reaches as `../docs/specs/` and refuses to run without. From `_pipelex-sdk-js--release` that path resolves to the same directory it does from the main checkout, because every worktree sits flat at the workspace root. It matters most when the branch touched `src/client.ts`, `src/models.ts` or the barrel's protocol re-exports. Its verdict is advisory by design — it reports drift without presuming which side is wrong — so a finding is a decision to put to the user, not an automatic stop.
 2. **`make all`** — `clean check test`: `npm run check` is eslint, `prettier --check`, `tsc --noEmit`, the `tsconfig.test.json` typecheck, the `tsc` build and `depcruise --config .dependency-cruiser.cjs src`, and then `npx vitest run`. This is exactly what `quality-checks.yml` runs on the pull request, so a red one here is a red pull request there. Nothing in it rewrites a tracked file: the format gate is `prettier --check`, and its cure is `npm run format`, whose rewrites then join the release commit. Red blocks the release — fix the code, never loosen the target.
-3. **`make test` again, after the bump.** `tests/index.test.ts` asserts that `SDK_VERSION` matches `/^\d+\.\d+\.\d+$/` and equals `package.json`'s version, so the suite is the only thing that catches a `src/index.ts` left behind by the bump.
+3. **`make test` again, after the bump.** `tests/index.test.ts` asserts that `SDK_VERSION` matches `/^\d+\.\d+\.\d+$/` and equals `package.json`'s version, so the suite is the only thing that catches a `src/version.ts` left behind by the bump.
 
 `make test-e2e` is **not** a gate. It needs a live `pipelex-api` at `PIPELEX_E2E_BASE_URL` (default `http://localhost:8081`, read from the shell or `.env`), and it is excluded from `make test` and `make all` for that reason.
 
 ## The release commit
 
-`package.json`, `package-lock.json`, `src/index.ts`, `CHANGELOG.md`, and anything `npm run format` rewrote — staged by name.
+`package.json`, `package-lock.json`, `src/version.ts`, `CHANGELOG.md`, and anything `npm run format` rewrote — staged by name.
 
 ## CI on the release pull request
 

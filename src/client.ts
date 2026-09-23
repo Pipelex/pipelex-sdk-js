@@ -93,6 +93,8 @@ import {
   RunStillRunningError,
 } from "./errors.js";
 import { methodSourceToContents } from "./method-source.js";
+import { buildUserAgent } from "./user-agent.js";
+import type { AppInfo } from "./user-agent.js";
 import { uploadFile as uploadFileImpl } from "./upload.js";
 import type { UploadableAsset, UploadFileOptions, UploadRecord } from "./upload.js";
 import { prepareInputs as prepareInputsImpl } from "./prepare-inputs.js";
@@ -240,6 +242,15 @@ export interface PipelexApiClientOptions {
    * default.
    */
   baseUrl?: string;
+  /**
+   * The integrator's identity, placed before the SDK's own token in the
+   * `User-Agent` every request to the API carries (Stripe-style), e.g.
+   * `{ name: "acme-invoicer", version: "1.4.0" }` →
+   * `acme-invoicer/1.4.0 pipelex-sdk-js/<v> node/<v> (<os>; <arch>)`. Validated at
+   * construction: a field that is not an RFC 9110 token throws a `TypeError`. See
+   * the workspace spec `docs/specs/client-identification.md`.
+   */
+  appInfo?: AppInfo;
 }
 
 /** Low-level transport over a generic fetch, before status interpretation. */
@@ -338,8 +349,15 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   private readonly originUrl: string;
   /** Cached `/v1/version` handshake outcome — whether the durable lifecycle is served. */
   private lifecycleAvailable: boolean | undefined;
+  /**
+   * The `User-Agent` sent on every API request, computed once at construction;
+   * `undefined` in a browser, where no header may be set.
+   */
+  private readonly userAgent: string | undefined;
 
   constructor(options: PipelexApiClientOptions = {}) {
+    // First, so an invalid `appInfo` is refused before anything else is resolved.
+    this.userAgent = buildUserAgent(options.appInfo);
     this.apiKey = options.apiKey ?? process.env.PIPELEX_API_KEY;
     const normalizedBaseUrl = (
       options.baseUrl ??
@@ -372,6 +390,25 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // ── Transport ──────────────────────────────────────────────────────
 
   /**
+   * The headers of every request to the API — the one place they are built, so
+   * no request path can miss the `User-Agent` or the bearer. Requests to third
+   * parties (presigned object-store URLs) never go through here.
+   */
+  private requestHeaders(hasBody: boolean): Record<string, string> {
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.userAgent !== undefined) {
+      headers["User-Agent"] = this.userAgent;
+    }
+    if (this.apiKey) {
+      headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+    if (hasBody) {
+      headers["Content-Type"] = "application/json";
+    }
+    return headers;
+  }
+
+  /**
    * Issue one HTTP request and return the raw status/headers/body. Wraps
    * DNS/connect/TLS/timeout failures as `ApiUnreachableError`; a caller-driven
    * abort (Ctrl-C / agent walk-away) propagates as-is so the poll loop can stop
@@ -387,14 +424,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       signal?: AbortSignal;
     } = {},
   ): Promise<RawResponse> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.apiKey) {
-      headers["Authorization"] = `Bearer ${this.apiKey}`;
-    }
     const hasBody = options.body !== undefined;
-    if (hasBody) {
-      headers["Content-Type"] = "application/json";
-    }
+    const headers = this.requestHeaders(hasBody);
 
     const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const controller = new AbortController();
@@ -458,16 +489,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * `ApiResponseError` instead.
    */
   private async requestJson<T>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
-    const headers: Record<string, string> = { Accept: "application/json" };
-    if (this.apiKey) {
-      headers["Authorization"] = `Bearer ${this.apiKey}`;
-    }
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
-    }
     const res = await fetch(url, {
       method,
-      headers,
+      headers: this.requestHeaders(body !== undefined),
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
