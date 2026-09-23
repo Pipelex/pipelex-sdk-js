@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.22.0] - 2026-09-23
 
 ### Added
 
@@ -9,7 +9,7 @@
 
 ### Fixed
 
-- **A caller's abort now reaches it as its own reason in a browser too**: when an abort cut short a response body that was still arriving, the client rethrew the runtime's error, and Chrome and Firefox error that body with a generic `AbortError` rather than the signal's reason — so a caller comparing the rejection to its reason, or using `AbortSignal.timeout()`, saw the wrong error. The client's request pipeline, `fetchArtifact` (whose returned body is read after the call resolves) and `uploadWithGrant` now throw `signal.reason` whenever the caller's signal has aborted. Node's `fetch` already passed the reason through.
+- **A caller's abort now reaches it as its own reason in a browser too**: when an abort cut short a response body that was still arriving, the client rethrew the runtime's error, and Chrome and Firefox error that body with a generic `AbortError` rather than the signal's reason — so a caller comparing the rejection to its reason, or using `AbortSignal.timeout()`, saw the wrong error. The client's request pipeline and `fetchArtifact` (whose returned body is read after the call resolves) now throw `signal.reason` whenever the caller's signal has aborted. Node's `fetch` already passed the reason through.
 
 ## [v0.21.0] - 2026-09-23
 
