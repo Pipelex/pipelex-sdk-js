@@ -68,19 +68,20 @@ It sends the file as the raw body of a `PUT` to `grant.url`, with `grant.headers
 
 **Storage's refusals** map onto the input-preparation errors, so a caller that already handles `uploadFile` needs no new case:
 
-| Storage answers | Error | Meaning |
-| --- | --- | --- |
-| `2xx` | none | Stored; `uri` names the object. |
-| `412 PreconditionFailed` | `RejectedAssetError` | The grant was already used. A grant writes one object, once. |
-| `403 SignatureDoesNotMatch` | `RejectedAssetError` | The file's size, content type or metadata differ from what the grant signed. |
-| `403 AccessDenied`, "Request has expired" | `RejectedAssetError` | The grant expired. |
-| `403 AccessDenied`, headers "not signed" | `RejectedAssetError` | The request carried a storage header the grant did not sign. |
-| any other `4xx` | `RejectedAssetError` | Storage's own message is relayed. |
-| `5xx` | `UploadTransportError` | Whether the object was written is unknown: retrying with the same grant either stores it or answers the `412` of a used grant. |
-| a redirect | `UploadTransportError` | Refused, not followed. |
-| no response | `UploadTransportError` | Storage unreachable. In a browser a refused cross-origin request looks exactly like this, so the message also points at the page's CSP `connect-src`. |
+| Storage answers | Error | `code` | Meaning |
+| --- | --- | --- | --- |
+| `2xx` | none | | Stored; `uri` names the object. |
+| `412 PreconditionFailed` | `RejectedAssetError` | `grant_used` | The grant was already used. A grant writes one object, once — so after an earlier attempt that failed at storage, the grant's `uri` may already name the file. |
+| `403 SignatureDoesNotMatch` | `RejectedAssetError` | `signature_mismatch` | The file's size, content type or metadata differ from what the grant signed. |
+| `403 AccessDenied`, "Request has expired" | `RejectedAssetError` | `grant_expired` | The grant expired. |
+| `403 AccessDenied`, headers "not signed" | `RejectedAssetError` | `unsigned_header` | The request carried a storage header the grant did not sign. |
+| `400 RequestTimeout` | `UploadTransportError` | | Storage stopped waiting for the body and wrote nothing, so the same grant can be retried while it is valid. |
+| any other `4xx` | `RejectedAssetError` | `store_refused` | Storage's own message is relayed. |
+| `5xx` | `UploadTransportError` | | Whether the object was written is unknown: retrying with the same grant either stores it or answers the `412` of a used grant. |
+| a redirect | `UploadTransportError` | | Refused, not followed. |
+| no response | `UploadTransportError` | | Storage unreachable. In a browser a refused cross-origin request looks exactly like this, so the message also points at the page's CSP `connect-src`. |
 
-`RejectedAssetError.status` is storage's status, and its `filename` is the `File`'s name, or the object name the grant's `uri` ends in for a nameless `Blob`. Only S3's error code and message reach a message: its error body can echo the signed request, credential included, so it is never kept. A caller's abort propagates as the signal's own reason, unwrapped.
+`RejectedAssetError.code` is what a caller branches on — to request a new grant on `grant_used` or `grant_expired`, say — rather than the message or the status, since an expired grant and an unsigned header both answer `403 AccessDenied` and only S3's message tells them apart. Its `status` is storage's, and its `filename` is the `File`'s name, or the object name the grant's `uri` ends in for a nameless `Blob`. `UploadTransportError.status` is storage's status when storage answered, and undefined when it did not. Neither error wraps storage's response, and only S3's error code and message reach a message: its error body can echo the signed request, credential included, so it is never kept. A caller's abort propagates as the signal's own reason, unwrapped, including one that lands while storage's error body is still arriving.
 
 ### `prepareInputs` — signature-driven input preparation
 
@@ -220,10 +221,10 @@ The contract distinguishes these semantic outcomes, each a typed subclass of `In
 - **an unresolvable signature** (`InputPreparationError`) — the closure did not validate (`is_valid: false`, carrying the first error's message), the report carried no `input_form` descriptor, or no pipe could be chosen (an unknown or bare `pipe_ref`, or no default). A *no-verdict* condition from `/v1/validate` — a malformed selector, an unknown or foreign-org `method_id`, no package at the address, auth, a server fault — stays an `ApiResponseError` and propagates unchanged;
 - **empty method source** (`EmptyMethodSourceError`, carries `methodId`) — `getMethodClosure` found the stored method but its `mthds` source parses to nothing (the row exists, no runnable source yet). Distinct from the `getMethod` `404` for an unknown/foreign id, which stays an `ApiResponseError`. `prepareInputs` never raises it: it hands the id to the server, which answers a sourceless method with a `422`;
 - **invalid local source** (`InvalidLocalSourceError`) — missing, unreadable, or a path string outside Node;
-- **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error), or storage refused an upload with a grant (a used or expired grant, or a file that differs from what the grant signed — see the table above);
+- **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection with `code` `too_large`, not a raw transport error), or storage refused an upload with a grant (a used or expired grant, or a file that differs from what the grant signed — see the table above for each `code`);
 - **unsupported server capability** (`UnsupportedUploadCapabilityError`) — the configured deployment has no upload route;
 - **authentication / authorization failure** (`UploadAuthenticationError`) — `401` / `403`;
-- **transport failure** (`UploadTransportError`) — a network or server fault, a malformed data URL payload, or any other unexpected upload failure.
+- **transport failure** (`UploadTransportError`) — a network or server fault, a malformed data URL payload, or any other unexpected upload failure; its `status` is the HTTP status when a response produced it.
 
 All preparation failures are raised **before any run is created**.
 

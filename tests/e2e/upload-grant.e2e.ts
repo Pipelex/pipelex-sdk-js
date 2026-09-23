@@ -84,6 +84,7 @@ describe("the upload grant against a live platform", () => {
 
     expect(error).toBeInstanceOf(RejectedAssetError);
     expect((error as RejectedAssetError).status).toBe(412);
+    expect((error as RejectedAssetError).code).toBe("grant_used");
     expect((error as RejectedAssetError).message).toContain("PreconditionFailed");
   });
 
@@ -101,6 +102,7 @@ describe("the upload grant against a live platform", () => {
 
     expect(error).toBeInstanceOf(RejectedAssetError);
     expect((error as RejectedAssetError).status).toBe(403);
+    expect((error as RejectedAssetError).code).toBe("signature_mismatch");
     expect((error as RejectedAssetError).message).toContain("SignatureDoesNotMatch");
   });
 

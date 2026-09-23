@@ -202,7 +202,7 @@ function mapUploadError(error: unknown, filename: string): Error {
           `The server rejected "${filename}": ${error.serverMessage ?? "asset exceeds the service size limit"}.`,
           filename,
           error.status,
-          { cause: error },
+          { cause: error, code: "too_large" },
         );
       case 401:
       case 403:
@@ -220,7 +220,7 @@ function mapUploadError(error: unknown, filename: string): Error {
       default:
         return new UploadTransportError(
           `Upload of "${filename}" failed (${error.status}): ${error.serverMessage ?? error.statusText}.`,
-          { cause: error },
+          { cause: error, status: error.status },
         );
     }
   }

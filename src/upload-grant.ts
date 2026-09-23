@@ -13,11 +13,13 @@
  */
 
 import { RejectedAssetError, UploadTransportError } from "./errors.js";
+import type { RejectedAssetCode } from "./errors.js";
 import type { UploadGrant } from "./product-models.js";
 
 export type { UploadGrant, UploadGrantInput } from "./product-models.js";
 // The classes `uploadWithGrant` raises, so a page can branch on them without the main entry.
 export { InputPreparationError, RejectedAssetError, UploadTransportError } from "./errors.js";
+export type { RejectedAssetCode } from "./errors.js";
 
 /** Per-call options for {@link uploadWithGrant}. */
 export interface UploadWithGrantOptions {
@@ -43,18 +45,23 @@ export interface GrantedUpload {
  * Storage's refusals map onto the input-preparation errors, so a caller that
  * already handles `uploadFile` needs no new case:
  *
- * - `RejectedAssetError` (`status` is storage's) — a `412`, when the grant was
- *   already used (a grant writes one object, once); a `403` when the file's size,
- *   type or metadata differ from what the grant signed, when the request carried a
- *   header the grant did not sign, or when the grant has expired; any other `4xx`.
- *   Each asks for a new grant, or for the file the grant was requested for.
- * - `UploadTransportError` — storage unreachable, a `5xx`, or a redirect, which is
- *   refused rather than followed. In a browser a refused cross-origin request looks
- *   like an unreachable host, so the message names that too.
+ * - `RejectedAssetError` (`status` is storage's, `code` says why) — a `412` when
+ *   the grant was already used (`grant_used`: a grant writes one object, once); a
+ *   `403` when the file's size, type or metadata differ from what the grant signed
+ *   (`signature_mismatch`), when the request carried a header the grant did not sign
+ *   (`unsigned_header`), or when the grant has expired (`grant_expired`); any other
+ *   `4xx` (`store_refused`). Each asks for a new grant, or for the file the grant
+ *   was requested for.
+ * - `UploadTransportError` (`status` is storage's when it answered) — storage
+ *   unreachable, a `5xx`, storage timing out on the body (`400 RequestTimeout`,
+ *   which wrote nothing), or a redirect, which is refused rather than followed. In a
+ *   browser a refused cross-origin request looks like an unreachable host, so the
+ *   message names that too.
  *
  * A `5xx` leaves it unknown whether the object was written: retrying with the same
- * grant either stores it or answers the `412` of a used grant. The grant is a
- * bearer capability, and nothing here logs it.
+ * grant either stores it or answers the `412` of a used grant, and then the grant's
+ * `uri` may already name the file. The grant is a bearer capability, and nothing
+ * here logs it.
  */
 export async function uploadWithGrant(
   grant: UploadGrant,
@@ -95,24 +102,42 @@ export async function uploadWithGrant(
     throw new UploadTransportError(
       `Upload of "${label}" was redirected by storage, and the redirect was refused: a ` +
         "presigned upload is valid only at the URL it was signed for.",
+      // A refused redirect in a browser is opaque, with status 0: no status reached us.
+      { status: response.status || undefined },
     );
   }
 
   // Only the error's code and message are kept, never the body: S3 echoes the
   // canonical request on a signature mismatch, and with it the grant's credential.
-  const refusal = parseStorageError(await response.text().catch(() => ""));
-  if (response.status >= 400 && response.status < 500) {
+  const body = await response.text().catch((error: unknown) => {
+    // A caller's abort errors the body stream too, and stays the caller's, unwrapped.
+    if (signal?.aborted) throw error;
+    return "";
+  });
+  const refusal = parseStorageError(body);
+  const status = response.status;
+  if (status === 400 && refusal.code === "RequestTimeout") {
+    throw new UploadTransportError(
+      `Upload of "${label}" timed out at storage (${describeStatus(response, refusal)}): ` +
+        "storage stopped waiting for the file's bytes and wrote nothing. Retry with the same " +
+        `grant before it expires at ${grant.expires_at}, or with a new one.`,
+      { status },
+    );
+  }
+  if (status >= 400 && status < 500) {
+    const { code, advice } = classifyRefusal(status, refusal, grant);
     throw new RejectedAssetError(
-      `Storage refused the upload of "${label}" (${describeStatus(response, refusal)}): ` +
-        refusalAdvice(response.status, refusal, grant),
+      `Storage refused the upload of "${label}" (${describeStatus(response, refusal)}): ${advice}`,
       label,
-      response.status,
+      status,
+      { code },
     );
   }
   throw new UploadTransportError(
     `Upload of "${label}" failed at storage (${describeStatus(response, refusal)})` +
       (refusal.message ? `: ${refusal.message}` : "") +
       ". Retrying with the same grant either stores the file or reports the grant as used.",
+    { status },
   );
 }
 
@@ -146,30 +171,53 @@ function describeStatus(response: Response, refusal: StorageRefusal): string {
   return reason ? `${response.status} ${reason}` : String(response.status);
 }
 
-/** What a `4xx` from storage means for the caller, in words it can act on. */
-function refusalAdvice(status: number, refusal: StorageRefusal, grant: UploadGrant): string {
+/**
+ * What a `4xx` from storage means for the caller: the code it branches on, and words
+ * it can act on. An expired grant and an unsigned header both answer `403
+ * AccessDenied`, so only S3's message tells them apart.
+ */
+function classifyRefusal(
+  status: number,
+  refusal: StorageRefusal,
+  grant: UploadGrant,
+): { code: RejectedAssetCode; advice: string } {
   if (status === 412) {
-    return "this grant was already used. A grant writes one object, once; request a new grant.";
+    return {
+      code: "grant_used",
+      advice:
+        "this grant was already used. A grant writes one object, once. If an earlier attempt " +
+        "with it failed at storage, that attempt may have stored the file under the grant's " +
+        "URI; otherwise request a new grant.",
+    };
   }
   if (refusal.code === "SignatureDoesNotMatch") {
-    return (
-      "the file's size, content type or metadata differ from what the grant signed. Send " +
-      "exactly the file the grant was requested for, with the grant's headers unchanged."
-    );
+    return {
+      code: "signature_mismatch",
+      advice:
+        "the file's size, content type or metadata differ from what the grant signed. Send " +
+        "exactly the file the grant was requested for, with the grant's headers unchanged.",
+    };
   }
   if (refusal.message && /expired/i.test(refusal.message)) {
-    return `the grant expired at ${grant.expires_at}. Request a new grant.`;
+    return {
+      code: "grant_expired",
+      advice: `the grant expired at ${grant.expires_at}. Request a new grant.`,
+    };
   }
   if (refusal.message && /not signed/i.test(refusal.message)) {
-    return (
-      "the request carried a header the grant did not sign. Send the grant's headers and " +
-      "no other storage header."
-    );
+    return {
+      code: "unsigned_header",
+      advice:
+        "the request carried a header the grant did not sign. Send the grant's headers and " +
+        "no other storage header.",
+    };
   }
-  return (
-    refusal.message ??
-    "request a new grant, or check the file against the one it was requested for."
-  );
+  return {
+    code: "store_refused",
+    advice:
+      refusal.message ??
+      "request a new grant, or check the file against the one it was requested for.",
+  };
 }
 
 /** The file's own name when it has one (`File`), else the object name the grant's URI ends in. */

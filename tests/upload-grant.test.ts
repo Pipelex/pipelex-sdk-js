@@ -134,9 +134,11 @@ describe("uploadWithGrant — storage's refusals", () => {
     expect(error).toBeInstanceOf(InputPreparationError);
     const rejected = error as RejectedAssetError;
     expect(rejected.status).toBe(412);
+    expect(rejected.code).toBe("grant_used");
     expect(rejected.filename).toBe("report.pdf");
     expect(rejected.message).toContain("412 PreconditionFailed");
     expect(rejected.message).toContain("already used");
+    expect(rejected.message).toContain("may have stored the file");
   });
 
   it("maps a signature mismatch onto RejectedAssetError, keeping no part of the echoed request", async () => {
@@ -154,6 +156,7 @@ describe("uploadWithGrant — storage's refusals", () => {
     expect(error).toBeInstanceOf(RejectedAssetError);
     const rejected = error as RejectedAssetError;
     expect(rejected.status).toBe(403);
+    expect(rejected.code).toBe("signature_mismatch");
     expect(rejected.message).toContain("403 SignatureDoesNotMatch");
     expect(rejected.message).toContain("size, content type or metadata");
     expect(rejected.message).not.toContain(ECHOED_TOKEN);
@@ -167,6 +170,7 @@ describe("uploadWithGrant — storage's refusals", () => {
     );
 
     expect(error).toBeInstanceOf(RejectedAssetError);
+    expect((error as RejectedAssetError).code).toBe("grant_expired");
     expect((error as RejectedAssetError).message).toContain(
       `the grant expired at ${GRANT.expires_at}`,
     );
@@ -181,6 +185,7 @@ describe("uploadWithGrant — storage's refusals", () => {
     );
 
     expect(error).toBeInstanceOf(RejectedAssetError);
+    expect((error as RejectedAssetError).code).toBe("unsigned_header");
     expect((error as RejectedAssetError).message).toContain("a header the grant did not sign");
   });
 
@@ -195,6 +200,7 @@ describe("uploadWithGrant — storage's refusals", () => {
     expect(error).toBeInstanceOf(RejectedAssetError);
     const rejected = error as RejectedAssetError;
     expect(rejected.status).toBe(400);
+    expect(rejected.code).toBe("store_refused");
     expect(rejected.message).toContain("400 EntityTooSmall");
     expect(rejected.message).toContain("smaller than the minimum");
   });
@@ -232,8 +238,28 @@ describe("uploadWithGrant — transport failures", () => {
 
     expect(error).toBeInstanceOf(UploadTransportError);
     expect(error).toBeInstanceOf(InputPreparationError);
+    expect((error as UploadTransportError).status).toBe(503);
+    expect((error as UploadTransportError).cause).toBeUndefined();
     expect((error as Error).message).toContain("503 SlowDown");
     expect((error as Error).message).toContain("Please reduce your request rate.");
+  });
+
+  it("maps storage timing out on the body onto UploadTransportError, since nothing was written", async () => {
+    const error = await refusalFor(
+      xmlResponse(
+        400,
+        s3Error(
+          "RequestTimeout",
+          "Your socket connection to the server was not read from or written to within the timeout period.",
+        ),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as UploadTransportError).status).toBe(400);
+    expect((error as Error).message).toContain("400 RequestTimeout");
+    expect((error as Error).message).toContain("wrote nothing");
+    expect((error as Error).message).toContain(`expires at ${GRANT.expires_at}`);
   });
 
   it("refuses a redirect rather than following it", async () => {
@@ -245,6 +271,7 @@ describe("uploadWithGrant — transport failures", () => {
     );
 
     expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as UploadTransportError).status).toBe(307);
     expect((error as Error).message).toContain("redirect was refused");
   });
 
@@ -256,6 +283,7 @@ describe("uploadWithGrant — transport failures", () => {
 
     expect(error).toBeInstanceOf(UploadTransportError);
     expect((error as UploadTransportError).cause).toBe(cause);
+    expect((error as UploadTransportError).status).toBeUndefined();
     expect((error as Error).message).toContain("Failed to fetch");
     expect((error as Error).message).toContain("connect-src");
   });
@@ -273,6 +301,28 @@ describe("uploadWithGrant — transport failures", () => {
     );
 
     expect(error).toBe(reason);
+  });
+
+  it("lets a caller's abort through unwrapped while storage's error body is still arriving", async () => {
+    const controller = new AbortController();
+    const reason = new DOMException("The user cancelled.", "AbortError");
+    // Storage answered 403 and is still streaming its body when the caller aborts,
+    // which errors the body stream with the abort's reason, as `fetch` does.
+    const body = new ReadableStream<Uint8Array>({
+      start(stream) {
+        stream.enqueue(new TextEncoder().encode("<Error><Code>AccessDenied</Code>"));
+        controller.signal.addEventListener("abort", () => stream.error(controller.signal.reason));
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 403 }));
+
+    const pending = uploadWithGrant(GRANT, pdfFile(), { signal: controller.signal }).catch(
+      (e: unknown) => e,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort(reason);
+
+    expect(await pending).toBe(reason);
   });
 });
 
