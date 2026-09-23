@@ -1,0 +1,73 @@
+.claude/skills/release/SKILL.md
+  s_177b6af8a168a6::t_018a3ebefa0810 41,51,57
+CHANGELOG.md
+  s_177b6af8a168a6::t_80c273834f6a29 9-42
+README.md
+  s_177b6af8a168a6::t_a7ebcf9019a295 78-86,102
+docs/architecture.md
+  s_177b6af8a168a6::t_1a759e2a7e7882 47-48,90,92-93,124
+docs/client-identification.md
+  s_177b6af8a168a6::t_18128daad652d7 1-54
+docs/input-preparation.md
+  s_177b6af8a168a6::t_31642ec9fe5113 82-87,90
+docs/run-results.md
+  s_177b6af8a168a6::t_55525f80795630 7-16,24-27,120-127,157-180,189
+docs/run-usage.md
+  s_177b6af8a168a6::t_b4e89e34a4c5f4 27
+package-lock.json
+  s_177b6af8a168a6::t_d052c7aab2555a 3,9
+package.json
+  s_177b6af8a168a6::t_83ae4e568260a5 3
+src/client.ts
+  s_177b6af8a168a6::t_2d7898809c3e3c 94-95,113,243-251,350-354,357-358,390-408,426,492,1835
+src/execute-result.ts
+  s_177b6af8a168a6::t_24457a9bbace6f 2-3,6-8,13,105-167
+src/hooks/claude-mthds-check.ts
+  s_177b6af8a168a6::t_4d7ee583eff417 46,137
+src/hooks/validate-client.ts
+  s_177b6af8a168a6::t_3ef056cfe62551 1-18
+src/index.ts
+  s_177b6af8a168a6::t_a4a3727c2d9da4 11,21,36-38
+src/models.ts
+  s_177b6af8a168a6::t_3847e66f2d6079 233-241,243-247
+src/prepare-inputs.ts
+  s_177b6af8a168a6::t_6511655b8a4c68 368-382,407-432,434-435
+src/runs.ts
+  s_177b6af8a168a6::t_fa2261b2946fbe 1-2,202-244
+src/user-agent.ts
+  s_177b6af8a168a6::t_1a211cd0d2c32b 1-208
+src/version.ts
+  s_177b6af8a168a6::t_f0c05ef8b60f0e 1-6
+tests/client-identification.test.ts
+  s_177b6af8a168a6::t_8902da0624037e 1-152
+tests/client-lifecycle.test.ts
+  s_177b6af8a168a6::t_7301d0277f6ccd 331-393
+tests/e2e/prepare-inputs.e2e.ts
+  s_177b6af8a168a6::t_52ddc3ad975fe4 5-10,36,59-73,104,106-125,129
+tests/prepare-inputs.test.ts
+  s_177b6af8a168a6::t_d47e8243ad6cff 831-893,941,944-946
+tests/results-from-execute.test.ts
+  s_177b6af8a168a6::t_dd5d7082fb64a6 1-157
+tests/runs.test.ts
+  s_177b6af8a168a6::t_a8232e6c80c05f 1-2,187-234,511-554,572-608
+tests/user-agent.test.ts
+  s_177b6af8a168a6::t_5ff093f0aad0e2 1-212
+wip/prepare-inputs-stated-null/design.md
+  s_177b6af8a168a6::t_558d80b333a3b1 1-105
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0695523904137061ae3dd040f339e53596781ef1",
+  "prompts": {},
+  "sessions": {
+    "s_177b6af8a168a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d0cb6e4-df5b-45ba-ab3c-25e38f06b2ed",
+        "model": "claude-opus-5"
+      },
+      "human_author": "thomashebrard <thomas@pipelex.com>"
+    }
+  }
+}
