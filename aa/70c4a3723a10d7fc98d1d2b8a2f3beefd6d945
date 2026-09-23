@@ -1,0 +1,45 @@
+tests/user-agent.test.ts
+  s_12b2af5fdd964a::t_57a5b4164f5b05 1-205
+tests/client-identification.test.ts
+  s_12b2af5fdd964a::t_524983689ec46d 1-147,149-150
+  s_12b2af5fdd964a::t_3e50b2f2085f1b 148,151-152
+src/user-agent.ts
+  s_12b2af5fdd964a::t_e32165e3d1fc3b 1-202
+  s_12b2af5fdd964a::t_0123456d0e31cf 203-204
+.claude/skills/release/SKILL.md
+  s_12b2af5fdd964a::t_fedeeb1031a86f 41,51,57
+CHANGELOG.md
+  s_12b2af5fdd964a::t_97e4b625f98782 3-9
+README.md
+  s_12b2af5fdd964a::t_3ceeb5f6341b27 78-86,102
+docs/architecture.md
+  s_12b2af5fdd964a::t_74bcd25db367ce 92-93,125
+docs/client-identification.md
+  s_12b2af5fdd964a::t_17bd3a5ef0efd4 1-54
+src/client.ts
+  s_12b2af5fdd964a::t_38a051367a2486 96-97,245-253,352-356,359-360,392-410,428,494
+src/hooks/claude-mthds-check.ts
+  s_12b2af5fdd964a::t_dcdbf037ed285f 46,137
+src/hooks/validate-client.ts
+  s_12b2af5fdd964a::t_01064a307014f8 1-18
+src/index.ts
+  s_12b2af5fdd964a::t_8dd0726acf2438 11,21
+src/version.ts
+  s_12b2af5fdd964a::t_c3824bee4c89c2 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "aa70c4a3723a10d7fc98d1d2b8a2f3beefd6d945",
+  "prompts": {},
+  "sessions": {
+    "s_12b2af5fdd964a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb75e847-abe4-4171-a2ff-2b263b391b14",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "thomashebrard <thomas@pipelex.com>"
+    }
+  }
+}
