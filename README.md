@@ -77,7 +77,7 @@ try {
 
 ### Client identification
 
-Every request to the API carries a `User-Agent` such as `pipelex-sdk-js/0.21.0 node/22.4.0 (darwin; arm64)`, which the hosted platform reads to attribute traffic to a client surface in its analytics. A program built on the SDK can put its own name in front with `appInfo`, shaped like Stripe's option of that name; an invalid field is refused at construction with a `TypeError`. In a browser the SDK sets no `User-Agent`. The convention is the workspace spec `docs/specs/client-identification.md`, and [`docs/client-identification.md`](./docs/client-identification.md) describes this SDK's side of it.
+Every request to the API carries a `User-Agent` such as `pipelex-sdk-js/0.21.0 node/22.4.0 (darwin; arm64)`, which the hosted platform reads to attribute traffic to a client surface in its analytics. A program built on the SDK can put its own name in front with `appInfo`, shaped like Stripe's option of that name; an invalid field is refused at construction with a `TypeError`. In a browser the SDK sets no `User-Agent`. A program that also calls the API with its own `fetch` gets the same value from the exported `buildUserAgent(appInfo)`. The convention is the workspace spec `docs/specs/client-identification.md`, and [`docs/client-identification.md`](./docs/client-identification.md) describes this SDK's side of it.
 
 ```ts
 const client = new PipelexApiClient({ appInfo: { name: "acme-invoicer", version: "1.4.0" } });

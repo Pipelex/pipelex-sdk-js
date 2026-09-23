@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The `User-Agent` builder is public**: the package entry now exports `buildUserAgent(appInfo?)`, which returns exactly the value a `PipelexApiClient` constructed with that `appInfo` sends (or `undefined` in a browser), together with `validateAppInfo` and `MAX_USER_AGENT_LENGTH` (512) and the `RuntimeInfo` type. A program that makes some of its API requests with its own `fetch`, such as a web app's hand-rolled routes, now sends the same header and checks an `appInfo` against the grammar and the ceiling without re-implementing the format. Documented on `docs/client-identification.md`.
+
+### Changed
+
+- **The `mthds` range moves to `^0.27.0`**: the SDK now rests on `mthds` 0.27. Its one breaking change is in the `mthds-agent share` command, which this SDK does not use, so the protocol surface it re-exports is unchanged.
+
 ## [v0.21.0] - 2026-09-23
 
 ### Added
