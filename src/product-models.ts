@@ -2,7 +2,7 @@
  * Pipelex-product wire models — the snake_case JSON shapes the hosted-product
  * routes (`/v1/me`, `/v1/methods`, `/v1/organizations`, `/v1/billing/*`,
  * `/v1/pipelex-api-keys`, `/v1/gateway-api-key`, `/v1/onboarding/submit`,
- * `/v1/resolve-storage-url`, `/v1/upload`, `/v1/runs`) speak.
+ * `/v1/resolve-storage-url`, `/v1/upload`, `/v1/upload/grant`, `/v1/runs`) speak.
  *
  * These are the management surface a consumer (today `pipelex-app`) hand-rolls.
  * The wire is snake_case; any camelCase remap is a consumer's UI concern and
@@ -263,7 +263,7 @@ export interface OnboardingSubmission {
   heard_from: OnboardingHeardFrom;
 }
 
-// ── Storage (`/v1/resolve-storage-url`, `/v1/upload`) ────────────────────
+// ── Storage (`/v1/resolve-storage-url`, `/v1/upload`, `/v1/upload/grant`) ──
 
 export interface ResolvedStorageUrl {
   url: string;
@@ -281,6 +281,49 @@ export interface UploadInput {
 export interface UploadedFile {
   uri: string;
   filename: string;
+}
+
+/**
+ * What an upload grant is requested for — `POST /v1/upload/grant`. The file is
+ * described, never sent: its bytes go to storage with the grant, from wherever
+ * they are held.
+ */
+export interface UploadGrantInput {
+  /** The original filename with its extension; the stored object keeps the extension. */
+  filename: string;
+  /**
+   * MIME type, signed into the grant so the upload must carry it. Omitted, `null`
+   * or empty, none is signed — a browser's `File.type` is empty for a type it
+   * does not know, and means the same.
+   */
+  content_type?: string | null;
+  /** The file's exact size in bytes. The grant accepts a body of this size and no other. */
+  size: number;
+}
+
+/**
+ * A presigned, create-only `PUT` for one new object in the caller's organization,
+ * and the `pipelex-storage://` URI that object will carry. A bearer capability
+ * until `expires_at`: whoever holds it can write that one object, once, so it is
+ * never logged. `uploadWithGrant` (also on the browser-safe `@pipelex/sdk/upload`
+ * entry) is the sender.
+ */
+export interface UploadGrant {
+  /** The reference the object carries — it names nothing until the `PUT` has succeeded. */
+  uri: string;
+  /** Where to `PUT` the file, as the raw request body. */
+  url: string;
+  /**
+   * The signed headers to send unchanged: `If-None-Match: *`, the `Content-Type`
+   * when one was declared, and the provenance `x-amz-meta-*` values. `Content-Length`
+   * is signed too but is not listed — the body sets it, so the body must be
+   * exactly the declared size.
+   */
+  headers: Record<string, string>;
+  /** ISO-8601 UTC instant after which storage refuses the `PUT`. */
+  expires_at: string;
+  /** The largest file any grant allows, in bytes (the service's upload cap). */
+  max_bytes: number;
 }
 
 // ── Runs list / update (`/v1/runs`) ──────────────────────────────────────

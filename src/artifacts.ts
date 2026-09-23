@@ -573,7 +573,9 @@ async function fetchResolvedUrl(
         { cause: err },
       );
     }
-    if (userSignal?.aborted) return err;
+    // The caller's reason, not `err`: a browser rejects the fetch, and errors a body
+    // cut short, with a generic AbortError rather than the signal's reason.
+    if (userSignal?.aborted) return userSignal.reason;
     if (err instanceof ArtifactFetchError) return err;
     return new ArtifactFetchError(
       `The artifact could not be fetched: ${err instanceof Error ? err.message : String(err)}.`,
