@@ -13,6 +13,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { inspect } from "node:util";
 import { build } from "esbuild";
 import { uploadWithGrant } from "../src/upload-grant.js";
 import type { UploadGrant } from "../src/upload-grant.js";
@@ -40,6 +41,16 @@ const GRANT: UploadGrant = {
 
 /** The credential S3 echoes back inside a signature-mismatch body. It must never reach a message. */
 const ECHOED_TOKEN = "IQoJb3JpZ2luX2VjEXAMPLESECRET";
+
+/** A grant URL's signature, the bearer credential. It must never reach a thrown error. */
+const SIGNATURE_SENTINEL = "SIGNATURESENTINEL123";
+
+/** The sentinel appears nowhere a logger or an error reporter would print the error. */
+function expectNoSentinel(error: unknown): void {
+  expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(SIGNATURE_SENTINEL);
+  expect(String(error)).not.toContain(SIGNATURE_SENTINEL);
+  expect((error as Error).stack ?? "").not.toContain(SIGNATURE_SENTINEL);
+}
 
 function s3Error(code: string, message: string, extra = ""): string {
   return (
@@ -276,16 +287,56 @@ describe("uploadWithGrant — transport failures", () => {
   });
 
   it("maps an unreachable storage onto UploadTransportError, naming a refused cross-origin request", async () => {
-    const cause = new TypeError("Failed to fetch");
-    vi.spyOn(globalThis, "fetch").mockRejectedValue(cause);
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
 
     const error = await uploadWithGrant(GRANT, pdfFile()).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(UploadTransportError);
-    expect((error as UploadTransportError).cause).toBe(cause);
     expect((error as UploadTransportError).status).toBeUndefined();
-    expect((error as Error).message).toContain("Failed to fetch");
+    expect((error as Error).message).toContain(
+      "could not reach storage at https://pipelex-app-dev.s3.amazonaws.com (TypeError)",
+    );
     expect((error as Error).message).toContain("connect-src");
+  });
+
+  it("keeps a network error's names and codes, and never the error, whose message or fields can carry the grant URL", async () => {
+    const url = `https://pipelex-app-dev.s3.amazonaws.com/k.pdf?X-Amz-Signature=${SIGNATURE_SENTINEL}`;
+    // Node names the URL in a message and in its cause's `input`; Bun puts it on `path`.
+    const failure = new TypeError(`fetch failed for ${url}`, {
+      cause: Object.assign(new Error(`getaddrinfo ENOTFOUND ${url}`), {
+        code: "ENOTFOUND",
+        input: url,
+        path: url,
+      }),
+    });
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(failure);
+
+    const error = await uploadWithGrant({ ...GRANT, url }, pdfFile()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as Error).message).toContain("(TypeError, caused by Error ENOTFOUND)");
+    expect((error as UploadTransportError).cause).toBeUndefined();
+    expectNoSentinel(error);
+  });
+
+  it.each([
+    ["carries user info", `https://user:pass@pipelex-app-dev.s3.amazonaws.com/k.pdf`],
+    ["does not parse", `https://pipelex-app-dev.s3.amazonaws.com:99999/k.pdf`],
+    ["is relative", `/org_1/assets/k.pdf`],
+    ["is not http(s)", `ftp://pipelex-app-dev.s3.amazonaws.com/k.pdf`],
+  ])("refuses a grant whose url %s before sending, naming none of it", async (_case, base) => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("fetch must not be called"));
+    const url = `${base}?X-Amz-Signature=${SIGNATURE_SENTINEL}`;
+
+    const error = await uploadWithGrant({ ...GRANT, url }, pdfFile()).catch((e: unknown) => e);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as Error).message).toContain("was not sent");
+    expect((error as UploadTransportError).cause).toBeUndefined();
+    expectNoSentinel(error);
   });
 
   it("lets a caller's abort through unwrapped, even when fetch rejects with a generic AbortError", async () => {

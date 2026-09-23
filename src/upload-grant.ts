@@ -56,12 +56,14 @@ export interface GrantedUpload {
  *   unreachable, a `5xx`, storage timing out on the body (`400 RequestTimeout`,
  *   which wrote nothing), or a redirect, which is refused rather than followed. In a
  *   browser a refused cross-origin request looks like an unreachable host, so the
- *   message names that too.
+ *   message names that too. A grant whose `url` is not an absolute `http(s)` URL
+ *   free of user info is refused the same way, before anything is sent.
  *
  * A `5xx` leaves it unknown whether the object was written: retrying with the same
  * grant either stores it or answers the `412` of a used grant, and then the grant's
- * `uri` may already name the file. The grant is a bearer capability, and nothing
- * here logs it.
+ * `uri` may already name the file. The grant is a bearer capability: nothing here
+ * logs it, and no error this throws carries its URL, storage's error body or a
+ * runtime error that could hold either.
  */
 export async function uploadWithGrant(
   grant: UploadGrant,
@@ -69,6 +71,7 @@ export async function uploadWithGrant(
   options: UploadWithGrantOptions = {},
 ): Promise<GrantedUpload> {
   const label = fileLabel(grant, file);
+  const target = storageTarget(grant, label);
   const { signal } = options;
   let response: Response;
   try {
@@ -85,12 +88,13 @@ export async function uploadWithGrant(
     // The signal's reason, not the runtime's error: some runtimes reject with a
     // generic AbortError instead of the caller's own reason.
     if (signal?.aborted) throw signal.reason;
-    const detail = error instanceof Error ? error.message : String(error);
+    // Neither the runtime's message nor the error itself is kept: either can carry the
+    // request URL, and with it the grant's credential (Bun puts it on the error's `path`).
     throw new UploadTransportError(
-      `Upload of "${label}" could not reach storage (${detail}). In a browser, a refused ` +
-        "cross-origin request looks the same: check that the page may connect to the storage " +
-        "origin (its CSP connect-src).",
-      { cause: error },
+      `Upload of "${label}" could not reach storage at ${target.origin} ` +
+        `(${describeNetworkFailure(error)}). In a browser, a refused cross-origin request ` +
+        "looks the same: check that the page may connect to the storage origin (its CSP " +
+        "connect-src).",
     );
   }
 
@@ -142,6 +146,51 @@ export async function uploadWithGrant(
       ". Retrying with the same grant either stores the file or reports the grant as used.",
     { status },
   );
+}
+
+/**
+ * The grant's URL, parsed before anything is sent. A runtime that cannot build a request
+ * from a URL names the whole URL in its error — Node and Chrome both do, for one that does
+ * not parse or that carries user info — and a browser resolves a relative one against the
+ * page, which would send the credential to the page's own origin. So only an absolute
+ * `http(s)` URL with no user info is sent, and the refusal names none of it.
+ */
+function storageTarget(grant: UploadGrant, label: string): URL {
+  let target: URL | undefined;
+  try {
+    target = new URL(grant.url);
+  } catch {
+    target = undefined;
+  }
+  if (
+    target === undefined ||
+    (target.protocol !== "https:" && target.protocol !== "http:") ||
+    target.username !== "" ||
+    target.password !== ""
+  ) {
+    throw new UploadTransportError(
+      `Upload of "${label}" was not sent: the grant's url is not an absolute http(s) URL ` +
+        "free of user info, so it is not the one requestUploadGrant returned. Pass the grant " +
+        "on unchanged.",
+    );
+  }
+  return target;
+}
+
+/**
+ * A network failure described by the names and codes along its cause chain, which carry
+ * no URL: "TypeError, caused by Error ENOTFOUND".
+ */
+function describeNetworkFailure(error: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = error;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const code = (current as { code?: unknown }).code;
+    const safeCode = typeof code === "string" && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(code);
+    parts.push(safeCode ? `${current.name} ${code}` : current.name);
+    current = current.cause;
+  }
+  return parts.length > 0 ? parts.join(", caused by ") : "a non-Error rejection";
 }
 
 /** Storage's own error, read off the S3 XML body. Either field is absent on another body. */
