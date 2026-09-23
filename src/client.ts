@@ -458,8 +458,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     } catch (err) {
       // A caller-initiated abort (not our timeout) propagates untouched so
       // `waitForResult` callers can distinguish "I stopped waiting" from a
-      // network failure.
-      if (userSignal?.aborted) throw err;
+      // network failure. It is the signal's reason rather than `err`: a browser
+      // errors a body stream cut short by an abort with a generic AbortError.
+      if (userSignal?.aborted) throw userSignal.reason;
       // undici (Node fetch) wraps DNS/connect/TLS failures as
       // `TypeError("fetch failed")` with the system error attached as `cause`.
       // Our timeout aborts the controller with a "TimeoutError" DOMException.

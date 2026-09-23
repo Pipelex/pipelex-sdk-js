@@ -82,7 +82,9 @@ export async function uploadWithGrant(
       signal,
     });
   } catch (error) {
-    if (signal?.aborted) throw error;
+    // The signal's reason, not the runtime's error: some runtimes reject with a
+    // generic AbortError instead of the caller's own reason.
+    if (signal?.aborted) throw signal.reason;
     const detail = error instanceof Error ? error.message : String(error);
     throw new UploadTransportError(
       `Upload of "${label}" could not reach storage (${detail}). In a browser, a refused ` +
@@ -109,9 +111,10 @@ export async function uploadWithGrant(
 
   // Only the error's code and message are kept, never the body: S3 echoes the
   // canonical request on a signature mismatch, and with it the grant's credential.
-  const body = await response.text().catch((error: unknown) => {
+  const body = await response.text().catch(() => {
     // A caller's abort errors the body stream too, and stays the caller's, unwrapped.
-    if (signal?.aborted) throw error;
+    // Chrome and Firefox error it with a generic AbortError, so the reason is the signal's.
+    if (signal?.aborted) throw signal.reason;
     return "";
   });
   const refusal = parseStorageError(body);

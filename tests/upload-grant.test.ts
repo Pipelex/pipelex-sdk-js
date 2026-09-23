@@ -288,12 +288,12 @@ describe("uploadWithGrant — transport failures", () => {
     expect((error as Error).message).toContain("connect-src");
   });
 
-  it("lets a caller's abort through unwrapped", async () => {
+  it("lets a caller's abort through unwrapped, even when fetch rejects with a generic AbortError", async () => {
     const controller = new AbortController();
-    const reason = new DOMException("The user cancelled.", "AbortError");
+    const reason = new Error("The user cancelled.");
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       controller.abort(reason);
-      throw reason;
+      throw new DOMException("The operation was aborted.", "AbortError");
     });
 
     const error = await uploadWithGrant(GRANT, pdfFile(), { signal: controller.signal }).catch(
@@ -306,12 +306,15 @@ describe("uploadWithGrant — transport failures", () => {
   it("lets a caller's abort through unwrapped while storage's error body is still arriving", async () => {
     const controller = new AbortController();
     const reason = new DOMException("The user cancelled.", "AbortError");
-    // Storage answered 403 and is still streaming its body when the caller aborts,
-    // which errors the body stream with the abort's reason, as `fetch` does.
+    // Storage answered 403 and is still streaming its body when the caller aborts.
+    // Chrome and Firefox error the body stream with a generic AbortError rather than
+    // the signal's reason, which is what the caller must still get back.
     const body = new ReadableStream<Uint8Array>({
       start(stream) {
         stream.enqueue(new TextEncoder().encode("<Error><Code>AccessDenied</Code>"));
-        controller.signal.addEventListener("abort", () => stream.error(controller.signal.reason));
+        controller.signal.addEventListener("abort", () =>
+          stream.error(new DOMException("The user aborted a request.", "AbortError")),
+        );
       },
     });
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 403 }));
