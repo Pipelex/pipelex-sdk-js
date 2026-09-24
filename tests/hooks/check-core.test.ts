@@ -9,7 +9,7 @@ import {
   decideAfterLint,
   decideAfterValidate,
   encodeOutcome,
-  extractCodexMthdsFiles,
+  extractCodexMthdsTargets,
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
@@ -204,29 +204,64 @@ describe("extractMthdsFilePath", () => {
   });
 });
 
-describe("extractCodexMthdsFiles", () => {
-  const envelope = (body: string) => JSON.stringify({ tool_input: { command: body } });
+describe("extractCodexMthdsTargets", () => {
+  const HOOK_CWD = "/hook-cwd";
+  const envelope = (body: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ tool_name: "apply_patch", tool_input: { command: body }, ...extra });
+  const paths = (stdinJson: string) =>
+    extractCodexMthdsTargets(stdinJson, HOOK_CWD).targets.map((target) => target.path);
 
-  it("extracts Update/Add/Move-to targets, deduped", () => {
-    const files = extractCodexMthdsFiles(
-      envelope(
-        "*** Begin Patch\n*** Update File: a.mthds\n@@\n*** Add File: sub/b.mthds\n" +
-          "*** Update File: a.mthds\n*** Move to: c.mthds\n*** End Patch\n",
-      ),
+  it("extracts the files the patch leaves on disk, a moved file by its destination", () => {
+    const stdin = envelope(
+      "*** Begin Patch\n*** Update File: a.mthds\n@@\n*** Add File: sub/b.mthds\n+x\n" +
+        "*** Update File: a.mthds\n*** Move to: c.mthds\n*** End Patch\n",
+      { cwd: "/work" },
     );
-    expect(files).toEqual(["a.mthds", "sub/b.mthds", "c.mthds"]);
+    expect(paths(stdin)).toEqual(["/work/sub/b.mthds", "/work/c.mthds"]);
   });
 
-  it("skips Delete File and Move from headers, and non-mthds files", () => {
-    const files = extractCodexMthdsFiles(
-      envelope("*** Delete File: gone.mthds\n*** Move from: old.mthds\n*** Update File: code.py\n"),
+  it("carries the path as written and the added lines", () => {
+    const { targets } = extractCodexMthdsTargets(
+      envelope("*** Update File: sub/a.mthds\n@@\n-old\n+new\n", { cwd: "/work" }),
+      HOOK_CWD,
     );
-    expect(files).toEqual([]);
+    expect(targets).toEqual([
+      { path: "/work/sub/a.mthds", writtenAs: "sub/a.mthds", addedLines: ["new"] },
+    ]);
+  });
+
+  it("skips deleted files, Move from headers, and non-mthds files", () => {
+    const stdin = envelope(
+      "*** Delete File: gone.mthds\n*** Move from: old.mthds\n*** Update File: code.py\n",
+    );
+    expect(paths(stdin)).toEqual([]);
+  });
+
+  it("keeps an absolute path as it is", () => {
+    expect(paths(envelope("*** Update File: /abs/a.mthds\n+x\n", { cwd: "/work" }))).toEqual([
+      "/abs/a.mthds",
+    ]);
+  });
+
+  it("anchors relative paths on the payload's cwd when it is absolute", () => {
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: "/session" }))).toEqual([
+      "/session/a.mthds",
+    ]);
+  });
+
+  it("falls back to the hook's working directory when cwd is missing or relative", () => {
+    expect(paths(envelope("*** Update File: a.mthds\n"))).toEqual(["/hook-cwd/a.mthds"]);
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: "session" }))).toEqual([
+      "/hook-cwd/a.mthds",
+    ]);
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: 42 }))).toEqual([
+      "/hook-cwd/a.mthds",
+    ]);
   });
 
   it("returns empty on unparseable input or missing command", () => {
-    expect(extractCodexMthdsFiles("not json")).toEqual([]);
-    expect(extractCodexMthdsFiles(JSON.stringify({ tool_input: {} }))).toEqual([]);
+    expect(paths("not json")).toEqual([]);
+    expect(paths(JSON.stringify({ tool_input: {} }))).toEqual([]);
   });
 });
 

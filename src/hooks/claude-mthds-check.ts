@@ -33,7 +33,7 @@ import {
   decideAfterLint,
   decideAfterValidate,
   encodeOutcome,
-  extractCodexMthdsFiles,
+  extractCodexMthdsTargets,
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
@@ -80,7 +80,9 @@ function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
       break;
     }
     case "codex": {
-      candidates = extractCodexMthdsFiles(stdinJson).map((raw) => resolvePath(process.cwd(), raw));
+      candidates = extractCodexMthdsTargets(stdinJson, process.cwd()).targets.map(
+        (target) => target.path,
+      );
       break;
     }
     case "vibe": {

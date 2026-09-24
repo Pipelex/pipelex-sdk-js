@@ -15,7 +15,9 @@
  * - any stage unavailable       → fail-open (the other stages' verdicts stand)
  */
 
+import { isAbsolute as isAbsolutePath, resolve as resolvePath } from "node:path";
 import type { Diagnostic, ValidationErrorItem } from "../models.js";
+import { patchTargets, readPatchSections } from "./patch-envelope.js";
 
 /** Verdict of the local lint stage. `unavailable` = engine failed to load. */
 export type LintStage =
@@ -68,28 +70,49 @@ export function extractMthdsFilePath(stdinJson: string): string | null {
   return filePath;
 }
 
+/** A `.mthds` file a Codex patch leaves on disk. */
+export interface CodexMthdsTarget {
+  /** The file's absolute path. */
+  path: string;
+  /** The path as the patch wrote it. */
+  writtenAs: string;
+  /** The lines added by the last section that wrote the file. */
+  addedLines: string[];
+}
+
+/** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
+export interface CodexMthdsTargets {
+  /** The files the patch leaves on disk, in the order the patch last wrote them. */
+  targets: CodexMthdsTarget[];
+}
+
 /**
- * Extract every distinct `.mthds` path from a Codex PostToolUse(apply_patch)
- * payload. `apply_patch` is Codex's freeform multi-file write tool: the patch
- * envelope rides verbatim in `tool_input.command`, and the touched files are
- * its `*** Update File: / *** Add File: / *** Move to:` headers (`Delete
- * File:` and `Move from:` are skipped — the file no longer exists post-patch).
- * Mirrors `mthds-agent codex hook`'s parser. Paths come back as written in
- * the envelope (usually cwd-relative); the caller resolves and existence-checks.
+ * The `.mthds` files a Codex PostToolUse payload's patch leaves on disk.
+ * `apply_patch` is Codex's freeform multi-file write tool: the patch envelope
+ * rides verbatim in `tool_input.command`, and its sections are applied in
+ * order, so a file the patch moves or deletes is not a target (see
+ * `patchTargets`). Relative paths resolve against the payload's `cwd`, the
+ * session directory, when it is absolute, and against `processCwd`
+ * otherwise; Codex starts the hook in that same directory.
  */
-export function extractCodexMthdsFiles(stdinJson: string): string[] {
-  const parsed = parseJsonOrNull(stdinJson);
-  const command = (parsed as { tool_input?: { command?: unknown } } | null)?.tool_input?.command;
+export function extractCodexMthdsTargets(stdinJson: string, processCwd: string): CodexMthdsTargets {
+  const parsed = parseJsonOrNull(stdinJson) as {
+    cwd?: unknown;
+    tool_input?: { command?: unknown };
+  } | null;
+  const command = parsed?.tool_input?.command;
   if (typeof command !== "string") {
-    return [];
+    return { targets: [] };
   }
-  const headerRe = /^\*\*\* (?:Update File|Add File|Move to):\s*(.+\.mthds)\s*$/gm;
-  const seen = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = headerRe.exec(command)) !== null) {
-    seen.add(match[1]!.trim());
-  }
-  return Array.from(seen);
+  const sessionDir =
+    typeof parsed?.cwd === "string" && isAbsolutePath(parsed.cwd) ? parsed.cwd : processCwd;
+  const keyOf = (path: string) => resolvePath(sessionDir, path);
+  const targets = patchTargets(readPatchSections(command), keyOf).map((file) => ({
+    path: keyOf(file.path),
+    writtenAs: file.path,
+    addedLines: file.section.addedLines,
+  }));
+  return { targets };
 }
 
 /**
