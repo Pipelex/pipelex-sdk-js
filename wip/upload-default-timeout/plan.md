@@ -108,3 +108,13 @@ Phases 1 to 3 are done as planned, with two additions and one deviation.
 ### Review round 1, 2026-09-24
 
 `/rev` at profile 3, bar `open`, over `06e65c0`: cubic, Codex (review) and the official code-review all produced a review, and three findings were confirmed by one verifier and fixed in `779e0f3` (see the decisions log). The pass is recorded on the item with outcome `fixed`, and the ladder asked for round 2 at bar `defects`. The three consumer items are filed, each blocked by this item: L-260924-10735b (`pipelex-mcp`), L-260924-652ca9 (`pipelex-method-apps`) and L-260924-6d61f4 (`pipelex-starter-js`). What remains after round 2 converges: the pull request against `dev` titled `feature/Upload-default-timeout · L-260924-8d5bb5` with `Closes L-260924-8d5bb5`, its squash merge, and `/ledger-land`, which flips both documents to `landed`.
+
+### Review round 2, 2026-09-24
+
+`/rev` at profile 3, bar `defects`, over `f79ec2e`: cubic, Codex (review) and the official code-review all produced a review. The code-review found nothing, and one verifier checked the other four findings against the bar.
+
+- **Fixed in `fa4a89f`:** `startAndWaitForResult` created the run before the NaN poll-option check in `pollUntilResult` fired, so the `RangeError` carried no run id and the started run was lost to the caller. The check is now `assertWaitOptions` in `src/runs.ts`, called before the handshake.
+- **Deferred, real but below the bar:** a non-`Blob` `file` from an untyped JavaScript caller (an `ArrayBuffer` or `Uint8Array`) has no `size`, so the default limit is `NaN` and the call fails as a false timeout. The parameter is typed and documented as a `Blob` or a `File`, and no caller outside the SDK exists. Refusing a non-`Blob` `file` with an `InputPreparationError` before anything is sent would close it.
+- **Deferred, real but below the bar:** `readErrorPrefix` calls `getReader()` outside its `try`, so a response whose body a fetch wrapper already locked or consumed escapes as a raw `TypeError` instead of being classified from its status, and a polyfill with no `response.body` at all fails the same way. Neither is a declared target. Returning `""` when `response.body == null || response.body.locked` would close both.
+- **Deferred, real but below the bar:** the sleep cap in `pollUntilResult` resolves a wait longer than about 24.8 days early, so a caller with `timeoutMs: Infinity` and such an interval or `Retry-After` polls every 24.8 days instead. The cost is one extra lookup per 24.8 days, against a tight loop before the cap. Chaining capped timers would honour the full delay, and the test named "sleeps no shorter than asked" would then be accurate, where today it sleeps a millisecond short at 2^31.
+
