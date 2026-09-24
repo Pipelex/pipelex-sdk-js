@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`locateArtifacts`, `ArtifactLocation` and `DownloadedArtifact.found_at`**: `locateArtifacts(value)` is the artifact walk with its paths — every `pipelex-storage://` reference in a JSON value, deduplicated in discovery order exactly as `collectArtifacts` returns them, each with `found_at`, every `$`-rooted path at which it sits (`$.rooms[3].staged_photo.url`, `$.items[0].url`, `$["a key"].url`). Every item of a `downloadArtifacts` verdict carries the same `found_at`, on the saved arm and the error arm alike, so a file that was not saved still says which field it would have filled.
+
+### Changed
+
+- **`downloadArtifacts` names each file after the field it fills, and `artifactFilename` takes a location (Breaking)**: a saved file is named after the first path at which its reference sits — `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and an output that is one image as `main_stuff.png` — instead of after the last segment of its storage key, which now supplies only the extension. `artifactFilename(location, contentType, scope)` replaces `artifactFilename(uri, contentType, index)` and throws `ArtifactOperationError` for a location whose first path is not in the walk's notation; the full rule is on `docs/artifact-download.md`.
+
+### Fixed
+
+- **`downloadArtifacts` refuses an unknown `scope`**: a scope other than `main_stuff` or `working_memory` used to walk the working memory while reporting the unknown name back; it is now an `ArtifactOperationError`, raised before anything is read.
+
 ## [v0.22.0] - 2026-09-23
 
 ### Added

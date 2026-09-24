@@ -1672,8 +1672,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * {@link prepareInputs}, Node-only. Keyed on a `run_id` (the results are
    * re-read, so it works days after the run) or a `RunResults` in hand; walks the
    * `main_stuff` scope by default, `working_memory` on request; resolves every
-   * link fresh (never the embedded `public_url`); and returns a produced verdict,
-   * one entry per reference, errors as values. See `docs/artifact-download.md`.
+   * link fresh (never the embedded `public_url`); names each file after the field
+   * it fills; and returns a produced verdict, one entry per reference with the
+   * paths it sits at, errors as values. See `docs/artifact-download.md`.
    */
   async downloadArtifacts(request: DownloadArtifactsRequest): Promise<DownloadArtifactsResult> {
     return downloadArtifactsImpl(this, request);
