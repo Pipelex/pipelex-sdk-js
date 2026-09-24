@@ -1,36 +1,44 @@
 /**
  * A reading of a POSIX shell script that tells, for an offset in it, which
- * directory the command holding that offset runs in.
+ * directory the patch command reading that offset runs in.
  *
  * Codex reports a patch run through the shell as a `Bash` call carrying the
  * whole script, and a relative path in that patch is relative to wherever the
  * script had moved when `apply_patch` ran. This module lexes the script far
- * enough to follow `cd`: commands, quotes, heredocs, substitutions and
- * scopes. It is not a shell parser. Past what it reads, it answers "unknown"
- * rather than guessing, and a script it cannot lex at all is "unparsed".
+ * enough to follow `cd`: commands, quotes, heredocs, substitutions, scopes,
+ * branches and loops. It is not a shell parser. Past what it reads, it
+ * answers "unknown" rather than guessing, and a script it cannot lex at all
+ * is "unparsed".
  *
+ * - Text is placed only where a patch command reads it: the words and
+ *   heredoc bodies of an `apply_patch` command, and the text of a command
+ *   feeding one through a pipeline or a substitution in its words. Text that
+ *   any other command holds, such as a variable, a file, `bash -c` or `eval`,
+ *   is unknown, since this reading does not follow whatever reads it later.
  * - `cd DIR` with one literal operand (optionally after `-L`, `-P` or `--`)
- *   moves the directory; any other `cd`, and `pushd`, `popd`, `eval`,
- *   `source`, `.` or a function definition, makes it unknown. An absolute
- *   `cd` makes an unknown directory known again.
+ *   moves the directory, and is assumed to succeed; any other `cd`, and
+ *   `pushd`, `popd`, `eval`, `source`, `.` or a function definition, makes
+ *   it unknown. An absolute `cd` makes an unknown directory known again.
  * - `( … )`, `$( … )`, `<( … )` and `>( … )` are scopes: a `cd` inside one
- *   ends at its closing parenthesis. So do the members of a pipeline and a
- *   list sent to the background, which run in subshells; since zsh runs a
- *   pipeline's last command in the current shell, a directory change inside
- *   either makes the directory after it unknown.
- * - `{ … }`, the bodies of `if`, `while`, `until`, `for` and `case`, and the
- *   separators `&&`, `||`, `;` and newline are followed in order, as if every
- *   command ran.
+ *   ends at its closing parenthesis. A list sent to the background, and every
+ *   member of a pipeline but the last, run in subshells in bash and zsh
+ *   alike. zsh runs a pipeline's last member in the current shell and bash
+ *   does not, so a directory change there makes the directory after it
+ *   unknown.
+ * - `{ … }` and the separators `;`, newline and `&&` are followed in order.
+ *   Where only one of several paths runs, after `||`, between the branches of
+ *   `if` and `case`, and across the passes of a loop, the directory is kept
+ *   when every path leaves it the same, and is unknown otherwise.
  * - Heredoc bodies, quoted strings and comments are never read as commands.
  *   A heredoc body belongs to the command that opened it.
  */
 
-import { isAbsolute, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 
-/** Where the command holding an offset runs. */
+/** Where the patch command reading an offset runs. */
 export type Placement =
   | { kind: "directory"; path: string }
-  /** The script moved somewhere this reading cannot follow. */
+  /** The script moved somewhere this reading cannot follow, or no patch command reads the offset. */
   | { kind: "unknown" }
   /** No command holds the offset: it is in a comment or between commands. */
   | { kind: "outside" };
@@ -43,19 +51,20 @@ export interface ShellReading {
 /**
  * Read `script` as a POSIX shell script run from `sessionDir`, or return
  * `"unparsed"` when it holds an unterminated quote, substitution or backtick,
- * a heredoc inside backticks, or a parenthesis that closes nothing.
+ * a heredoc inside backticks, a parenthesis that closes nothing, or any other
+ * syntax error this reading can see.
  */
 export function readShellScript(script: string, sessionDir: string): ShellReading | "unparsed" {
-  let tree: CommandList;
+  let extents: Extent[];
   try {
-    tree = new ScriptParser(script).parse();
+    const walk = new DirectoryWalk(WALK_BUDGET_FLOOR + WALK_BUDGET_PER_CHARACTER * script.length);
+    walk.list(new ScriptParser(script).parse(), sessionDir);
+    extents = walk.extents;
   } catch {
     // An Unparsed signal, or a script nested past the stack: either way the
     // script cannot be read, and "unparsed" is the answer that fails safe.
     return "unparsed";
   }
-  const extents: Extent[] = [];
-  walkList(tree, sessionDir, extents);
   return {
     directoryAt(offset: number): Placement {
       let holder: Extent | null = null;
@@ -98,6 +107,10 @@ interface Word {
   substitutions: CommandList[];
 }
 
+/**
+ * A simple command, or the words and redirections of a compound command's
+ * head (a `for` loop's words, a `case` subject or patterns) or tail.
+ */
 interface SimpleCommand {
   kind: "simple";
   words: Word[];
@@ -117,12 +130,39 @@ interface CompoundCommand {
   tail: SimpleCommand;
 }
 
+interface IfCommand {
+  kind: "if";
+  /** The `if` condition and each `elif` one, with the body each guards. */
+  clauses: Array<{ condition: CommandList; body: CommandList }>;
+  otherwise: CommandList | null;
+  tail: SimpleCommand;
+}
+
+interface CaseCommand {
+  kind: "case";
+  subject: SimpleCommand;
+  /** `fallsThrough` when the branch ends with `;&` or `;;&` rather than `;;`. */
+  branches: Array<{ patterns: SimpleCommand; body: CommandList; fallsThrough: boolean }>;
+  tail: SimpleCommand;
+}
+
+interface LoopCommand {
+  kind: "loop";
+  /** A `for` or `select` loop's words, expanded once before the first pass. */
+  head: SimpleCommand | null;
+  /** A `while` or `until` loop's condition, run before each pass and once more to end it. */
+  condition: CommandList | null;
+  body: CommandList;
+  tail: SimpleCommand;
+}
+
 interface FunctionDefinition {
   kind: "function";
   body: Command;
 }
 
-type Command = SimpleCommand | CompoundCommand | FunctionDefinition;
+type Command =
+  SimpleCommand | CompoundCommand | IfCommand | CaseCommand | LoopCommand | FunctionDefinition;
 
 interface Pipeline {
   commands: Command[];
@@ -130,6 +170,8 @@ interface Pipeline {
 
 interface AndOrList {
   pipelines: Pipeline[];
+  /** The operator before each pipeline after the first. */
+  operators: Array<"&&" | "||">;
   background: boolean;
 }
 
@@ -143,23 +185,17 @@ interface PendingHeredoc {
   owner: SimpleCommand;
 }
 
+/** The script cannot be read: a syntax error, or a walk past its budget. */
 class Unparsed extends Error {}
 
 // ---------------------------------------------------------------------------
 // Lexer and parser
 
-/** Reserved words another command may follow on the same line. */
-const COMMAND_PREFIXES = new Set([
-  "!",
-  "if",
-  "then",
-  "else",
-  "elif",
-  "do",
-  "while",
-  "until",
-  "time",
-]);
+/** Reserved words another command follows on the same line. */
+const COMMAND_PREFIXES = new Set(["!", "time"]);
+
+/** Reserved words that end or divide a compound command, and never name a command. */
+const CLOSING_WORDS = new Set(["then", "elif", "else", "fi", "do", "done", "esac", "}"]);
 
 /** Characters that end an unquoted word. */
 const WORD_BREAKS = new Set([" ", "\t", "\n", ";", "&", "|", "<", ">", "(", ")"]);
@@ -171,44 +207,30 @@ const ASSIGNMENT_PREFIX = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
 class ScriptParser {
   private pos = 0;
   private readonly pending: PendingHeredoc[] = [];
-  /** Open `case` statements, per command list: while one is open, `)` ends a pattern. */
-  private readonly caseDepths: number[] = [];
 
   constructor(private readonly src: string) {}
 
   parse(): CommandList {
-    return this.parseList(null);
+    return this.parseList([]);
   }
 
-  private parseList(closer: ")" | "}" | null): CommandList {
+  /**
+   * Commands up to one of `terminators`, which is left unread: a reserved
+   * word where a command would start, `)`, or `;;` for a case branch, which
+   * `;&` and `;;&` end too. With no terminator, the list runs to the end.
+   */
+  private parseList(terminators: readonly string[]): CommandList {
     const items: AndOrList[] = [];
-    this.caseDepths.push(0);
     for (;;) {
       this.skipLinebreaks();
       if (this.atEnd()) {
-        if (closer !== null) {
+        if (terminators.length > 0) {
           throw new Unparsed();
         }
         break;
       }
-      const char = this.src[this.pos];
-      if (char === ")") {
-        this.pos++;
-        if (this.caseDepth() > 0) {
-          continue; // the end of a case pattern
-        }
-        if (closer !== ")") {
-          throw new Unparsed();
-        }
+      if (this.atTerminator(terminators)) {
         break;
-      }
-      if (closer === "}" && this.atReservedWord("}")) {
-        this.pos++;
-        break;
-      }
-      if (char === ";") {
-        this.pos++; // an empty case branch's `;;`, or a stray separator
-        continue;
       }
       const item = this.parseAndOr();
       items.push(item);
@@ -216,34 +238,48 @@ class ScriptParser {
       if (this.startsWith("&") && !this.startsWith("&&")) {
         item.background = true;
         this.pos++;
-      } else if (this.startsWith(";")) {
-        this.pos += this.startsWith(";;&")
-          ? 3
-          : this.startsWith(";;") || this.startsWith(";&")
-            ? 2
-            : 1;
-      } else if (!this.atEnd() && !["\n", ")", "#"].includes(this.src[this.pos]!)) {
-        if (!(closer === "}" && this.atReservedWord("}"))) {
+      } else if (this.startsWith(";;") || this.startsWith(";&")) {
+        if (!terminators.includes(";;")) {
           throw new Unparsed();
         }
+      } else if (this.startsWith(";")) {
+        this.pos++;
+      } else if (
+        !this.atEnd() &&
+        !["\n", "#"].includes(this.src[this.pos]!) &&
+        !this.atTerminator(terminators)
+      ) {
+        throw new Unparsed();
       }
     }
-    this.caseDepths.pop();
     return { items };
   }
 
+  private atTerminator(terminators: readonly string[]): boolean {
+    return terminators.some((terminator) => {
+      if (terminator === ")") {
+        return this.startsWith(")");
+      }
+      if (terminator === ";;") {
+        return this.startsWith(";;") || this.startsWith(";&");
+      }
+      return this.atReservedWord(terminator);
+    });
+  }
+
   private parseAndOr(): AndOrList {
-    const pipelines = [this.parsePipeline()];
+    const item: AndOrList = { pipelines: [this.parsePipeline()], operators: [], background: false };
     for (;;) {
       this.skipBlanks();
-      if (!this.startsWith("&&") && !this.startsWith("||")) {
-        break;
+      const operator = this.startsWith("&&") ? "&&" : this.startsWith("||") ? "||" : null;
+      if (operator === null) {
+        return item;
       }
       this.pos += 2;
       this.skipLinebreaks();
-      pipelines.push(this.parsePipeline());
+      item.operators.push(operator);
+      item.pipelines.push(this.parsePipeline());
     }
-    return { pipelines, background: false };
   }
 
   private parsePipeline(): Pipeline {
@@ -271,43 +307,174 @@ class ScriptParser {
     }
     if (this.startsWith("(")) {
       this.pos++;
-      const body = this.parseList(")");
+      const body = this.parseList([")"]);
+      this.pos++;
       return { kind: "subshell", body, tail: this.parseTail() };
     }
     if (this.atReservedWord("{")) {
       this.pos++;
-      const body = this.parseList("}");
+      const body = this.parseList(["}"]);
+      this.pos++;
       return { kind: "group", body, tail: this.parseTail() };
     }
     if (!this.atWordStart() || this.atRedirection()) {
-      return this.parseSimple(null);
+      const command = this.parseSimple(null);
+      if (command.kind === "simple" && command.end === command.start) {
+        throw new Unparsed(); // an operator where a command should be
+      }
+      return command;
     }
     const first = this.readWord();
-    if (isReservedWord(first, COMMAND_PREFIXES)) {
+    const reserved = first.quoted || first.expands ? null : first.value;
+    if (reserved !== null && COMMAND_PREFIXES.has(reserved)) {
+      if (reserved === "time") {
+        this.skipBlanks();
+        if (/^-p(?![^\s;&|<>()])/.test(this.src.slice(this.pos, this.pos + 3))) {
+          this.pos += 2;
+        }
+      }
       return this.parseCommand();
     }
-    if (isReservedWord(first, new Set(["function"]))) {
-      this.skipBlanks();
+    if (reserved !== null && CLOSING_WORDS.has(reserved)) {
+      throw new Unparsed();
+    }
+    switch (reserved) {
+      case "if":
+        return this.parseIf();
+      case "while":
+      case "until":
+        return this.parseWhile();
+      case "for":
+      case "select":
+        return this.parseFor();
+      case "case":
+        return this.parseCase();
+      case "function":
+        this.skipBlanks();
+        if (!this.atWordStart()) {
+          throw new Unparsed();
+        }
+        this.readWord();
+        return this.parseFunctionBody();
+    }
+    return this.parseSimple(first);
+  }
+
+  private parseIf(): IfCommand {
+    const clauses: IfCommand["clauses"] = [];
+    for (;;) {
+      const condition = this.parseList(["then"]);
+      this.readReserved("then");
+      clauses.push({ condition, body: this.parseList(["elif", "else", "fi"]) });
+      if (this.atReservedWord("elif")) {
+        this.readReserved("elif");
+        continue;
+      }
+      let otherwise: CommandList | null = null;
+      if (this.atReservedWord("else")) {
+        this.readReserved("else");
+        otherwise = this.parseList(["fi"]);
+      }
+      this.readReserved("fi");
+      return { kind: "if", clauses, otherwise, tail: this.parseTail() };
+    }
+  }
+
+  private parseWhile(): LoopCommand {
+    const condition = this.parseList(["do"]);
+    this.readReserved("do");
+    const body = this.parseList(["done"]);
+    this.readReserved("done");
+    return { kind: "loop", head: null, condition, body, tail: this.parseTail() };
+  }
+
+  /** `for NAME [in WORDS]; do … done`, `for (( … )); do … done`, and `select` alike. */
+  private parseFor(): LoopCommand {
+    this.skipBlanks();
+    const head = this.emptyCommand();
+    if (this.startsWith("((")) {
+      this.pos += 2;
+      this.skipArithmetic();
+      head.end = this.pos;
+    } else {
       if (!this.atWordStart()) {
         throw new Unparsed();
       }
-      this.readWord();
-      return this.parseFunctionBody();
+      const name = this.readWord();
+      head.start = name.start;
+      head.end = name.end;
+      this.skipLinebreaks();
+      if (this.atReservedWord("in")) {
+        this.pos += 2;
+        for (;;) {
+          this.skipBlanks();
+          if (!this.atWordStart()) {
+            break;
+          }
+          addWord(head, this.readWord());
+        }
+      }
     }
-    return this.parseSimple(first);
+    this.skipBlanks();
+    if (this.startsWith(";") && !this.startsWith(";;")) {
+      this.pos++;
+    }
+    this.skipLinebreaks();
+    this.readReserved("do");
+    const body = this.parseList(["done"]);
+    this.readReserved("done");
+    return { kind: "loop", head, condition: null, body, tail: this.parseTail() };
+  }
+
+  private parseCase(): CaseCommand {
+    this.skipBlanks();
+    if (!this.atWordStart()) {
+      throw new Unparsed();
+    }
+    const subject = this.emptyCommand();
+    addWord(subject, this.readWord());
+    this.skipLinebreaks();
+    this.readReserved("in");
+    const branches: CaseCommand["branches"] = [];
+    for (;;) {
+      this.skipLinebreaks();
+      if (this.atReservedWord("esac")) {
+        this.readReserved("esac");
+        return { kind: "case", subject, branches, tail: this.parseTail() };
+      }
+      const patterns = this.emptyCommand();
+      if (this.startsWith("(")) {
+        this.pos++;
+      }
+      for (;;) {
+        this.skipBlanks();
+        if (!this.atWordStart()) {
+          throw new Unparsed();
+        }
+        addWord(patterns, this.readWord());
+        this.skipBlanks();
+        if (this.startsWith(")")) {
+          this.pos++;
+          break;
+        }
+        if (!this.startsWith("|")) {
+          throw new Unparsed();
+        }
+        this.pos++;
+      }
+      const body = this.parseList([";;", "esac"]);
+      const terminator = [";;&", ";;", ";&"].find((candidate) => this.startsWith(candidate));
+      this.pos += terminator?.length ?? 0;
+      branches.push({ patterns, body, fallsThrough: terminator === ";;&" || terminator === ";&" });
+    }
   }
 
   /** The words and redirections of a simple command, `first` already read. */
   private parseSimple(first: Word | null): Command {
     const command = this.emptyCommand();
-    const addWord = (word: Word) => {
-      command.words.push(word);
-      command.substitutions.push(...word.substitutions);
-      command.end = word.end;
-    };
     if (first) {
       command.start = first.start;
-      addWord(first);
+      addWord(command, first);
     }
     for (;;) {
       this.skipBlanks();
@@ -322,8 +489,13 @@ class ScriptParser {
       if (this.startsWith("<(") || this.startsWith(">(")) {
         const start = this.pos;
         this.pos += 2;
-        const substitution = this.parseList(")");
-        addWord({ ...bareWord(start, this.pos), expands: true, substitutions: [substitution] });
+        const substitution = this.parseList([")"]);
+        this.pos++;
+        addWord(command, {
+          ...bareWord(start, this.pos),
+          expands: true,
+          substitutions: [substitution],
+        });
         continue;
       }
       if (this.atRedirection()) {
@@ -337,24 +509,17 @@ class ScriptParser {
         ) {
           return this.parseFunctionBody(); // NAME ( ) BODY
         }
-        if (this.startsWith("((") && command.words[0]?.value === "for") {
-          this.pos += 2;
-          this.skipArithmetic(); // for (( … ))
-          command.end = this.pos;
-          continue;
-        }
         throw new Unparsed();
       }
       if (WORD_BREAKS.has(char)) {
         break;
       }
-      addWord(this.readWord());
+      addWord(command, this.readWord());
     }
-    this.trackCase(command);
     return command;
   }
 
-  /** The redirections after a compound command's `)` or `}`, and nothing else. */
+  /** The redirections after a compound command's closing word, and nothing else. */
   private parseTail(): SimpleCommand {
     const tail = this.emptyCommand();
     for (;;) {
@@ -388,19 +553,11 @@ class ScriptParser {
     };
   }
 
-  /** `case` opens a statement in which `)` ends a pattern, and `esac` closes it. */
-  private trackCase(command: SimpleCommand): void {
-    const first = command.words[0];
-    const top = this.caseDepths.length - 1;
-    if (first && isReservedWord(first, new Set(["case"]))) {
-      this.caseDepths[top]!++;
-    } else if (first && isReservedWord(first, new Set(["esac"])) && this.caseDepths[top]! > 0) {
-      this.caseDepths[top]!--;
+  private readReserved(word: string): void {
+    if (!this.atReservedWord(word)) {
+      throw new Unparsed();
     }
-  }
-
-  private caseDepth(): number {
-    return this.caseDepths[this.caseDepths.length - 1] ?? 0;
+    this.pos += word.length;
   }
 
   private atRedirection(): boolean {
@@ -569,7 +726,8 @@ class ScriptParser {
       this.skipArithmetic();
     } else if (next === "(") {
       this.pos += 2;
-      word.substitutions.push(this.parseList(")"));
+      word.substitutions.push(this.parseList([")"]));
+      this.pos++;
     } else if (next === "{") {
       this.pos += 2;
       this.skipParameterExpansion(word);
@@ -715,7 +873,7 @@ class ScriptParser {
     return char !== undefined && char !== "#" && !WORD_BREAKS.has(char);
   }
 
-  /** A reserved word (`{`, `}`) standing alone at the current position. */
+  /** A reserved word (`{`, `fi`, `done`, …) standing alone at the current position. */
   private atReservedWord(reserved: string): boolean {
     if (!this.startsWith(reserved)) {
       return false;
@@ -751,10 +909,25 @@ function isReservedWord(word: Word, reserved: Set<string>): boolean {
   return !word.quoted && !word.expands && reserved.has(word.value);
 }
 
+function addWord(command: SimpleCommand, word: Word): void {
+  command.words.push(word);
+  command.substitutions.push(...word.substitutions);
+  command.end = word.end;
+}
+
 // ---------------------------------------------------------------------------
 // The directory walk
 
-/** A stretch of the script run in one directory; null is unknown. */
+/**
+ * A directory the reading cannot tell. Each one differs from every other, so
+ * the walk can see that a command moved the shell even when it knows neither
+ * where from nor where to.
+ */
+class UnknownDirectory {}
+
+type Directory = string | UnknownDirectory;
+
+/** A stretch of the script read by a patch command running in `directory`; null is unknown. */
 interface Extent {
   start: number;
   end: number;
@@ -765,84 +938,238 @@ type DirectoryEffect = { kind: "none" } | { kind: "unknown" } | { kind: "cd"; op
 
 const UNKNOWN_EFFECT_COMMANDS = new Set(["pushd", "popd", "eval", "source", "."]);
 
-function walkList(list: CommandList, directory: string | null, extents: Extent[]): string | null {
-  for (const item of list.items) {
-    let after = directory;
-    for (const pipeline of item.pipelines) {
-      after = walkPipeline(pipeline, after, extents);
-    }
-    // A list sent to the background runs in a subshell.
-    directory = item.background && after !== directory ? null : after;
-  }
-  return directory;
-}
+/**
+ * The longest directory the walk follows. `cd` itself refuses a longer path
+ * on every system, and the bound keeps a script of chained relative `cd`s
+ * linear to read.
+ */
+const PATH_MAX = 4096;
 
-/** Each member of a pipeline starts in the directory the pipeline starts in. */
-function walkPipeline(
-  pipeline: Pipeline,
-  directory: string | null,
-  extents: Extent[],
-): string | null {
-  if (pipeline.commands.length === 1) {
-    return walkCommand(pipeline.commands[0]!, directory, extents);
-  }
-  let moved = false;
-  for (const command of pipeline.commands) {
-    if (walkCommand(command, directory, extents) !== directory) {
-      moved = true;
-    }
-  }
-  return moved ? null : directory;
-}
+/** The names `apply_patch` is run by, as Codex puts it on the `PATH`. */
+const PATCH_COMMANDS = new Set(["apply_patch", "applypatch"]);
 
-function walkCommand(command: Command, directory: string | null, extents: Extent[]): string | null {
-  switch (command.kind) {
-    case "subshell":
-      walkSimple(command.tail, directory, extents);
-      walkList(command.body, directory, extents);
-      return directory;
-    case "group":
-      walkSimple(command.tail, directory, extents);
-      return walkList(command.body, directory, extents);
-    case "function":
-      // The body runs whenever the function is called, from wherever.
-      walkCommand(command.body, null, extents);
-      return null;
-    case "simple":
-      return walkSimple(command, directory, extents);
-  }
-}
+/**
+ * How many commands a walk may visit: a floor, plus a number per character of
+ * the script. A loop whose passes start in different directories is walked
+ * twice, so loops nested deep enough could otherwise cost time exponential in
+ * their depth; a script past the budget is unparsed.
+ */
+const WALK_BUDGET_FLOOR = 100_000;
+const WALK_BUDGET_PER_CHARACTER = 16;
 
-function walkSimple(
-  command: SimpleCommand,
-  directory: string | null,
-  extents: Extent[],
-): string | null {
-  for (const substitution of command.substitutions) {
-    walkList(substitution, directory, extents);
-  }
-  if (command.end > command.start) {
-    extents.push({ start: command.start, end: command.end, directory });
-  }
-  for (const [start, end] of command.heredocs) {
-    extents.push({ start, end, directory });
-  }
-  const effect = directoryEffect(command.words);
-  switch (effect.kind) {
-    case "none":
-      return directory;
-    case "unknown":
-      return null;
-    case "cd":
-      if (isAbsolute(effect.operand)) {
-        return resolve(effect.operand);
+class DirectoryWalk {
+  readonly extents: Extent[] = [];
+  /** The directory of the patch command reading the text being walked, if one does. */
+  private reader: Directory | undefined;
+  private steps = 0;
+
+  constructor(private readonly budget: number) {}
+
+  list(list: CommandList, directory: Directory): Directory {
+    for (const item of list.items) {
+      const after = this.andOr(item, directory);
+      // A list sent to the background runs in a subshell, in bash and zsh alike.
+      if (!item.background) {
+        directory = after;
       }
-      return directory === null ? null : resolve(directory, effect.operand);
+    }
+    return directory;
+  }
+
+  private andOr(item: AndOrList, directory: Directory): Directory {
+    let current = this.pipeline(item.pipelines[0]!, directory);
+    // Whether the list could only have failed, so far, where it started.
+    let settled = current === directory;
+    item.operators.forEach((operator, index) => {
+      const pipeline = item.pipelines[index + 1]!;
+      if (operator === "&&") {
+        current = this.pipeline(pipeline, current);
+      } else {
+        // It runs only when what came before failed, wherever that was. When
+        // it does not move the shell (`cd sub || exit 1`), the directory is
+        // the one the list reached by succeeding, as for any `cd`; when it
+        // does, either may be the one in effect after it.
+        const start = settled ? current : new UnknownDirectory();
+        if (this.pipeline(pipeline, start) !== start) {
+          current = new UnknownDirectory();
+        }
+      }
+      settled &&= current === directory;
+    });
+    return current;
+  }
+
+  /**
+   * Every member of a pipeline starts in the directory the pipeline starts
+   * in. All but the last run in subshells; zsh runs the last in the current
+   * shell and bash does not, so a directory change there is unknown after it.
+   * When a member is a patch command, the other members feed it.
+   */
+  private pipeline(pipeline: Pipeline, directory: Directory): Directory {
+    const { commands } = pipeline;
+    if (commands.length === 1) {
+      return this.command(commands[0]!, directory);
+    }
+    const reader = this.reader;
+    if (commands.some((command) => command.kind === "simple" && isPatchCommand(command.words))) {
+      this.reader = directory;
+    }
+    let last: Directory = directory;
+    for (const command of commands) {
+      last = this.command(command, directory);
+    }
+    this.reader = reader;
+    return last === directory ? directory : new UnknownDirectory();
+  }
+
+  private command(command: Command, directory: Directory): Directory {
+    switch (command.kind) {
+      case "simple":
+        return this.simple(command, directory);
+      case "subshell":
+        this.text(command.tail, directory, false);
+        this.list(command.body, directory);
+        return directory;
+      case "group":
+        this.text(command.tail, directory, false);
+        return this.list(command.body, directory);
+      case "if":
+        return this.ifCommand(command, directory);
+      case "case":
+        return this.caseCommand(command, directory);
+      case "loop":
+        return this.loop(command, directory);
+      case "function":
+        // The body runs whenever the function is called, from wherever.
+        this.command(command.body, new UnknownDirectory());
+        return new UnknownDirectory();
+    }
+  }
+
+  /** Each condition runs after the ones before it failed; one body, or none, runs. */
+  private ifCommand(command: IfCommand, directory: Directory): Directory {
+    this.text(command.tail, directory, false);
+    const ends: Directory[] = [];
+    let current = directory;
+    for (const clause of command.clauses) {
+      current = this.list(clause.condition, current);
+      ends.push(this.list(clause.body, current));
+    }
+    ends.push(command.otherwise ? this.list(command.otherwise, current) : current);
+    return common(ends);
+  }
+
+  /** One branch runs, or none; a branch fallen into may start where the one before ended. */
+  private caseCommand(command: CaseCommand, directory: Directory): Directory {
+    this.text(command.tail, directory, false);
+    this.text(command.subject, directory, false);
+    const ends: Directory[] = [directory];
+    let fallenFrom: Directory | null = null;
+    for (const branch of command.branches) {
+      this.text(branch.patterns, directory, false);
+      const start = fallenFrom === null ? directory : common([directory, fallenFrom]);
+      const end = this.list(branch.body, start);
+      ends.push(end);
+      fallenFrom = branch.fallsThrough ? end : null;
+    }
+    return common(ends);
+  }
+
+  /**
+   * A loop runs its body any number of times. When a pass ends where it
+   * started, every pass does. Otherwise the passes after the first start
+   * elsewhere, so the loop is walked again from an unknown directory, whose
+   * placements then stand for every pass.
+   */
+  private loop(command: LoopCommand, directory: Directory): Directory {
+    this.text(command.tail, directory, false);
+    if (command.head) {
+      this.text(command.head, directory, false);
+    }
+    const mark = this.extents.length;
+    const first = this.pass(command, directory);
+    if (first.next === directory) {
+      return first.exit;
+    }
+    if (directory instanceof UnknownDirectory) {
+      // From one unknown directory, the walk places text as it would from any other.
+      return new UnknownDirectory();
+    }
+    this.extents.length = mark;
+    const later = this.pass(command, new UnknownDirectory());
+    return common([first.exit, later.exit]);
+  }
+
+  /**
+   * One pass of a loop from `start`: where the next pass starts, and where
+   * the loop ends if it ends instead, after a failing condition or once a
+   * `for` loop's words run out.
+   */
+  private pass(command: LoopCommand, start: Directory): { next: Directory; exit: Directory } {
+    if (command.condition) {
+      const checked = this.list(command.condition, start);
+      return { next: this.list(command.body, checked), exit: checked };
+    }
+    return { next: this.list(command.body, start), exit: start };
+  }
+
+  private simple(command: SimpleCommand, directory: Directory): Directory {
+    this.text(command, directory, isPatchCommand(command.words));
+    const effect = directoryEffect(command.words);
+    switch (effect.kind) {
+      case "none":
+        return directory;
+      case "unknown":
+        return new UnknownDirectory();
+      case "cd": {
+        let moved: string;
+        if (isAbsolute(effect.operand)) {
+          moved = resolve(effect.operand);
+        } else if (typeof directory === "string") {
+          moved = resolve(directory, effect.operand);
+        } else {
+          return new UnknownDirectory();
+        }
+        return moved.length > PATH_MAX ? new UnknownDirectory() : moved;
+      }
+    }
+  }
+
+  /**
+   * Place a command's words and heredoc bodies, after walking the
+   * substitutions in them, which run first and in the same directory. A patch
+   * command reads its own text and what its substitutions print; any other
+   * command's text is read by the patch command it feeds, if there is one.
+   */
+  private text(command: SimpleCommand, directory: Directory, patchCommand: boolean): void {
+    if (++this.steps > this.budget) {
+      throw new Unparsed();
+    }
+    const reader = this.reader;
+    if (patchCommand) {
+      this.reader = directory;
+    }
+    for (const substitution of command.substitutions) {
+      this.list(substitution, directory);
+    }
+    const placed = typeof this.reader === "string" ? this.reader : null;
+    this.reader = reader;
+    if (command.end > command.start) {
+      this.extents.push({ start: command.start, end: command.end, directory: placed });
+    }
+    for (const [start, end] of command.heredocs) {
+      this.extents.push({ start, end, directory: placed });
+    }
   }
 }
 
-/** What running a simple command does to the shell's working directory. */
-function directoryEffect(words: Word[]): DirectoryEffect {
+/** The directory every path leaves the shell in, or an unknown one when they differ. */
+function common(ends: Directory[]): Directory {
+  return ends.every((end) => end === ends[0]) ? ends[0]! : new UnknownDirectory();
+}
+
+/** The index of the word naming the command run, past assignments and `builtin` or `command`. */
+function commandIndex(words: Word[]): number {
   let index = 0;
   while (words[index]?.assignment) {
     index++;
@@ -854,6 +1181,17 @@ function directoryEffect(words: Word[]): DirectoryEffect {
   ) {
     index++;
   }
+  return index;
+}
+
+function isPatchCommand(words: Word[]): boolean {
+  const name = words[commandIndex(words)];
+  return name !== undefined && !name.expands && PATCH_COMMANDS.has(basename(name.value));
+}
+
+/** What running a simple command does to the shell's working directory. */
+function directoryEffect(words: Word[]): DirectoryEffect {
+  const index = commandIndex(words);
   const name = words[index];
   if (!name || name.expands) {
     return { kind: "none" };

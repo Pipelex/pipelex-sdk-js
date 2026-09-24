@@ -77,15 +77,21 @@ export interface CodexMthdsTarget {
   path: string;
   /** The path as the patch wrote it. */
   writtenAs: string;
-  /** The lines added by the last section that wrote the file. */
-  addedLines: string[];
+  /**
+   * The lines each envelope's last section writing the file adds. A shell
+   * script may hold several envelopes, in branches, so any one may be the
+   * one that ran.
+   */
+  addedLines: string[][];
+  /** Some section of the patch deletes the file or moves it away. */
+  removedByPatch: boolean;
 }
 
 /** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
 export interface CodexMthdsTargets {
   /** Whether the patch ran through the shell (`tool_name: "Bash"`). */
   fromShell: boolean;
-  /** The files the patch leaves on disk, in the order the patch last wrote them. */
+  /** The files the patch leaves on disk, in the order the patch names them. */
   targets: CodexMthdsTarget[];
   /** Relative paths from a shell patch whose directory the script does not tell. */
   unplaced: string[];
@@ -98,15 +104,15 @@ const UNPLACED_KEY = "\0";
  * The `.mthds` files a Codex PostToolUse payload's patch leaves on disk.
  *
  * The patch envelope rides in `tool_input.command`, and its sections are
- * applied in order, so a file the patch moves or deletes is not a target (see
- * `patchTargets`). Relative paths resolve against the session directory, the
+ * applied in order, so a file the patch moves or deletes is not a target,
+ * unless another envelope of a shell script leaves it (see `patchTargets`). Relative paths resolve against the session directory, the
  * payload's `cwd` when it is absolute and `processCwd` otherwise, since Codex
  * starts the hook in that same directory.
  *
  * With `tool_name: "Bash"`, the command is a shell script that runs the patch,
  * and a relative path is relative to wherever the script had moved when the
- * patch ran. Each section is placed by the command holding its header (see
- * `readShellScript`): a relative path under a known directory resolves
+ * patch ran. Each section is placed by the patch command reading its header
+ * (see `readShellScript`): a relative path under a known directory resolves
  * against it, one under an unknown directory, or anywhere in a script that
  * could not be read, is listed as unplaced rather than guessed, and a header
  * no command holds is dropped. Any other `tool_name` is the `apply_patch`
@@ -154,9 +160,13 @@ export function extractCodexMthdsTargets(stdinJson: string, processCwd: string):
   const targets: CodexMthdsTarget[] = [];
   const unplaced: string[] = [];
   for (const file of patchTargets(sections, keyOf)) {
-    const key = keyOf(file.path, file.section);
-    if (!key.startsWith(UNPLACED_KEY)) {
-      targets.push({ path: key, writtenAs: file.path, addedLines: file.section.addedLines });
+    if (!file.key.startsWith(UNPLACED_KEY)) {
+      targets.push({
+        path: file.key,
+        writtenAs: file.path,
+        addedLines: file.sections.map((section) => section.addedLines),
+        removedByPatch: file.removedByPatch,
+      });
     } else if (!unplaced.includes(file.path)) {
       unplaced.push(file.path);
     }

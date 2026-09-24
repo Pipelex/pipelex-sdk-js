@@ -226,7 +226,12 @@ describe("extractCodexMthdsTargets", () => {
       HOOK_CWD,
     );
     expect(targets).toEqual([
-      { path: "/work/sub/a.mthds", writtenAs: "sub/a.mthds", addedLines: ["new"] },
+      {
+        path: "/work/sub/a.mthds",
+        writtenAs: "sub/a.mthds",
+        addedLines: [["new"]],
+        removedByPatch: false,
+      },
     ]);
   });
 
@@ -276,7 +281,14 @@ describe("extractCodexMthdsTargets", () => {
       );
       expect(result).toEqual({
         fromShell: true,
-        targets: [{ path: "/work/sub/broken.mthds", writtenAs: "broken.mthds", addedLines: ["x"] }],
+        targets: [
+          {
+            path: "/work/sub/broken.mthds",
+            writtenAs: "broken.mthds",
+            addedLines: [["x"]],
+            removedByPatch: false,
+          },
+        ],
         unplaced: [],
       });
     });
@@ -309,18 +321,58 @@ describe("extractCodexMthdsTargets", () => {
       expect(result.unplaced).toEqual([]);
     });
 
-    it("compares a moved file across two patches by its resolved path", () => {
+    const DELETE = "*** Begin Patch\n*** Delete File: broken.mthds\n*** End Patch";
+
+    it("keeps a file one patch edits and another deletes, compared by resolved path", () => {
       const script =
         `cd sub && apply_patch <<'P1'\n${PATCH}\nP1\n` +
-        `cd .. && apply_patch <<'P2'\n*** Begin Patch\n*** Delete File: sub/broken.mthds\n*** End Patch\nP2\n`;
-      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toEqual([]);
+        `cd .. && apply_patch <<'P2'\n${DELETE.replace("broken", "sub/broken")}\nP2\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/sub/broken.mthds", removedByPatch: true },
+      ]);
+    });
+
+    it("keeps an edit when a patch in another unknown directory deletes the same name", () => {
+      const script =
+        `cd "$A" && apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `cd "$B" && apply_patch <<'P2'\n${DELETE}\nP2\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({
+        fromShell: true,
+        targets: [],
+        unplaced: ["broken.mthds"],
+      });
+    });
+
+    it("keeps an edit made in one branch and deleted in the other", () => {
+      const script =
+        `if test -f x; then apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `else apply_patch <<'P2'\n${DELETE}\nP2\nfi\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/broken.mthds", addedLines: [["x"]], removedByPatch: true },
+      ]);
+    });
+
+    it("lists a patch held in a variable and applied later as unplaced", () => {
+      const script = `PATCH=$(cat <<'EOF'\n${PATCH}\nEOF\n)\ncd sub && apply_patch "$PATCH"\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({
+        fromShell: true,
+        targets: [],
+        unplaced: ["broken.mthds"],
+      });
     });
 
     it("reads the apply_patch tool's patch as the session directory's, whatever it holds", () => {
       const stdin = envelope(`cd sub\n${PATCH}\n`, { cwd: "/work" });
       expect(extractCodexMthdsTargets(stdin, HOOK_CWD)).toEqual({
         fromShell: false,
-        targets: [{ path: "/work/broken.mthds", writtenAs: "broken.mthds", addedLines: ["x"] }],
+        targets: [
+          {
+            path: "/work/broken.mthds",
+            writtenAs: "broken.mthds",
+            addedLines: [["x"]],
+            removedByPatch: false,
+          },
+        ],
         unplaced: [],
       });
     });

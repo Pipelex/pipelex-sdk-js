@@ -22,20 +22,27 @@ export interface PatchSection {
   moveTo: string | null;
   /** Offset of the section's header line in the text read. */
   offset: number;
+  /** How many `*** Begin Patch` lines precede the section: the sections of one envelope share it. */
+  envelope: number;
   /** The section's `+` lines, marker stripped, otherwise as written. */
   addedLines: string[];
 }
 
-/** A file the patch leaves on disk, with the section that last wrote it. */
+/** A file the patch leaves on disk. */
 export interface SurvivingFile {
-  /** The path as the patch wrote it: the section's own, or its `Move to`. */
+  /** The caller's key for the file. */
+  key: string;
+  /** The path as the first section leaving the file named it: its own, or its `Move to`. */
   path: string;
-  section: PatchSection;
+  /** Each envelope's last section that leaves the file on disk. */
+  sections: PatchSection[];
+  /** Some section deletes the file or moves it away, so its absence may be the patch's doing. */
+  removedByPatch: boolean;
 }
 
 const SECTION_HEADER = /^\*\*\* (Add File|Update File|Delete File):\s*(.*?)\s*$/;
 const MOVE_HEADER = /^\*\*\* Move to:\s*(.*?)\s*$/;
-const ENVELOPE_BOUNDARY = /^\*\*\* (?:Begin|End) Patch\b/;
+const ENVELOPE_BOUNDARY = /^\*\*\* (Begin|End) Patch\b/;
 const MTHDS_PATH = /.\.mthds$/;
 
 const SECTION_KINDS: Record<string, PatchSection["kind"]> = {
@@ -54,12 +61,14 @@ const SECTION_KINDS: Record<string, PatchSection["kind"]> = {
 export function readPatchSections(text: string): PatchSection[] {
   const sections: PatchSection[] = [];
   let current: PatchSection | null = null;
+  let envelope = 0;
   let lineStart = 0;
   while (lineStart <= text.length) {
     const newline = text.indexOf("\n", lineStart);
     const lineEnd = newline === -1 ? text.length : newline;
     const line = text.slice(lineStart, lineEnd).replace(/\r$/, "");
     const header = SECTION_HEADER.exec(line);
+    const boundary = ENVELOPE_BOUNDARY.exec(line);
     if (header) {
       current = null;
       if (header[2]) {
@@ -68,12 +77,16 @@ export function readPatchSections(text: string): PatchSection[] {
           path: header[2],
           moveTo: null,
           offset: lineStart,
+          envelope,
           addedLines: [],
         };
         sections.push(current);
       }
-    } else if (ENVELOPE_BOUNDARY.test(line)) {
+    } else if (boundary) {
       current = null;
+      if (boundary[1] === "Begin") {
+        envelope++;
+      }
     } else if (current) {
       const move = MOVE_HEADER.exec(line);
       if (move) {
@@ -93,28 +106,51 @@ export function readPatchSections(text: string): PatchSection[] {
 }
 
 /**
- * The `.mthds` files that survive the sections, applied in order: an added or
- * updated file becomes a target, a moved file stops being one and its
- * destination becomes one, and a deleted file stops being one. Two paths name
- * the same file when `keyOf` gives them the same key, which lets the caller
- * compare paths resolved against the directory each section was applied in;
- * by default the paths are compared as written.
+ * The `.mthds` files that survive the sections. Within one envelope the
+ * sections apply in order and in one directory: an added or updated file
+ * becomes a target, a moved file stops being one and its destination becomes
+ * one, and a deleted file stops being one. The envelopes of a shell script
+ * may run in other directories, in branches, or not at all, so across them a
+ * file survives when any envelope leaves it, and a delete in one never hides
+ * another's edit. Two paths name the same file when `keyOf` gives them the
+ * same key, which lets the caller compare paths resolved against the
+ * directory each section was applied in; by default the paths are compared
+ * as written.
  */
 export function patchTargets(
   sections: readonly PatchSection[],
   keyOf: (path: string, section: PatchSection) => string = (path) => path,
 ): SurvivingFile[] {
-  const surviving = new Map<string, SurvivingFile>();
+  const envelopes = new Map<number, PatchSection[]>();
   for (const section of sections) {
-    const key = keyOf(section.path, section);
-    if (section.kind === "delete") {
-      surviving.delete(key);
-    } else if (section.moveTo !== null) {
-      surviving.delete(key);
-      surviving.set(keyOf(section.moveTo, section), { path: section.moveTo, section });
-    } else {
-      surviving.set(key, { path: section.path, section });
+    envelopes.set(section.envelope, [...(envelopes.get(section.envelope) ?? []), section]);
+  }
+  const files = new Map<string, SurvivingFile>();
+  const removed = new Set<string>();
+  for (const envelope of envelopes.values()) {
+    const surviving = new Map<string, { path: string; section: PatchSection }>();
+    for (const section of envelope) {
+      const key = keyOf(section.path, section);
+      if (section.kind === "delete" || section.moveTo !== null) {
+        surviving.delete(key);
+        removed.add(key);
+      }
+      if (section.moveTo !== null) {
+        surviving.set(keyOf(section.moveTo, section), { path: section.moveTo, section });
+      } else if (section.kind !== "delete") {
+        surviving.set(key, { path: section.path, section });
+      }
+    }
+    for (const [key, { path, section }] of surviving) {
+      const file = files.get(key);
+      if (file) {
+        file.sections.push(section);
+      } else {
+        files.set(key, { key, path, sections: [section], removedByPatch: false });
+      }
     }
   }
-  return Array.from(surviving.values()).filter((file) => MTHDS_PATH.test(file.path));
+  return Array.from(files.values())
+    .filter((file) => MTHDS_PATH.test(file.path))
+    .map((file) => ({ ...file, removedByPatch: removed.has(file.key) }));
 }

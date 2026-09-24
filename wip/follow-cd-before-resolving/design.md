@@ -41,18 +41,21 @@ This matters here because a shell patch's missing file is now a signal (Decision
 
 ### 3. For a `Bash` payload, the hook follows the shell's working directory through the script
 
-The script is lexed as a POSIX shell script, the dialect both bash and zsh accept for everything read here, and walked in order with a directory that starts at the session directory. Each patch header belongs to the command whose text holds it: the command's own words, including a quoted argument spanning several lines, or a heredoc body that command opened. The header's directory is the directory in effect when that command runs. This one rule covers every form a patch is fed in: `apply_patch <<'EOF'`, `apply_patch '…'`, `cat <<'EOF' | apply_patch`, and `apply_patch "$(cat <<'EOF' …)"`, where the heredoc belongs to a command inside a substitution that runs in the same directory. It also handles one script applying several patches in different directories.
+The script is lexed as a POSIX shell script, the dialect both bash and zsh accept for everything read here, and walked in order with a directory that starts at the session directory. A patch header is placed at the directory of the patch command that reads it: the words of an `apply_patch` command, including a quoted argument spanning several lines, and the heredoc bodies it opened; and the text of a command feeding one, through a pipeline (`cat <<'EOF' | apply_patch`) or through a substitution in its words (`apply_patch "$(cat <<'EOF' …)"`), which is read in the patch command's directory whatever the feeding command does inside. Text that any other command holds has an unknown directory: a patch kept in a variable, written to a file for later, or run through `bash -c` or `eval` is read by a command this reading does not follow. The walk also handles one script applying several patches in different directories.
 
 | Construct | How it is read |
 | --- | --- |
 | `cd DIR`, with one operand that is a literal word, optionally after `-L`, `-P` or `--` | The directory becomes `DIR`, resolved against the current one. An absolute `DIR` makes an unknown directory known again. |
 | `cd` with no operand, `cd -`, an operand starting with `~`, an operand holding `$`, a backtick or a glob character, or several operands | The directory becomes unknown. |
 | `pushd`, `popd`, `eval`, `source`, `.`, and any function definition | The directory becomes unknown. |
-| A `cd` in a pipeline, or in a command sent to the background with `&` | The directory becomes unknown, because bash runs it in a subshell while zsh runs a pipeline's last command in the current shell. |
+| `apply_patch` or `applypatch`, by name or by path, after assignments or `command` | The patch command: the headers it reads are placed at its directory. |
 | `( … )` and `$( … )` | A scope: a `cd` inside it ends at the closing parenthesis. |
-| `{ … }`, the bodies of `if`, `while`, `until`, `for` and `case`, and the separators `&&`, `\|\|`, `;` and newline | Followed in order, as if every command ran. A `cd` in a branch that was not taken is caught by the content check (Decision 5). |
+| A list sent to the background with `&`, and every member of a pipeline but the last | A subshell in bash and zsh alike, so a `cd` inside it ends with it. |
+| A pipeline's last member | The directory becomes unknown when it moves, because zsh runs that member in the current shell and bash does not. |
+| `{ … }` and the separators `&&`, `;` and newline | Followed in order, assuming each `cd` succeeds. |
+| `\|\|`, the branches of `if` and `case`, and the passes of `for`, `select`, `while` and `until` loops | Where only one of several paths runs, the directory after is kept when every path leaves it the same, and is unknown otherwise. A pipeline after `\|\|` that does not move the shell, such as `exit 1`, leaves the directory to the path that succeeded. A loop whose passes start in different directories is read from an unknown one. |
 | Heredoc bodies, quoted strings and comments | Never read as commands. A header in a comment belongs to no command and is dropped. |
-| An unterminated quote, substitution or backtick, a heredoc inside backticks, or an unbalanced `)` | The script is unparsed, and every relative path in it has an unknown directory. |
+| An unterminated quote, substitution, backtick or compound command, a heredoc inside backticks, an unbalanced `)`, or a closing word such as `fi` with nothing to close | The script is unparsed, and every relative path in it has an unknown directory. |
 
 An `apply_patch` payload keeps today's reading: the patch tool's paths are relative to the session directory, so the tracking applies to `Bash` payloads alone. A payload with no `tool_name`, or any other one, is read as the patch tool's.
 
@@ -96,6 +99,7 @@ The Claude and Vibe readings, the patch tool's reading apart from the anchor of 
 - **A near-copy can still be checked.** A same-named file in the session directory that already holds every added line of the patch passes the content check. This needs a copy of the method in two places and a patch run elsewhere by `workdir`, and even then the file checked is a copy of the one edited.
 - **Another hook may run first.** A user's own `PostToolUse` hook that reformats `.mthds` files on `Bash` before this one would make the added lines differ from the file, and the hook would skip the file with the note. `mthds-agent`'s Codex hook matches the patch tool only, so it cannot be that hook.
 - **`CDPATH`, login profiles and failing commands are ignored.** A `cd` is assumed to succeed and to go where its operand says. The content check catches the cases where it did not.
+- **A patch read later is not followed.** A patch kept in a variable, written to a file, run through `bash -c`, `eval` or a function, or fed to a patch command inside a subshell or a group, has an unknown directory, so its relative paths get the note rather than a check.
 - **Heredocs opened with `<<-` and indented patch lines.** The shell strips leading tabs from such a body, and the header expression, anchored at the start of a line, does not see a tab-indented header, today as after this change.
 - **Only POSIX shells are read.** A PowerShell script on Windows is read as a POSIX one; the content check keeps a misreading from checking the wrong file.
 - **A patch Codex applies in process is still invisible.** `apply_patch <<'EOF' … EOF` alone, or after exactly `cd <dir> &&`, fires no `PostToolUse` at all (recorded in `pipelex-plugins` `docs/hooks.md`); nothing in the bundle can change that.

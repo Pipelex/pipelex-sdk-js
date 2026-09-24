@@ -29,6 +29,7 @@ describe("readPatchSections", () => {
         path: "new.mthds",
         moveTo: null,
         offset: text.indexOf("*** Add File"),
+        envelope: 1,
         addedLines: ['domain = "demo"', ""],
       },
       {
@@ -36,6 +37,7 @@ describe("readPatchSections", () => {
         path: "old.mthds",
         moveTo: null,
         offset: text.indexOf("*** Update File"),
+        envelope: 1,
         addedLines: ["added"],
       },
       {
@@ -43,6 +45,7 @@ describe("readPatchSections", () => {
         path: "gone.mthds",
         moveTo: null,
         offset: text.indexOf("*** Delete File"),
+        envelope: 1,
         addedLines: [],
       },
     ]);
@@ -81,9 +84,17 @@ describe("readPatchSections", () => {
     expect(readPatchSections(text)[0]!.addedLines).toEqual(["kept"]);
   });
 
-  it("reads several envelopes in one text", () => {
+  it("reads several envelopes in one text, numbering each", () => {
     const text = patch("*** Update File: a.mthds", "+a") + patch("*** Add File: b.mthds", "+b");
-    expect(readPatchSections(text).map((section) => section.path)).toEqual(["a.mthds", "b.mthds"]);
+    expect(readPatchSections(text).map(({ path, envelope }) => [path, envelope])).toEqual([
+      ["a.mthds", 1],
+      ["b.mthds", 2],
+    ]);
+  });
+
+  it("gives sections before any Begin Patch line an envelope of their own", () => {
+    const text = "*** Update File: a.mthds\n+a\n" + patch("*** Update File: b.mthds", "+b");
+    expect(readPatchSections(text).map((section) => section.envelope)).toEqual([0, 1]);
   });
 
   it("only reads headers at the start of a line", () => {
@@ -149,12 +160,47 @@ describe("patchTargets", () => {
       ),
     );
     expect(files).toHaveLength(1);
-    expect(files[0]!.section.addedLines).toEqual(["second"]);
+    expect(files[0]!.sections.map((section) => section.addedLines)).toEqual([["second"]]);
   });
 
   it("keeps a section that adds no line", () => {
     const files = patchTargets(readPatchSections(patch("*** Update File: a.mthds", "@@", "-x")));
-    expect(files.map((file) => file.section.addedLines)).toEqual([[]]);
+    expect(files.map((file) => file.sections[0]!.addedLines)).toEqual([[]]);
+  });
+
+  it("flags a file some section removes, even when a later one adds it back", () => {
+    const [kept] = patchTargets(
+      readPatchSections(patch("*** Delete File: a.mthds", "*** Add File: a.mthds", "+x")),
+    );
+    expect(kept).toMatchObject({ path: "a.mthds", removedByPatch: true });
+    const [edited] = patchTargets(readPatchSections(patch("*** Update File: a.mthds", "+x")));
+    expect(edited).toMatchObject({ path: "a.mthds", removedByPatch: false });
+  });
+
+  it("keeps a file one envelope edits and another deletes, whatever their order", () => {
+    const edit = patch("*** Update File: a.mthds", "+x");
+    const remove = patch("*** Delete File: a.mthds");
+    for (const text of [edit + remove, remove + edit]) {
+      const files = patchTargets(readPatchSections(text));
+      expect(files).toMatchObject([{ path: "a.mthds", removedByPatch: true }]);
+      expect(files[0]!.sections.map((section) => section.addedLines)).toEqual([["x"]]);
+    }
+  });
+
+  it("keeps the added lines of every envelope that writes a file", () => {
+    const text =
+      patch("*** Update File: a.mthds", "+first") + patch("*** Update File: a.mthds", "+second");
+    const files = patchTargets(readPatchSections(text));
+    expect(files.map((file) => file.sections.map((section) => section.addedLines))).toEqual([
+      [["first"], ["second"]],
+    ]);
+  });
+
+  it("keeps a moved file's source when another envelope writes it", () => {
+    const text =
+      patch("*** Update File: a.mthds", "*** Move to: b.mthds", "+x") +
+      patch("*** Add File: a.mthds", "+y");
+    expect(targetsOf(text)).toEqual(["b.mthds", "a.mthds"]);
   });
 
   it("compares paths by the caller's key", () => {

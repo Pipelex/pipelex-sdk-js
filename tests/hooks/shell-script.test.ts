@@ -51,15 +51,9 @@ describe("readShellScript: following cd", () => {
     ["command cd", `command cd sub && ${APPLY}`, ["/s/sub"]],
     ["a quoted command name", `"cd" sub && ${APPLY}`, ["/s/sub"]],
     ["a line continuation", `cd \\\nsub && ${APPLY}`, ["/s/sub"]],
-    ["a cd in if's body", `if true; then cd sub; fi\n${APPLY}`, ["/s/sub"]],
-    ["a cd in a loop body", `for d in a; do cd sub; done\n${APPLY}`, ["/s/sub"]],
     ["a cd in a group", `{ cd sub; }\n${APPLY}`, ["/s/sub"]],
-    ["a cd in a case branch", `case x in x) cd sub;; esac\n${APPLY}`, ["/s/sub"]],
-    [
-      "a cd in an arithmetic for",
-      `for ((i = 0; i < 1; i++)); do cd sub; done\n${APPLY}`,
-      ["/s/sub"],
-    ],
+    ["a negated cd", `! cd sub\n${APPLY}`, ["/s/sub"]],
+    ["a timed cd", `time -p cd sub\n${APPLY}`, ["/s/sub"]],
     ["cd in a comment", `# cd other\n${APPLY}`, ["/s"]],
     ["a trailing comment", `cd sub # then patch\n${APPLY}`, ["/s/sub"]],
   ])("%s", (_name, script, expected) => {
@@ -82,6 +76,7 @@ describe("readShellScript: an unknown directory", () => {
     ["an unknown option", `cd -e sub && ${APPLY}`],
     ["zsh's directory stack", `cd +1 && ${APPLY}`],
     ["a relative cd from an unknown directory", `cd "$X" && cd sub && ${APPLY}`],
+    ["a directory longer than any PATH_MAX", `cd ${"a/".repeat(2100)} && ${APPLY}`],
     ["pushd", `pushd sub && ${APPLY}`],
     ["popd", `popd && ${APPLY}`],
     ["eval", `eval "cd sub" && ${APPLY}`],
@@ -89,9 +84,8 @@ describe("readShellScript: an unknown directory", () => {
     [". (dot)", `. ./env.sh && ${APPLY}`],
     ["a function definition", `f() { cd sub; }\n${APPLY}`],
     ["a function keyword definition", `function f { cd sub; }\n${APPLY}`],
-    ["a cd in a pipeline", `cd sub | cat\n${APPLY}`],
-    ["a cd sent to the background", `cd sub &\n${APPLY}`],
-    ["a group with a cd in a pipeline", `{ cd sub; } | cat\n${APPLY}`],
+    ["a cd as a pipeline's last member", `echo | cd sub\n${APPLY}`],
+    ["a loop moving as a pipeline's last member", `ls | while read d; do cd sub; done\n${APPLY}`],
   ])("%s", (_name, script) => {
     expect(placements(script)).toEqual(["unknown"]);
   });
@@ -119,9 +113,24 @@ describe("readShellScript: scopes", () => {
     expect(placements(`sleep 1 &\ncd sub && ${APPLY}`)).toEqual(["/s/sub"]);
   });
 
+  it.each([
+    ["a cd in a pipeline", `cd sub | cat\n${APPLY}`],
+    ["a group with a cd in a pipeline", `{ cd sub; } | cat\n${APPLY}`],
+    ["a loop in a pipeline", `for d in x; do cd sub; done | cat\n${APPLY}`],
+    ["a cd sent to the background", `cd sub &\n${APPLY}`],
+    ["an if sent to the background", `if true; then cd sub; fi &\n${APPLY}`],
+  ])("keeps the directory past %s, which runs in a subshell", (_name, script) => {
+    expect(placements(script)).toEqual(["/s"]);
+  });
+
   it("follows a cd inside a background list for the commands of that list", () => {
     const script = `cd sub && apply_patch <<'EOF' &\n${PATCH}\nEOF\n${APPLY}\n`;
-    expect(placements(script)).toEqual(["/s/sub", "unknown"]);
+    expect(placements(script)).toEqual(["/s/sub", "/s"]);
+  });
+
+  it("places a patch command fed by a compound command that moves", () => {
+    const script = `if true; then cd sub; fi | apply_patch <<'EOF'\n${PATCH}\nEOF\n`;
+    expect(placements(script)).toEqual(["/s"]);
   });
 
   it("starts every member of a pipeline in the pipeline's directory", () => {
@@ -130,6 +139,111 @@ describe("readShellScript: scopes", () => {
 
   it("follows a cd inside a subshell for the rest of that subshell", () => {
     expect(placements(`(cd sub; cd deeper; ${APPLY}\n)`)).toEqual(["/s/sub/deeper"]);
+  });
+});
+
+describe("readShellScript: branches", () => {
+  it.each([
+    ["cd || exit", `cd sub || exit 1\n${APPLY}`, ["/s/sub"]],
+    ["cd || cd", `cd sub || cd other\n${APPLY}`, ["unknown"]],
+    ["cd || a group that does not move", `cd sub || { echo no; exit 1; }\n${APPLY}`, ["/s/sub"]],
+    ["a cd after || a test", `test -d sub || cd other\n${APPLY}`, ["unknown"]],
+    ["a cd after && and another after ||", `test -d a && cd a || cd b\n${APPLY}`, ["unknown"]],
+    ["a patch after || a command that does not move", `false || ${APPLY}`, ["/s"]],
+    ["a patch after || a list that moved", `cd sub && false || ${APPLY}`, ["unknown"]],
+    ["a cd in if's body", `if true; then cd sub; fi\n${APPLY}`, ["unknown"]],
+    ["the same cd in both branches", `if a; then cd sub; else cd sub; fi\n${APPLY}`, ["/s/sub"]],
+    [
+      "different cds in the branches",
+      `if a; then cd sub; else cd other; fi\n${APPLY}`,
+      ["unknown"],
+    ],
+    ["a cd in the condition", `if cd sub; then echo in; fi\n${APPLY}`, ["/s/sub"]],
+    [
+      "the same cd in every elif branch",
+      `if a; then cd x; elif b; then cd x; else cd x; fi\n${APPLY}`,
+      ["/s/x"],
+    ],
+    ["elif branches with no else", `if a; then cd x; elif b; then cd x; fi\n${APPLY}`, ["unknown"]],
+    ["a patch in if's body", `if test -d sub; then cd sub && ${APPLY}\nfi`, ["/s/sub"]],
+    ["a patch in else's body", `if false; then :; else cd sub && ${APPLY}\nfi`, ["/s/sub"]],
+    ["a cd in a case branch", `case x in x) cd sub;; esac\n${APPLY}`, ["unknown"]],
+    [
+      "the same cd in every case branch",
+      `case x in (a|b) cd sub;; *) cd sub;; esac\n${APPLY}`,
+      ["unknown"],
+    ],
+    ["a patch in a case branch", `case x in x) cd sub && ${APPLY}\n;; esac`, ["/s/sub"]],
+    ["a case branch fallen into", `case x in a) cd sub;& b) ${APPLY}\n;; esac`, ["unknown"]],
+  ])("%s", (_name, script, expected) => {
+    expect(placements(script)).toEqual(expected);
+  });
+});
+
+describe("readShellScript: loops", () => {
+  it.each([
+    ["a cd in a for loop", `for d in a; do cd sub; done\n${APPLY}`, ["unknown"]],
+    ["a cd in an until loop", `until false; do cd sub; done\n${APPLY}`, ["unknown"]],
+    [
+      "a cd in an arithmetic for",
+      `for ((i = 0; i < 1; i++)); do cd sub; done\n${APPLY}`,
+      ["unknown"],
+    ],
+    [
+      "a pass that returns where it started",
+      `for d in a; do cd sub && ${APPLY}\ncd ..; done`,
+      ["/s/sub"],
+    ],
+    ["a pass that does not return", `for d in a b; do cd sub && ${APPLY}\ndone`, ["unknown"]],
+    ["an absolute cd in the body", `for d in a b; do cd /abs && ${APPLY}\ndone`, ["/abs"]],
+    ["a loop that does not move", `while read l; do ${APPLY}\ndone`, ["/s"]],
+    ["a condition that moves", `while cd sub; do cd ..; done\n${APPLY}`, ["/s/sub"]],
+    ["nested loops", `for a in x; do for b in y; do cd sub; done; done\n${APPLY}`, ["unknown"]],
+    ["a select loop", `select d in a; do cd sub; break; done\n${APPLY}`, ["unknown"]],
+    ["a for loop over the arguments", `for d\ndo cd sub; done\n${APPLY}`, ["unknown"]],
+  ])("%s", (_name, script, expected) => {
+    expect(placements(script)).toEqual(expected);
+  });
+
+  it("gives up on loops nested past its budget, rather than walking them for ever", () => {
+    const depth = 24;
+    const script = "for x in a; do cd /a; ".repeat(depth) + "cd b; done; ".repeat(depth) + APPLY;
+    expect(placements(script)).toBe("unparsed");
+  });
+});
+
+describe("readShellScript: what reads the patch", () => {
+  it.each([
+    [
+      "a patch held in a variable",
+      `PATCH=$(cat <<'EOF'\n${PATCH}\nEOF\n)\ncd sub && apply_patch "$PATCH"\n`,
+    ],
+    [
+      "a patch staged in a file",
+      `cat > /tmp/p <<'EOF'\n${PATCH}\nEOF\ncd sub && apply_patch < /tmp/p\n`,
+    ],
+    ["a patch in bash -c", `bash -c 'cd sub && apply_patch <<EOF\n${PATCH}\nEOF'\n`],
+    ["a patch in eval", `eval 'cd sub; apply_patch <<EOF\n${PATCH}\nEOF'\n`],
+    ["a heredoc on a group", `{ cd sub; apply_patch; } <<'EOF'\n${PATCH}\nEOF\n`],
+    ["a pipeline into a subshell", `cat <<'EOF' | (cd sub && apply_patch)\n${PATCH}\nEOF\n`],
+    ["a command named by a variable", `cd sub && $AP <<'EOF'\n${PATCH}\nEOF\n`],
+  ])("reads %s as unknown", (_name, script) => {
+    expect(placements(script)).toEqual(["unknown"]);
+  });
+
+  it.each([
+    ["a path to apply_patch", `cd sub && ./bin/apply_patch <<'EOF'\n${PATCH}\nEOF\n`, "/s/sub"],
+    ["command apply_patch", `cd sub && command apply_patch <<'EOF'\n${PATCH}\nEOF\n`, "/s/sub"],
+    ["applypatch", `cd sub && applypatch <<'EOF'\n${PATCH}\nEOF\n`, "/s/sub"],
+    ["a substitution that moves", `apply_patch "$(cd sub; cat <<'EOF'\n${PATCH}\nEOF\n)"\n`, "/s"],
+    [
+      "a substitution in a feeding command",
+      `cd sub; echo "$(cat <<'EOF'\n${PATCH}\nEOF\n)" | apply_patch\n`,
+      "/s/sub",
+    ],
+    ["a group feeding it", `{ cd other; cat <<'EOF'; } | apply_patch\n${PATCH}\nEOF\n`, "/s"],
+  ])("places %s at the patch command's directory", (_name, script, expected) => {
+    expect(placements(script)).toEqual([expected]);
   });
 });
 
@@ -207,14 +321,32 @@ describe("readShellScript: lexing", () => {
     expect(placements(`(( x = 1 << 2 ))\ncd sub && ${APPLY}`)).toEqual(["/s/sub"]);
   });
 
-  it("answers outside for an offset in a comment or between commands", () => {
-    const script = `# a comment\n\ncd sub\n`;
+  it("answers outside between commands, and unknown for text no patch command reads", () => {
+    const script = `# a comment\n\ncd sub\napply_patch x\n`;
     const reading = readShellScript(script, SESSION);
     expect(reading).not.toBe("unparsed");
     if (reading === "unparsed") return;
     expect(reading.directoryAt(script.indexOf("comment"))).toEqual({ kind: "outside" });
     expect(reading.directoryAt(script.indexOf("\n\n") + 1)).toEqual({ kind: "outside" });
-    expect(reading.directoryAt(script.indexOf("sub"))).toEqual({ kind: "directory", path: "/s" });
+    expect(reading.directoryAt(script.indexOf("sub"))).toEqual({ kind: "unknown" });
+    expect(reading.directoryAt(script.indexOf(" x"))).toEqual({
+      kind: "directory",
+      path: "/s/sub",
+    });
+  });
+
+  it("reads compound commands in their every form", () => {
+    const script = [
+      "while true; do break; done",
+      "until false\ndo\n  break\ndone",
+      "for x in a b # comment\ndo :; done",
+      "for x; do :; done >/dev/null",
+      "case $x in\n  (a|b) echo a ;;\n  c) ;;&\n  *) if x; then y; fi ;&\n  d) :\nesac",
+      "if a\nthen\n  b\nelif c; then d\nelse\n  e\nfi 2>&1",
+      "f() if a; then b; fi",
+      `cd /abs && ${APPLY}`,
+    ].join("\n");
+    expect(placements(script)).toEqual(["/abs"]);
   });
 });
 
@@ -229,6 +361,13 @@ describe("readShellScript: unparsed", () => {
     ["an unterminated subshell", `(cd sub\n${APPLY}`],
     ["a heredoc inside backticks", "x=`cat <<EOF\ncd sub\nEOF`\n" + APPLY],
     ["a redirection with no target", `cd sub >\n${APPLY}`],
+    ["an if with no fi", `if true; then cd sub\n${APPLY}`],
+    ["a loop with no done", `for x in a; do cd sub\n${APPLY}`],
+    ["a case with no esac", `case x in a) cd sub;;\n${APPLY}`],
+    ["a closing word with nothing to close", `fi\n${APPLY}`],
+    ["a case terminator outside a case", `cd sub;;\n${APPLY}`],
+    ["an && with nothing after it", `${APPLY}\ncd sub &&`],
+    ["a pipe with nothing after it", `${APPLY}\ncd sub |`],
   ])("%s", (_name, script) => {
     expect(placements(script)).toBe("unparsed");
   });
