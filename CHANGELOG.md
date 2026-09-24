@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **The `.mthds` check hook's lint engine accepts the expanded input-slot form and intent hints**: the bundle built by `npm run build:hook` now embeds `@pipelex/tools-wasm` 0.3.0, whose MTHDS schema carries `inputs = { x = { concept = "…", hints = { … } } }` and `hints` on concepts and structure fields, so the hook no longer blocks those valid forms with a schema error; malformed hints are still refused. The engine is pinned exactly, so the bundle's provenance line, the manifest and the lockfile name the same version.
+
 ## [v0.23.0] - 2026-09-24
 
 ### Added
