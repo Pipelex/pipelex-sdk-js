@@ -104,3 +104,7 @@ Phases 1 to 3 are done as planned, with two additions and one deviation.
 - **Deviation: `unexpected` from `uploadWithGrant`.** The fall-through after the mapped ranges sets `server_error` only from `500` up and `unexpected` otherwise, rather than calling every leftover status a server error; the design's table was updated to say so.
 - **This repository has no `make agent-test` target**, so the gates were `make check` and `make test`.
 - Next: `/rev` at the depth `ledger review-profile` derives.
+
+### Review round 1, 2026-09-24
+
+`/rev` at profile 3, bar `open`, over `06e65c0`: cubic, Codex (review) and the official code-review all produced a review, and three findings were confirmed by one verifier and fixed in `779e0f3` (see the decisions log). The pass is recorded on the item with outcome `fixed`, and the ladder asked for round 2 at bar `defects`. The three consumer items are filed, each blocked by this item: L-260924-10735b (`pipelex-mcp`), L-260924-652ca9 (`pipelex-method-apps`) and L-260924-6d61f4 (`pipelex-starter-js`). What remains after round 2 converges: the pull request against `dev` titled `feature/Upload-default-timeout · L-260924-8d5bb5` with `Closes L-260924-8d5bb5`, its squash merge, and `/ledger-land`, which flips both documents to `landed`.
