@@ -121,3 +121,8 @@ Phases 1 to 3 are done as planned, with two additions and one deviation.
 ### Review round 3, 2026-09-24
 
 `/rev` at profile 3, bar `necessity`, over `accf4c0`: cubic, Codex (review) and the official code-review all produced a review. Codex and the code-review found nothing. cubic found that the browser-safe entry's import graph, stated in the `upload-grant.ts` header and in the module bullet of `docs/architecture.md`, still omitted `timers.ts`, which the entry has imported since `779e0f3`. The bar would defer it, since round 2 did not introduce it, but it is fixed in `c40b735` because the change has to leave its own documentation true, and the correction is two sentences with no code in them.
+
+### Review round 4, 2026-09-24
+
+`/rev` at profile 3, bar `freeze`, over `d7be15c`: cubic, Codex (review) and the official code-review all produced a review, and the pass ran because the session was unattended, which is the default a `freeze` bar takes then. Codex and the code-review found nothing. cubic found that the changelog's Breaking entry for the time limit names only callers who passed no signal, although a caller who passed a longer signal is now cut off at the default too and needs `timeoutMs`. It is not a critical, so the bar defers it, and it is filed as L-260924-373924 rather than left here, so the trace outlives this plan.
+
