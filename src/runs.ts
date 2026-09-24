@@ -310,6 +310,21 @@ export type FetchResultOnce = (
 ) => Promise<RunResultState>;
 
 /**
+ * Refuse wait options no poll loop can honour. A NaN would reach the sleep's timer as a
+ * 1 ms delay and poll in a tight loop. `startAndWaitForResult` calls this before it starts
+ * the run, so a bad option never leaves a started run the caller holds no id for.
+ */
+export function assertWaitOptions(options: WaitForResultOptions = {}): void {
+  const { intervalMs, timeoutMs } = options;
+  if (Number.isNaN(intervalMs) || Number.isNaN(timeoutMs)) {
+    throw new RangeError(
+      `"intervalMs" and "timeoutMs" must be numbers, got ${String(intervalMs)} and ` +
+        `${String(timeoutMs)}.`,
+    );
+  }
+}
+
+/**
  * Poll a single-shot result lookup (`fetchOnce`) until the run reaches a
  * terminal state. Returns the artifacts on `COMPLETED`, throws `RunFailedError`
  * on any other terminal status, and throws `RunTimeoutError` if `timeoutMs`
@@ -323,15 +338,9 @@ export async function pollUntilResult(
   runId: string,
   options: WaitForResultOptions = {},
 ): Promise<RunResults> {
+  assertWaitOptions(options);
   const intervalMs = options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
-  // A NaN would reach the sleep's timer as a 1 ms delay and poll in a tight loop.
-  if (Number.isNaN(intervalMs) || Number.isNaN(timeoutMs)) {
-    throw new RangeError(
-      `"intervalMs" and "timeoutMs" must be numbers, got ${String(intervalMs)} and ` +
-        `${String(timeoutMs)}.`,
-    );
-  }
   const startedAt = Date.now();
   let attempt = 0;
 

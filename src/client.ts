@@ -45,6 +45,7 @@ import type {
   ValidationErrorItem,
 } from "./models.js";
 import {
+  assertWaitOptions,
   pollUntilResult,
   type RunRead,
   type RunResults,
@@ -1334,6 +1335,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     options: PipelexStartOptions,
     pollOptions?: WaitForResultOptions,
   ): Promise<RunResults> {
+    // Before the run starts: a RangeError after it would carry no run id to re-poll by.
+    assertWaitOptions(pollOptions);
     if (await this.supportsRunLifecycle()) {
       // A runner can look hosted yet lack the durable routes — `implementation`
       // is an extension field, so a compliant bare runner that omits it is

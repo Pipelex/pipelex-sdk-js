@@ -102,6 +102,20 @@ describe("PipelexApiClient.startAndWaitForResult (hosted — durable start+poll 
     expect(fetchSpy.mock.calls[2]![0]).toBe("http://localhost:8081/v1/runs/run-1/results");
   });
 
+  it.each([
+    ["intervalMs", { intervalMs: Number.NaN }],
+    ["timeoutMs", { timeoutMs: Number.NaN }],
+  ])("refuses a NaN %s before starting the run", async (_name, pollOptions) => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(
+      client.startAndWaitForResult({ pipe_code: "p", mthds_contents: ["x"] }, pollOptions),
+    ).rejects.toBeInstanceOf(RangeError);
+    // Not even the handshake: a run started here would leave the caller no id to re-poll by.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("passes the relayed working memory through as it arrives", async () => {
     const client = makeClient();
     // The `working_memory.json` artifact the platform relays verbatim: every named stuff of the
