@@ -84,6 +84,23 @@ const client = new PipelexApiClient({ appInfo: { name: "acme-invoicer", version:
 // User-Agent: acme-invoicer/1.4.0 pipelex-sdk-js/<version> node/<version> (<os>; <arch>)
 ```
 
+### Uploading from a browser
+
+A browser page that holds a file but not the API key can still store it: the server that holds the key asks for an upload grant, and the page sends the file straight to storage with it. The file never crosses your server or the API gateway, so it can be as large as the service's own limit. The page imports `@pipelex/sdk/upload`, the browser-safe entry, which bundles with no Node builtin to mark external; the main `@pipelex/sdk` entry is Node-first.
+
+```ts
+// On the server, which holds the key:
+const grant = await client.requestUploadGrant({
+  filename: "report.pdf",
+  content_type: "application/pdf",
+  size: 48213,
+});
+
+// In the page, which holds the file:
+import { uploadWithGrant } from "@pipelex/sdk/upload";
+const { uri } = await uploadWithGrant(grant, file); // pipelex-storage://…
+```
+
 The full client surface is documented in [`docs/architecture.md`](./docs/architecture.md).
 
 ## Documentation
@@ -95,8 +112,8 @@ These pages ship inside the published package, so a reader who has only installe
 | [`docs/architecture.md`](./docs/architecture.md) | The whole client surface: the request pipeline, every route, the typed errors |
 | [`docs/run-results.md`](./docs/run-results.md) | Every field of `RunResults` — the run id as a durable handle, `main_stuff`, `working_memory`, `graph_spec`, the usage pair, produced files |
 | [`docs/run-usage.md`](./docs/run-usage.md) | What a run consumed, record by record, and `summarizeUsage` which folds them into one reading |
-| [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts` |
-| [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take |
+| [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `locateArtifacts`, `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts`, and how a saved file is named after the field it fills |
+| [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take, and the upload grant a browser page sends a file with |
 | [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
 | [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
 | [`docs/client-identification.md`](./docs/client-identification.md) | The `User-Agent` every API request carries, and `appInfo`, the option that puts your program's name in front of it |

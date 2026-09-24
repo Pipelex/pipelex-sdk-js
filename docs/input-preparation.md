@@ -1,6 +1,6 @@
 # Input preparation (`uploadFile` / `prepareInputs`)
 
-> **Status: implemented** (`src/upload.ts`, `src/prepare-inputs.ts`). This document records the contract, and is the public account of it. The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
+> **Status: implemented** (`src/upload.ts`, `src/upload-grant.ts`, `src/prepare-inputs.ts`). This document records the contract, and is the public account of it. The raw `upload()` primitive described in [architecture.md](./architecture.md) is the wire call `uploadFile` and `prepareInputs` build on.
 >
 > **Current scope.** `prepareInputs` names the method the same three ways every other method-taking operation does — inline `files`, a `method_ref` address, or a stored `method_id` — exactly one per call, all three resolved server-side by the one `validate` call it composes. One piece remains deliberately deferred and additive (it does not change this contract): the opt-in ingest of `http(s)` URLs into storage — for now an `http(s)` URL at a file position always passes through unchanged.
 
@@ -10,7 +10,7 @@ A hosted run cannot see the caller's filesystem or a browser's selected bytes. T
 
 Preparation is **explicit and separate from running.** `execute` / `start` never silently upload local files. The payoff: file-access errors happen *before* a run exists, prepared inputs are inspectable and reusable across a model sweep or retries without re-uploading, and `start` keeps a deterministic JSON-input contract.
 
-## The two operations
+## The operations
 
 ### `uploadFile` — single-asset convenience
 
@@ -21,7 +21,7 @@ Uploads one asset and returns its upload record. It is the language-native conve
 - A string that is an **HTTP(S) URL** or an existing **`pipelex-storage://` URI** is not a local asset and passes through in any runtime (see pass-through rules below).
 - Open file objects and streams are **deferred** — they can be added later without removing anything.
 
-> **Runtime acceptance vs. bundling.** These source types are accepted at *runtime* in every environment, but at the *packaging* level `@pipelex/sdk` is **Node-first**: it statically references `node:fs/promises` (to read path strings), so bundling the SDK for a browser or edge target currently requires marking `node:*` external. This is a deliberate stance — every consumer runs the SDK server-side in Node (Next.js Server Actions, the MCP server, the plugins hook) — revisited only if the SDK is ever imported into a browser client bundle or an edge route.
+> **Runtime acceptance vs. bundling.** These source types are accepted at *runtime* in every environment, but at the *packaging* level the main `@pipelex/sdk` entry is **Node-first**: it statically references `node:fs/promises` (to read path strings), so bundling it for a browser or edge target requires marking `node:*` external. This is a deliberate stance — the client holds an API key, so it runs server-side (Next.js Server Actions, the MCP server, the plugins hook). A browser page that must store a file uses the upload grant below instead, whose sender ships from the browser-safe `@pipelex/sdk/upload` entry.
 
 The returned **upload record** guarantees, beyond the source identity:
 
@@ -34,6 +34,59 @@ The returned **upload record** guarantees, beyond the source identity:
 | checksum | **Not present.** Within-preparation dedup relies on source identity, not hashing; cross-preparation dedup is a hosted storage-policy concern (Phase 5). |
 
 The MIME type and size are known client-side, so the record is assembled without extending the `/v1/upload` response.
+
+### Uploading with a grant — `requestUploadGrant` / `uploadWithGrant`
+
+`uploadFile` needs the client, and the client needs the API key. A browser page holds the bytes but must never hold the key, so the work is split in two: the side holding the key requests a **grant** for one file, hands it to the page, and the page sends the file straight to storage with it. The bytes cross neither the credential-holding server nor the API gateway, so the gateway's request quota, which caps a base64 `/v1/upload` near 7.5 MiB, does not apply: the file may be as large as the service's own limit, which the grant reports as `max_bytes`.
+
+**Requesting the grant** is a client method over `POST /v1/upload/grant`:
+
+```ts
+const grant = await client.requestUploadGrant({
+  filename: file.name,
+  content_type: file.type, // optional; empty or omitted signs no type
+  size: file.size,
+});
+// { uri, url, headers, expires_at, max_bytes }
+```
+
+The file is described, never sent. The grant (`UploadGrant`) is a presigned, create-only `PUT` for one new object under the caller's organization: `url` is where to send it, `headers` are the signed headers to send unchanged, `uri` is the `pipelex-storage://` reference the object will carry, and `expires_at` is when storage stops accepting it, a few minutes later. The wire is snake_case like every product route, so the grant can travel to the page as JSON without a remap. A declared `size` over the limit is a `413` `ApiResponseError` whose `code` is `payload_too_large`, and a deployment without the route answers a `404`.
+
+**The grant is a bearer capability.** Until it expires, whoever holds it can write that one object, so the SDK never logs it, and its caller should not either. The route never replays a grant for a repeated request: a caller that lost one asks for a new one.
+
+**Sending the file** is the standalone `uploadWithGrant(grant, file, { signal?, timeoutMs? })`, which takes a `Blob` or a `File` and returns `{ uri }`:
+
+```ts
+import { uploadWithGrant, RejectedAssetError } from "@pipelex/sdk/upload";
+
+const { uri } = await uploadWithGrant(grant, file);
+```
+
+It sends the file as the raw body of a `PUT` to `grant.url`, with `grant.headers` exactly as received. The grant signed `Content-Length` too, and the body sets it, so the file must be exactly the declared size. Redirects are refused rather than followed, because a presigned URL is valid only at the address it was signed for. **The `uri` names nothing until the `PUT` has succeeded**, so fill a form field or a run input with it only after `uploadWithGrant` resolves.
+
+**The time limit.** The whole exchange with storage runs under a time limit — the request, the file going out, the answer coming back and the read of an error body — so a stalled upload settles even when the caller passes no signal. By default the limit is 60 s plus 1 s for every started 128 KiB of the file, which assumes about 1 Mbit/s and comes to 460 s for a 50 MiB file. `timeoutMs` replaces the default, for a slower link or a caller that wants a tighter bound; it must be a positive number no larger than 2147483647, the longest delay a timer honours, or the call throws an `InputPreparationError` before anything is sent. A `signal` ends the upload whenever it fires, so it can shorten the limit but never lengthen it, and a caller's abort still propagates as the signal's own reason even when the limit ran out too. When the limit runs out before storage answers, the call throws an `UploadTransportError` whose `code` is `timeout` and whose message names the seconds allowed. When it runs out while storage's error body is still arriving, storage has already answered, so the call settles as that answer instead, classified from its status and whatever part of the body arrived. After a timeout, whether storage stored the file is unknown: retrying with the same grant before it expires either stores the file or answers the `412` of a used grant, and then the grant's `uri` already names the file. The grant's expiry does not bound the upload, because storage checks the signature when the request starts, not when it ends.
+
+**The browser-safe entry.** `uploadWithGrant`, the grant types and the three error classes it raises (`InputPreparationError`, `RejectedAssetError`, `UploadTransportError`) are exported from `@pipelex/sdk/upload`, whose import graph reaches no Node builtin, no `undici` and not the client, so a page bundles it with nothing marked external. They are the same function and the same classes the main entry exports, so an `instanceof` check agrees whichever entry the error came through. The unit suite bundles the entry for the browser with esbuild and fails if anything Node-only becomes reachable.
+
+**Storage's refusals** map onto the input-preparation errors, so a caller that already handles `uploadFile` needs no new case:
+
+| Storage answers | Error | `code` | Meaning |
+| --- | --- | --- | --- |
+| `2xx` | none | | Stored; `uri` names the object. |
+| `412 PreconditionFailed` | `RejectedAssetError` | `grant_used` | The grant was already used. A grant writes one object, once — so after an earlier attempt that failed at storage, the grant's `uri` may already name the file. |
+| `403 SignatureDoesNotMatch` | `RejectedAssetError` | `signature_mismatch` | The file's size, content type or metadata differ from what the grant signed. |
+| `403 AccessDenied`, "Request has expired" | `RejectedAssetError` | `grant_expired` | The grant expired. |
+| `403 AccessDenied`, headers "not signed" | `RejectedAssetError` | `unsigned_header` | The request carried a storage header the grant did not sign. |
+| `400 RequestTimeout` | `UploadTransportError` | `storage_timeout` | Storage stopped waiting for the body and wrote nothing, so the same grant can be retried while it is valid. |
+| `409 ConditionalRequestConflict` | `UploadTransportError` | `conflict` | Another upload with the same grant was still in progress. Whether the object was written is unknown, so the same-grant retry applies. A grant is meant to be sent once at a time. |
+| any other `4xx` | `RejectedAssetError` | `store_refused` | Storage's own message is relayed. |
+| `5xx` | `UploadTransportError` | `server_error` | Whether the object was written is unknown: retrying with the same grant either stores it or answers the `412` of a used grant. |
+| a redirect | `UploadTransportError` | `redirected` | Refused, not followed. |
+| no answer within the time limit | `UploadTransportError` | `timeout` | The limit above ran out before storage answered. Whether the object was written is unknown, so the same-grant retry applies. |
+| no response | `UploadTransportError` | `unreachable` | Storage unreachable. In a browser a refused cross-origin request looks exactly like this, so the message also points at the page's CSP `connect-src`. If the connection failed after the file went out, the object may have been written, so the message gives the same-grant retry too. |
+| nothing sent | `UploadTransportError` | `invalid_grant_url` | The grant's `url` is not an absolute `http(s)` URL free of user info, so it is refused before any request. A browser would resolve a relative URL against the page and send the credential there. |
+
+`RejectedAssetError.code` and `UploadTransportError.code` are what a caller branches on — to request a new grant on `grant_used` or `grant_expired`, to retry with the same grant on `timeout` or `server_error`, or to tell a timeout from an unreachable host — rather than the message, the status or the error's `name`, since an expired grant and an unsigned header both answer `403 AccessDenied` and only S3's message tells them apart. The SDK sets `code` on every error it raises. `RejectedAssetError.status` is storage's, and its `filename` is the `File`'s name, or the object name the grant's `uri` ends in for a nameless `Blob`. `UploadTransportError.status` is storage's status when storage answered, and undefined when it did not. Neither error wraps storage's response, and only S3's error code and message reach a message: its error body can echo the signed request, credential included, so it is never kept, and only its first 16 KiB are read, which is where S3 writes its code and message. **No error carries the grant's URL.** The runtime's network error can: Node and Chrome name the whole URL when they cannot build a request from it, and Bun puts it on the error's `path`. So an unreachable storage is described by its origin and by the error names and codes along the cause chain (`TypeError, caused by Error ENOTFOUND`), and the runtime's error is neither relayed nor kept as `cause`. A caller's abort propagates as the signal's own reason, unwrapped, including one that lands while storage's error body is still arriving.
 
 ### `prepareInputs` — signature-driven input preparation
 
@@ -173,10 +226,12 @@ The contract distinguishes these semantic outcomes, each a typed subclass of `In
 - **an unresolvable signature** (`InputPreparationError`) — the closure did not validate (`is_valid: false`, carrying the first error's message), the report carried no `input_form` descriptor, or no pipe could be chosen (an unknown or bare `pipe_ref`, or no default). A *no-verdict* condition from `/v1/validate` — a malformed selector, an unknown or foreign-org `method_id`, no package at the address, auth, a server fault — stays an `ApiResponseError` and propagates unchanged;
 - **empty method source** (`EmptyMethodSourceError`, carries `methodId`) — `getMethodClosure` found the stored method but its `mthds` source parses to nothing (the row exists, no runnable source yet). Distinct from the `getMethod` `404` for an unknown/foreign id, which stays an `ApiResponseError`. `prepareInputs` never raises it: it hands the id to the server, which answers a sourceless method with a `422`;
 - **invalid local source** (`InvalidLocalSourceError`) — missing, unreadable, or a path string outside Node;
-- **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection, not a raw transport error);
+- **rejected asset** (`RejectedAssetError`) — the server refused it (e.g. a `413` past the service-defined size cap — see "Storage policy" — surfaced as a clear rejection with `code` `too_large`, not a raw transport error), or storage refused an upload with a grant (a used or expired grant, or a file that differs from what the grant signed — see the table above for each `code`);
 - **unsupported server capability** (`UnsupportedUploadCapabilityError`) — the configured deployment has no upload route;
 - **authentication / authorization failure** (`UploadAuthenticationError`) — `401` / `403`;
-- **transport failure** (`UploadTransportError`) — a network or server fault, a malformed data URL payload, or any other unexpected upload failure.
+- **transport failure** (`UploadTransportError`) — a network or server fault, or any other unexpected upload failure; its `status` is the HTTP status when a response produced it, and its `code` says which failure it was. From `uploadFile` the code is `server_error` for a `5xx`, `timeout` when the client's own request timeout ran out, `unreachable` when no response came back, and `unexpected` for any other status or failure; `uploadWithGrant`'s codes are in the table above.
+
+A malformed data URL — no comma, bad base64, bad percent-encoding — is a plain `InputPreparationError`, raised while the asset is read and before anything is uploaded.
 
 All preparation failures are raised **before any run is created**.
 

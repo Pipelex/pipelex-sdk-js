@@ -1,8 +1,8 @@
-# Artifact download (`collectArtifacts` / `resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`)
+# Artifact download (`locateArtifacts` / `collectArtifacts` / `resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`)
 
-> **Status: implemented** (`src/artifacts.ts`). This is the download twin of [input preparation](./input-preparation.md): where `prepareInputs` turns local files into `pipelex-storage://` references before a run, these four operations turn the references a run produced back into bytes on disk, or into a bounded stream, afterwards. They are layered so that each is usable without the next.
+> **Status: implemented** (`src/artifacts.ts`). This is the download twin of [input preparation](./input-preparation.md): where `prepareInputs` turns local files into `pipelex-storage://` references before a run, these operations turn the references a run produced back into bytes on disk, or into a bounded stream, afterwards. They are layered so that each is usable without the next.
 >
-> **They need a platform that serves the bulk resolve route.** Everything below `collectArtifacts` mints its links through `POST /v1/resolve-storage-url/bulk`, a hosted-platform route. The public bare runner (`pipelex-api`) has no resolve route at all, single or bulk, and a hosted deployment that predates the route answers a `404`; in both cases the operation throws the existing `ApiResponseError` and nothing is downloaded. `resolveStorageUrl`, the single-reference primitive, stays for the callers that have one link to mint.
+> **They need a platform that serves the bulk resolve route.** Everything below the pure walk mints its links through `POST /v1/resolve-storage-url/bulk`, a hosted-platform route. The public bare runner (`pipelex-api`) has no resolve route at all, single or bulk, and a hosted deployment that predates the route answers a `404`; in both cases the operation throws the existing `ApiResponseError` and nothing is downloaded. `resolveStorageUrl`, the single-reference primitive, stays for the callers that have one link to mint.
 
 ## Why this exists
 
@@ -12,20 +12,28 @@ Downloading is **explicit and separate from running**, the input-preparation rul
 
 Nothing here reads the embedded `public_url`. Every link is minted fresh by the platform, which is what makes a download work long after the embedded link died, and what keeps the tenant boundary where the platform enforces it.
 
-## The four operations
+## The operations
 
-### `collectArtifacts(value)` — the pure walk
+### `locateArtifacts(value)` and `collectArtifacts(value)` — the pure walk
 
 ```ts
-import { collectArtifacts } from "@pipelex/sdk";
+import { collectArtifacts, locateArtifacts } from "@pipelex/sdk";
+
+const locations = locateArtifacts(results.main_stuff);
+// [{ uri: "pipelex-storage://org/runs/01J…/outputs/2325fcfe.png",
+//    found_at: ["$.rooms[0].staged_photo.url"] }, …]
 
 const uris = collectArtifacts(results.main_stuff);
-// ["pipelex-storage://org/runs/01J…/outputs/illustration.png", …]
+// ["pipelex-storage://org/runs/01J…/outputs/2325fcfe.png", …] — the same walk, references only
 ```
 
-Walks any JSON-shaped value and returns every string that **is** a `pipelex-storage://` reference — the whole string, scheme first, with something after the scheme. A string that merely contains a reference does not count; the bare scheme does not count; nothing else is looked at. The result is deduplicated and kept in discovery order. It is a contract rather than a heuristic, because the scheme is unambiguous: the runtime serializes a produced file as content carrying its reference in `url`, and nothing else on the wire starts that way.
+Walks any JSON-shaped value and returns every string that **is** a `pipelex-storage://` reference — the whole string, scheme first, with something after the scheme. A string that merely contains a reference does not count; the bare scheme does not count; nothing else is looked at. The result is deduplicated and kept in discovery order, the order of each reference's first sighting. It is a contract rather than a heuristic, because the scheme is unambiguous: the runtime serializes a produced file as content carrying its reference in `url`, and nothing else on the wire starts that way.
 
-It is pure — no network, no key — and exported standalone, so a consumer can count or list a result's files without resolving any of them.
+`locateArtifacts` also says where each reference sits. Its `found_at` lists every path at which the reference occurs, in walk order, so a reference the output repeats is one entry with several paths, and `found_at[0]` is where it was first seen — the path a saved file is named after. `collectArtifacts` is the same walk's references alone.
+
+**Path notation.** A path is rooted at `$`, the walked value itself. An object key matching `^[A-Za-z_][A-Za-z0-9_]*$` is written `.key`, any other key `["…"]` in JSON string escaping, and an array index `[n]`. So a nested field reads `$.rooms[3].staged_photo.url`, a list member `$.items[0].url` (a list output arrives as the `{ items: [...] }` envelope), a key that is not an identifier `$["a key"].url`, and an output that is itself a reference `$`. A path is the exact location of the string, the final `url` of a content object included, so a consumer can follow it into the JSON without guessing.
+
+Both are pure — no network, no key — and exported standalone, so a consumer can count, list or place a result's files without resolving any of them.
 
 ### `resolveArtifacts(uris)` — fresh links for a whole list
 
@@ -66,7 +74,7 @@ export async function GET(request: Request, { params }: { params: { uri: string 
 
 Resolves the reference fresh and returns the object store's response as a bounded `Response`. The bounds:
 
-- **A timeout** covering the connection, the headers and the whole body (`timeoutMs`, default 120 s). On Node the fetch also runs on an `undici` dispatcher carrying `headersTimeout` and `bodyTimeout` at the same value, the per-stall bounds an `AbortSignal` alone does not give.
+- **A timeout** covering the connection, the headers and the whole body (`timeoutMs`, default 120 s). On Node the fetch also runs on an `undici` dispatcher carrying `headersTimeout` and `bodyTimeout` at the same value, the per-stall bounds an `AbortSignal` alone does not give. It must be a positive number no larger than 2147483647, the longest delay a timer honours, or the call throws an `ArtifactOperationError` before anything is resolved.
 - **Redirects refused** (`redirect: "manual"`): a presigned link has no reason to redirect, and one that does is refused rather than followed.
 - **The byte cap enforced mid-stream** (`maxBytes`, default 1 GiB): a declared `Content-Length` over the cap is refused before a byte is read, and a body that crosses the cap while streaming errors the returned stream — never buffered.
 - **No credentials forwarded**: the request carries no headers of ours. The link's authorization is in its query string, and nothing else may ride along to the store.
@@ -100,7 +108,34 @@ if (!verdict.all_saved) {
 
 **How it downloads.** The whole set is resolved through the bulk route ahead of the workers, then a bounded number of workers (`concurrency`, default 4) each take the next reference and fetch it → open its file with `wx` → stream the body in. Resolution is just-in-time where it matters: a link that has expired by the time its worker reaches it — a large set downloaded a few at a time can outlive the fifteen-minute link — is resolved again for that reference alone, so no fetch ever runs on a stale signature.
 
-**Filenames.** Each file is named by `artifactFilename` (exported): the last segment of the storage key, reduced to `[A-Za-z0-9._-]` with leading dots stripped so it can never name anything outside `dir`, capped in length with the extension preserved, given an extension from the content type when the key has none, and falling back to `artifact-N`. Files are **never overwritten**: a name already on disk gets a numeric suffix (`report-1.pdf`, `report-2.pdf`), through exclusive creation rather than an exists-check, so two workers cannot race for one name. `dir` is created if missing.
+**Filenames: each file is named after the field it fills.** The name comes from the first path in the reference's `found_at`, by the rule `artifactFilename(location, contentType, scope)` (exported) applies:
+
+1. A final `url` key is dropped, since the runtime's image and document contents carry their reference there. A reference under any other key keeps that key, and a `url` key that is not final is kept.
+2. Each key is reduced to `[A-Za-z0-9_]`, every other character becoming `_` — `-` and `.` included, since one is the separator and the other would fake an extension. An index stays its digits.
+3. The segments are joined with `-`. A reference that is the walked value itself, or its `url`, has no segment left and takes the scope's name, so an output that is one image is saved as `main_stuff.png`.
+4. A name over the length cap (128 characters, extension included) keeps its tail: whole leading segments are dropped first, since the last ones are the specific ones, and a single segment still too long is cut to fit.
+5. A stem Windows reserves for a device — `con`, `prn`, `aux`, `nul`, `com0` to `com9` or `lpt0` to `lpt9`, in any case — gets a trailing `_`, so a field named `aux` is saved as `aux_.png`. Windows reserves those names whatever the extension, and a field name is the method author's to choose.
+6. The extension is the one the storage key's last segment carries, reduced to `[A-Za-z0-9]`, when it has a short one; otherwise the content type's, for the types a run produces (`image/png` gives `.png`, `application/pdf` gives `.pdf`); otherwise there is none.
+
+For example, a home-staging method whose output is
+
+```json
+{
+  "rooms": [
+    {
+      "original_photo": { "url": "pipelex-storage://org/assets/53174b03.png", "public_url": "…" },
+      "staged_photo": { "url": "pipelex-storage://org/runs/01J…/outputs/2325fcfe.png", "public_url": "…" }
+    },
+    { "original_photo": { "url": "…" }, "staged_photo": { "url": "…" } }
+  ]
+}
+```
+
+is saved as `rooms-0-original_photo.png`, `rooms-0-staged_photo.png`, `rooms-1-original_photo.png` and `rooms-1-staged_photo.png`, where the storage keys alone (`53174b03.png`, `2325fcfe.png`) would not say which picture is which. Each verdict item's `found_at` carries the unreduced path, `$.rooms[0].staged_photo.url`.
+
+The result is always a bare filename — ASCII letters, digits, `_` and the `-` joins, then an optional extension — never empty, never starting with a dot and never a device name, so it can name nothing but a regular file directly inside `dir`. `artifactFilename` takes a location from `locateArtifacts`, which is how a consumer predicts a name before downloading; it throws `ArtifactOperationError` for a location with no string `uri`, no `found_at` array, or one whose `found_at[0]` is not a path in the notation above, or for an unknown scope.
+
+Files are **never overwritten**: a name already on disk gets a numeric suffix (`report-1.pdf`, `report-2.pdf`), through exclusive creation rather than an exists-check, so two workers cannot race for one name. Two references whose paths reduce to one name (`"staged photo"` and `"staged-photo"`) are told apart by the same suffix, and the verdict says which file is which. A reference found at several paths is saved once, under the name of the first. `dir` is created if missing.
 
 **Cleanup.** A failed or aborted download unlinks its partial file; nothing truncated is ever left under a final name.
 
@@ -110,8 +145,8 @@ if (!verdict.all_saved) {
 {
   scope: "main_stuff" | "working_memory",
   artifacts: [
-    { uri, path, content_type, size, error: null },       // saved — path is absolute
-    { uri, path: null, content_type, size: null, error: { code, detail } },  // not saved
+    { uri, found_at, path, content_type, size, error: null },       // saved — path is absolute
+    { uri, found_at, path: null, content_type, size: null, error: { code, detail } },  // not saved
   ],
   saved_paths: [ /* the absolute paths of the saved ones, same order */ ],
   all_saved: boolean,   // every reference saved; vacuously true for an empty walk
@@ -119,7 +154,7 @@ if (!verdict.all_saved) {
 }
 ```
 
-`artifacts.length` is the count of references walked, errors included. An empty walk over a present scope — an output that references no stored file — is a verdict with empty lists and `all_saved: true`, not an error, and it touches neither the network nor the disk. `content_type` is the platform's guess from the reference, known before the fetch, on both arms.
+`artifacts.length` is the count of references walked, errors included. An empty walk over a present scope — an output that references no stored file — is a verdict with empty lists and `all_saved: true`, not an error, and it touches neither the network nor the disk. `found_at` is the reference's paths in the walked scope, exactly as `locateArtifacts` reports them, and `content_type` is the platform's guess from the reference, known before the fetch; both are on both arms, so an item that was not saved still says which field it would have filled.
 
 Per-item `error.code` is the fetch vocabulary above plus the download's own: `resolve_failed` (an expired link could not be re-resolved, for a reason that is not the credential), `total_limit_exceeded` (the item that would take the call past `maxTotalBytes`, and, once the files already saved leave no room, every item not yet started, whose `detail` says it was skipped; an item refused only because files still in flight hold the room stops nothing else, since one of them may yet fail and give it back), `write_failed` (the file could not be created, written or closed) and `aborted` (in flight or not yet started when the signal fired).
 
@@ -128,7 +163,7 @@ Per-item `error.code` is the fetch vocabulary above plus the download's own: `re
 - `RunStillRunningError` (with the retry hint) or `RunFailedError` — a `run_id` naming a run that has not completed;
 - `ScopeUnavailableError` — the requested scope's artifact is `null` or missing from the body (`scope` and `runId` on the error). Reading by `run_id`, a null `main_stuff` is already `MissingMainStuffError` from `getRunResult`;
 - `ArtifactAuthenticationError` — the resolve route refused the credential (`401` / `403`), on the first resolve or on a re-resolve part-way through. It carries `verdict`, the result as it stood: the refusal stops the workers taking new items but lets the fetches already running finish, since they are on presigned links that do not carry the credential, so every file saved is real and listed and the rest are marked `aborted` with a detail naming the credential failure;
-- `ArtifactOperationError` — outside Node, an unusable `dir`, both selectors or neither, or nonsense bounds;
+- `ArtifactOperationError` — outside Node, an unusable `dir`, both selectors or neither, an unknown `scope`, or nonsense bounds;
 - and the transport and lifecycle errors of the reads it makes, unchanged: `ApiResponseError` for a deployment without the bulk route, `RunLifecycleUnavailableError` for a bare runner asked by `run_id`, `ApiUnreachableError`.
 
 Everything else that can go wrong with one reference is that reference's `error`.

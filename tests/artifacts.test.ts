@@ -1,7 +1,7 @@
 /**
- * The artifact stack — `collectArtifacts`, `artifactFilename`, `resolveArtifacts`,
- * `fetchArtifact` and `downloadArtifacts`. The two pure helpers are pinned on
- * values; the three network operations take a fake client (the raw bulk resolve
+ * The artifact stack — `locateArtifacts`, `collectArtifacts`, `artifactFilename`,
+ * `resolveArtifacts`, `fetchArtifact` and `downloadArtifacts`. The pure helpers
+ * are pinned on values; the three network operations take a fake client (the raw bulk resolve
  * call and the single-shot result lookup) and mock the fetch boundary with
  * `vi.spyOn(globalThis, "fetch")`, as every other suite does, so the object-store
  * exchange is exercised on real `Response` streams without a server. Downloads
@@ -19,10 +19,12 @@ import {
   collectArtifacts,
   downloadArtifacts,
   fetchArtifact,
+  locateArtifacts,
   resolveArtifacts,
 } from "../src/artifacts.js";
 import type {
   ArtifactCapableClient,
+  ArtifactLocation,
   BulkResolveStorageUrlsInput,
   BulkResolvedStorageUrls,
   ResolvedArtifact,
@@ -199,7 +201,60 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-// ── collectArtifacts ─────────────────────────────────────────────────
+// ── locateArtifacts / collectArtifacts ───────────────────────────────
+
+describe("locateArtifacts", () => {
+  it("finds every reference once, in discovery order, with every path it sits at in walk order", () => {
+    const value = {
+      image: { url: PICTURE_URI, public_url: "https://signed.example/one.png" },
+      pages: [{ url: PICTURE_URI }, { deeper: { url: REPORT_URI } }, INPUT_URI],
+      text: "not a reference",
+      count: 3,
+      nothing: null,
+    };
+
+    expect(locateArtifacts(value)).toEqual([
+      { uri: PICTURE_URI, found_at: ["$.image.url", "$.pages[0].url"] },
+      { uri: REPORT_URI, found_at: ["$.pages[1].deeper.url"] },
+      { uri: INPUT_URI, found_at: ["$.pages[2]"] },
+    ]);
+  });
+
+  it("roots a path at $, the walked value itself", () => {
+    expect(locateArtifacts(PICTURE_URI)).toEqual([{ uri: PICTURE_URI, found_at: ["$"] }]);
+    expect(locateArtifacts({ url: PICTURE_URI })).toEqual([
+      { uri: PICTURE_URI, found_at: ["$.url"] },
+    ]);
+    expect(locateArtifacts({ items: [{ url: PICTURE_URI }] })).toEqual([
+      { uri: PICTURE_URI, found_at: ["$.items[0].url"] },
+    ]);
+  });
+
+  it("writes an identifier key as .key and any other key as a JSON string in brackets", () => {
+    const value = {
+      _ok: PICTURE_URI,
+      "a key": { url: REPORT_URI },
+      "2nd": INPUT_URI,
+      'say "hi"\\': "pipelex-storage://org/q.png",
+      "": "pipelex-storage://org/empty.png",
+    };
+
+    expect(locateArtifacts(value).map((location) => location.found_at[0])).toEqual([
+      "$._ok",
+      '$["a key"].url',
+      '$["2nd"]',
+      '$["say \\"hi\\"\\\\"]',
+      '$[""]',
+    ]);
+  });
+
+  it("counts a string only when it IS a reference, and ignores everything else", () => {
+    expect(locateArtifacts({ note: `Saved as ${REPORT_URI}.` })).toEqual([]);
+    expect(locateArtifacts(["pipelex-storage://", "https://example.com/x.png"])).toEqual([]);
+    expect(locateArtifacts(undefined)).toEqual([]);
+    expect(locateArtifacts(42)).toEqual([]);
+  });
+});
 
 describe("collectArtifacts", () => {
   it("finds every reference in a JSON-shaped value, once each, in discovery order", () => {
@@ -212,6 +267,7 @@ describe("collectArtifacts", () => {
     };
 
     expect(collectArtifacts(value)).toEqual([PICTURE_URI, REPORT_URI, INPUT_URI]);
+    expect(collectArtifacts(value)).toEqual(locateArtifacts(value).map((location) => location.uri));
   });
 
   it("counts a string only when it IS a reference, never text containing one", () => {
@@ -233,52 +289,172 @@ describe("collectArtifacts", () => {
 
 // ── artifactFilename ─────────────────────────────────────────────────
 
+/** A location at one path, for the naming rule's tests. */
+function at(path: string, uri = PICTURE_URI): ArtifactLocation {
+  return { uri, found_at: [path] };
+}
+
 describe("artifactFilename", () => {
-  it("takes the storage key's last segment", () => {
-    expect(artifactFilename(PICTURE_URI, "image/png", 0)).toBe("illustration.png");
+  it("names a reference that is the walked value, or its url, after the scope", () => {
+    expect(artifactFilename(at("$"), "image/png", "main_stuff")).toBe("main_stuff.png");
+    expect(artifactFilename(at("$.url"), "image/png", "main_stuff")).toBe("main_stuff.png");
+    expect(artifactFilename(at("$.url"), "image/png", "working_memory")).toBe("working_memory.png");
   });
 
-  it("cannot name anything outside the target directory", () => {
-    expect(artifactFilename("pipelex-storage://../../etc/passwd", null, 0)).toBe("passwd");
-    expect(artifactFilename("pipelex-storage://a/..\\..\\secret.txt", null, 0)).toBe("secret.txt");
-    expect(artifactFilename("pipelex-storage://..", null, 3)).toBe("artifact-4");
-    expect(artifactFilename("pipelex-storage://", null, 0)).toBe("artifact-1");
+  it("names a list member after the envelope and its index", () => {
+    expect(artifactFilename(at("$.items[0].url"), "image/png", "main_stuff")).toBe("items-0.png");
+    expect(artifactFilename(at("$[2].url"), "image/png", "main_stuff")).toBe("2.png");
   });
 
-  it("never produces a hidden file and neutralizes unusual characters", () => {
-    expect(artifactFilename("pipelex-storage://x/.env", null, 0)).toBe("env");
-    expect(artifactFilename("pipelex-storage://x/my file (v2).PNG", null, 0)).toBe(
-      "my_file__v2_.PNG",
+  it("names a nested field after its whole path", () => {
+    expect(artifactFilename(at("$.rooms[3].staged_photo.url"), "image/png", "main_stuff")).toBe(
+      "rooms-3-staged_photo.png",
     );
-    expect(artifactFilename("pipelex-storage://x/a\u0000b\nc.pdf", null, 0)).toBe("a_b_c.pdf");
   });
 
-  it("percent-decodes and drops a query or fragment, keeping a malformed escape as typed", () => {
-    expect(artifactFilename("pipelex-storage://x/hello%20world.pdf?token=1#frag", null, 0)).toBe(
-      "hello_world.pdf",
+  it("drops only a final url key: another key, or a url key that is not final, is kept", () => {
+    expect(artifactFilename(at("$.photo.src"), null, "main_stuff")).toBe("photo-src.png");
+    expect(artifactFilename(at("$.photo.URL"), null, "main_stuff")).toBe("photo-URL.png");
+    expect(artifactFilename(at("$.url.original"), null, "main_stuff")).toBe("url-original.png");
+    expect(artifactFilename(at("$.links.url[0]"), null, "main_stuff")).toBe("links-url-0.png");
+    expect(artifactFilename(at('$["url"]'), null, "main_stuff")).toBe("main_stuff.png");
+  });
+
+  it("reduces a key that is not an identifier to [A-Za-z0-9_], dashes and dots included", () => {
+    expect(artifactFilename(at('$["a key"].url'), null, "main_stuff")).toBe("a_key.png");
+    expect(artifactFilename(at('$["staged-photo.v2"].url'), null, "main_stuff")).toBe(
+      "staged_photo_v2.png",
     );
-    expect(artifactFilename("pipelex-storage://x/bad%zz.pdf", null, 0)).toBe("bad_zz.pdf");
+    expect(artifactFilename(at('$["café 📷"].url'), null, "main_stuff")).toBe("caf___.png");
+    expect(artifactFilename(at('$["2nd"]'), null, "main_stuff")).toBe("2nd.png");
+    expect(artifactFilename(at('$[""].url'), null, "main_stuff")).toBe("main_stuff.png");
   });
 
-  it("adds an extension from the content type only when the key has none", () => {
-    expect(artifactFilename(REPORT_URI, "application/pdf", 0)).toBe("report.pdf");
-    expect(artifactFilename(REPORT_URI, "image/png; charset=binary", 0)).toBe("report.png");
-    expect(artifactFilename(REPORT_URI, "application/x-unknown", 0)).toBe("report");
-    expect(artifactFilename(REPORT_URI, null, 0)).toBe("report");
-    expect(artifactFilename(PICTURE_URI, "application/pdf", 0)).toBe("illustration.png");
+  it("cannot name anything outside the target directory, nor a hidden file", () => {
+    const hostile = [
+      '$["../../etc/passwd"]',
+      '$[".."].url',
+      '$["."]',
+      '$[".env"]',
+      '$["a\\u0000b\\nc"]',
+      '$["C:\\\\Windows"]',
+    ];
+    for (const path of hostile) {
+      const name = artifactFilename(at(path, "pipelex-storage://x/.."), null, "main_stuff");
+
+      expect(name).toMatch(/^[A-Za-z0-9_][A-Za-z0-9_-]*(\.[A-Za-z0-9]+)?$/);
+    }
+    expect(artifactFilename(at('$["../../etc/passwd"]', REPORT_URI), null, "main_stuff")).toBe(
+      "______etc_passwd",
+    );
   });
 
-  it("caps the length while keeping the extension", () => {
-    const name = artifactFilename(`pipelex-storage://x/${"a".repeat(300)}.png`, null, 0);
+  it("keeps the tail when the name is too long, dropping whole leading segments first", () => {
+    const segments = Array.from({ length: 20 }, (_, i) => `segment_${String(i).padStart(2, "0")}`);
+    const name = artifactFilename(at(`$.${segments.join(".")}.url`), null, "main_stuff");
 
     expect(name.length).toBeLessThanOrEqual(128);
-    expect(name.endsWith(".png")).toBe(true);
+    expect(name).toBe(`${segments.slice(9).join("-")}.png`);
   });
 
-  it("still caps a name whose extension alone exceeds the cap", () => {
-    const name = artifactFilename(`pipelex-storage://x/stem.${"z".repeat(300)}`, null, 0);
+  it("cuts a single segment that is still too long, keeping the extension", () => {
+    const long = "a".repeat(300);
 
-    expect(name.length).toBeLessThanOrEqual(128);
+    expect(artifactFilename(at(`$.short.${long}.url`), null, "main_stuff")).toBe(
+      `${"a".repeat(124)}.png`,
+    );
+    expect(artifactFilename(at(`$.${long}`, REPORT_URI), null, "main_stuff")).toBe("a".repeat(128));
+  });
+
+  it("takes the extension from the storage key, then from the content type, else none", () => {
+    expect(artifactFilename(at("$.cover.url"), "application/pdf", "main_stuff")).toBe("cover.png");
+    expect(artifactFilename(at("$.cover.url", REPORT_URI), "application/pdf", "main_stuff")).toBe(
+      "cover.pdf",
+    );
+    expect(
+      artifactFilename(at("$.cover.url", REPORT_URI), "image/png; charset=binary", "main_stuff"),
+    ).toBe("cover.png");
+    expect(
+      artifactFilename(at("$.cover.url", REPORT_URI), "application/x-unknown", "main_stuff"),
+    ).toBe("cover");
+    expect(artifactFilename(at("$.cover.url", REPORT_URI), null, "main_stuff")).toBe("cover");
+  });
+
+  it("reads the key's extension off its last segment, decoded, reduced and short", () => {
+    const named = (uri: string, contentType: string | null = null): string =>
+      artifactFilename(at("$.doc", uri), contentType, "main_stuff");
+
+    expect(named("pipelex-storage://x/hello%20world.pdf?token=1#frag")).toBe("doc.pdf");
+    expect(named("pipelex-storage://x/bad%zz.pdf")).toBe("doc.pdf");
+    expect(named("pipelex-storage://x/photo.P-N_G")).toBe("doc.PNG");
+    expect(named("pipelex-storage://a/..\\..\\secret.txt")).toBe("doc.txt");
+    expect(named("pipelex-storage://x/.env")).toBe("doc");
+    expect(named("pipelex-storage://x/report.")).toBe("doc");
+    expect(named(`pipelex-storage://x/stem.${"z".repeat(300)}`)).toBe("doc");
+    expect(named(`pipelex-storage://x/stem.${"z".repeat(300)}`, "text/csv")).toBe("doc.csv");
+  });
+
+  it("refuses a location whose first path is not in the walk's notation, or an unknown scope", () => {
+    const refused = [
+      { uri: PICTURE_URI, found_at: [] },
+      at("rooms.url"),
+      at("$.rooms["),
+      at("$[-1]"),
+      at('$["unterminated]'),
+      at("$.a b"),
+    ];
+    for (const location of refused) {
+      expect(() => artifactFilename(location, null, "main_stuff")).toThrow(ArtifactOperationError);
+    }
+    expect(() => artifactFilename(at("$.url"), null, "other" as never)).toThrow(
+      ArtifactOperationError,
+    );
+  });
+
+  it("refuses a location of the wrong shape, as a JavaScript caller can pass one", () => {
+    const misshapen: unknown[] = [
+      PICTURE_URI, // the old signature's bare uri
+      { uri: PICTURE_URI },
+      { uri: PICTURE_URI, found_at: "$.cover.url" }, // a string's first character is "$"
+      { found_at: ["$.cover.url"] },
+      { uri: 42, found_at: ["$.cover.url"] },
+      null,
+      undefined,
+    ];
+    for (const location of misshapen) {
+      expect(() => artifactFilename(location as ArtifactLocation, null, "main_stuff")).toThrow(
+        ArtifactOperationError,
+      );
+    }
+  });
+
+  it("suffixes a stem Windows reserves for a device, however it was reached", () => {
+    expect(artifactFilename(at("$.aux.url"), null, "main_stuff")).toBe("aux_.png");
+    expect(artifactFilename(at("$.NUL"), null, "main_stuff")).toBe("NUL_.png");
+    expect(artifactFilename(at("$.Com1.url"), null, "main_stuff")).toBe("Com1_.png");
+    expect(artifactFilename(at("$.lpt9", REPORT_URI), null, "main_stuff")).toBe("lpt9_");
+    expect(artifactFilename(at('$[""].con.url'), null, "main_stuff")).toBe("con_.png");
+    // The cap drops every leading segment and leaves the device name alone.
+    expect(artifactFilename(at(`$.${"x".repeat(130)}.prn.url`), null, "main_stuff")).toBe(
+      "prn_.png",
+    );
+    // Only the whole stem is a device name: a join or a longer word is not one.
+    expect(artifactFilename(at("$.a.nul.url"), null, "main_stuff")).toBe("a-nul.png");
+    expect(artifactFilename(at("$.auxiliary.url"), null, "main_stuff")).toBe("auxiliary.png");
+    expect(artifactFilename(at("$.com10.url"), null, "main_stuff")).toBe("com10.png");
+  });
+
+  it("names every location locateArtifacts writes, through the round trip of its notation", () => {
+    const value = {
+      'say "hi"\\': { url: "pipelex-storage://org/a.png" },
+      "line\nbreak": { url: "pipelex-storage://org/b.png" },
+      "\u2028": { url: "pipelex-storage://org/c.png" },
+      "[0]": { url: "pipelex-storage://org/d.png" },
+    };
+
+    expect(
+      locateArtifacts(value).map((location) => artifactFilename(location, null, "main_stuff")),
+    ).toEqual(["say__hi__.png", "line_break.png", "_.png", "_0_.png"]);
   });
 });
 
@@ -495,6 +671,55 @@ describe("fetchArtifact", () => {
     );
   });
 
+  it("propagates the caller's reason when the fetch rejects with a generic AbortError", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    const reason = new DOMException("caller timeout", "TimeoutError");
+    // The abort lands once the fetch is in flight, and a browser rejects it with its
+    // own AbortError rather than the signal's reason.
+    mockFetch((_url, init) => {
+      setTimeout(() => controller.abort(reason), 10);
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal!.addEventListener(
+          "abort",
+          () => reject(new DOMException("The user aborted a request.", "AbortError")),
+          { once: true },
+        );
+      });
+    });
+
+    await expect(fetchArtifact(client, PICTURE_URI, { signal: controller.signal })).rejects.toBe(
+      reason,
+    );
+  });
+
+  it("propagates the caller's reason when an abort cuts the body short with a generic AbortError", async () => {
+    const client = makeClient();
+    const controller = new AbortController();
+    const reason = new DOMException("caller timeout", "TimeoutError");
+    // The headers arrived; the body is still streaming when the caller aborts, and a
+    // browser errors it with its own AbortError rather than the signal's reason.
+    mockFetch((_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(stream) {
+          stream.enqueue(PNG_BYTES.subarray(0, 4));
+          init.signal!.addEventListener(
+            "abort",
+            () => stream.error(new DOMException("The user aborted a request.", "AbortError")),
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { status: 200, headers: { "Content-Type": "image/png" } });
+    });
+
+    const response = await fetchArtifact(client, PICTURE_URI, { signal: controller.signal });
+    const reading = response.arrayBuffer();
+    controller.abort(reason);
+
+    await expect(reading).rejects.toBe(reason);
+  });
+
   it("reports a transport failure as a network fault", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
@@ -510,6 +735,10 @@ describe("fetchArtifact", () => {
     );
     await expect(fetchArtifact(client, PICTURE_URI, { timeoutMs: -1 })).rejects.toBeInstanceOf(
       ArtifactOperationError,
+    );
+    // Past the longest delay a timer honours, which would otherwise fire at once.
+    await expect(fetchArtifact(client, PICTURE_URI, { timeoutMs: 2 ** 31 })).rejects.toThrow(
+      /"timeoutMs" must be a positive number no larger than 2147483647/,
     );
     expect(client.resolveCalls).toHaveLength(0);
   });
@@ -694,15 +923,23 @@ describe("downloadArtifacts", () => {
     expect(verdict.artifacts).toEqual([
       {
         uri: PICTURE_URI,
-        path: join(dir, "illustration.png"),
+        found_at: ["$.picture.url"],
+        path: join(dir, "picture.png"),
         content_type: "image/png",
         size: PNG_BYTES.byteLength,
         error: null,
       },
-      { uri: REPORT_URI, path: join(dir, "report"), content_type: null, size: 8, error: null },
+      {
+        uri: REPORT_URI,
+        found_at: ["$.report.url"],
+        path: join(dir, "report"),
+        content_type: null,
+        size: 8,
+        error: null,
+      },
     ]);
-    expect(verdict.saved_paths).toEqual([join(dir, "illustration.png"), join(dir, "report")]);
-    expect(new Uint8Array(await readFile(join(dir, "illustration.png")))).toEqual(PNG_BYTES);
+    expect(verdict.saved_paths).toEqual([join(dir, "picture.png"), join(dir, "report")]);
+    expect(new Uint8Array(await readFile(join(dir, "picture.png")))).toEqual(PNG_BYTES);
     expect(new Uint8Array(await readFile(join(dir, "report")))).toEqual(PDF_BYTES);
   });
 
@@ -712,12 +949,12 @@ describe("downloadArtifacts", () => {
     const dir = join(await makeTempDir(), "nested", "out");
 
     const verdict = await downloadArtifacts(client, {
-      results: { pipeline_run_id: RUN_ID, main_stuff: [{ url: PICTURE_URI }] },
+      results: { pipeline_run_id: RUN_ID, main_stuff: { items: [{ url: PICTURE_URI }] } },
       dir,
     });
 
     expect(client.resultCalls).toHaveLength(0);
-    expect(verdict.saved_paths).toEqual([join(dir, "illustration.png")]);
+    expect(verdict.saved_paths).toEqual([join(dir, "items-0.png")]);
   });
 
   it("walks working_memory off the parsed body when asked, echoed inputs included", async () => {
@@ -744,25 +981,127 @@ describe("downloadArtifacts", () => {
 
     expect(verdict.scope).toBe("working_memory");
     expect(verdict.artifacts.map((artifact) => artifact.uri)).toEqual([INPUT_URI, PICTURE_URI]);
+    expect(verdict.artifacts.map((artifact) => artifact.found_at)).toEqual([
+      ["$.root.brief.content.url"],
+      ["$.root.picture.content.url"],
+    ]);
     expect(verdict.all_saved).toBe(true);
-    expect(new Uint8Array(await readFile(join(dir, "brief.pdf")))).toEqual(PDF_BYTES);
+    expect(new Uint8Array(await readFile(join(dir, "root-brief-content.pdf")))).toEqual(PDF_BYTES);
   });
 
   it("never overwrites: a name already on disk gets a numeric suffix", async () => {
     const client = makeClient();
     mockFetch(() => streamed([PNG_BYTES]));
     const dir = await makeTempDir();
-    await writeFile(join(dir, "illustration.png"), "keep me", "utf8");
-    await writeFile(join(dir, "illustration-1.png"), "keep me too", "utf8");
+    await writeFile(join(dir, "main_stuff.png"), "keep me", "utf8");
+    await writeFile(join(dir, "main_stuff-1.png"), "keep me too", "utf8");
 
     const verdict = await downloadArtifacts(client, {
       results: { pipeline_run_id: RUN_ID, main_stuff: { url: PICTURE_URI } },
       dir,
     });
 
-    expect(verdict.saved_paths).toEqual([join(dir, "illustration-2.png")]);
-    await expect(readFile(join(dir, "illustration.png"), "utf8")).resolves.toBe("keep me");
-    await expect(readFile(join(dir, "illustration-1.png"), "utf8")).resolves.toBe("keep me too");
+    expect(verdict.saved_paths).toEqual([join(dir, "main_stuff-2.png")]);
+    await expect(readFile(join(dir, "main_stuff.png"), "utf8")).resolves.toBe("keep me");
+    await expect(readFile(join(dir, "main_stuff-1.png"), "utf8")).resolves.toBe("keep me too");
+  });
+
+  it("names a file after the field it fills and reports every path, on the saved and error arms", async () => {
+    const client = makeClient({
+      answers: { [REPORT_URI]: refusedItem(REPORT_URI, "forbidden", "another organization") },
+    });
+    mockFetch(() => streamed([PNG_BYTES]));
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: {
+        pipeline_run_id: RUN_ID,
+        main_stuff: {
+          rooms: [
+            { original_photo: { url: INPUT_URI }, staged_photo: { url: PICTURE_URI } },
+            { original_photo: { url: REPORT_URI } },
+          ],
+          cover: { url: PICTURE_URI },
+        },
+      },
+      dir,
+    });
+
+    expect(verdict.artifacts.map(({ uri, found_at, path }) => ({ uri, found_at, path }))).toEqual([
+      {
+        uri: INPUT_URI,
+        found_at: ["$.rooms[0].original_photo.url"],
+        path: join(dir, "rooms-0-original_photo.pdf"),
+      },
+      {
+        uri: PICTURE_URI,
+        found_at: ["$.rooms[0].staged_photo.url", "$.cover.url"],
+        path: join(dir, "rooms-0-staged_photo.png"),
+      },
+      { uri: REPORT_URI, found_at: ["$.rooms[1].original_photo.url"], path: null },
+    ]);
+    expect((await readdir(dir)).sort()).toEqual([
+      "rooms-0-original_photo.pdf",
+      "rooms-0-staged_photo.png",
+    ]);
+  });
+
+  it("tells apart two paths that reduce to one name with the suffix rule", async () => {
+    const client = makeClient();
+    mockFetch(() => streamed([PNG_BYTES]));
+    const dir = await makeTempDir();
+
+    const verdict = await downloadArtifacts(client, {
+      results: {
+        pipeline_run_id: RUN_ID,
+        main_stuff: {
+          "staged photo": { url: PICTURE_URI },
+          "staged-photo": { url: "pipelex-storage://org/runs/01JRUN/outputs/second.png" },
+        },
+      },
+      dir,
+      concurrency: 1,
+    });
+
+    expect(verdict.saved_paths).toEqual([
+      join(dir, "staged_photo.png"),
+      join(dir, "staged_photo-1.png"),
+    ]);
+  });
+
+  it("saves every file under the name artifactFilename gives its location", async () => {
+    const client = makeClient();
+    mockFetch(() => streamed([PNG_BYTES]));
+    const dir = await makeTempDir();
+    const mainStuff = {
+      'say "hi"\\': { url: "pipelex-storage://org/a.png" },
+      "line\nbreak": [{ url: "pipelex-storage://org/b" }],
+      url: "pipelex-storage://org/c.pdf",
+    };
+
+    const verdict = await downloadArtifacts(client, {
+      results: { pipeline_run_id: RUN_ID, main_stuff: mainStuff },
+      dir,
+    });
+
+    const expected = locateArtifacts(mainStuff).map((location, index) =>
+      join(dir, artifactFilename(location, verdict.artifacts[index]!.content_type, "main_stuff")),
+    );
+    expect(verdict.saved_paths).toEqual(expected);
+    expect(expected).toEqual([
+      join(dir, "say__hi__.png"),
+      join(dir, "line_break-0"),
+      join(dir, "main_stuff.pdf"),
+    ]);
+  });
+
+  it("refuses an unknown scope before reading anything", async () => {
+    const client = makeClient();
+
+    await expect(
+      downloadArtifacts(client, { run_id: RUN_ID, dir: "x", scope: "everything" as never }),
+    ).rejects.toBeInstanceOf(ArtifactOperationError);
+    expect(client.resultCalls).toHaveLength(0);
   });
 
   it("keeps a per-reference resolve refusal as that item's error beside the saved ones", async () => {
@@ -780,12 +1119,13 @@ describe("downloadArtifacts", () => {
     expect(verdict.all_saved).toBe(false);
     expect(verdict.artifacts[1]).toEqual({
       uri: REPORT_URI,
+      found_at: ["$[1].url"],
       path: null,
       content_type: null,
       size: null,
       error: { code: "forbidden", detail: "another organization" },
     });
-    expect(verdict.saved_paths).toEqual([join(dir, "illustration.png")]);
+    expect(verdict.saved_paths).toEqual([join(dir, "0.png")]);
   });
 
   it("re-resolves a link that has expired by the time its worker reaches it", async () => {
@@ -910,7 +1250,7 @@ describe("downloadArtifacts", () => {
     const error = (await failure.catch((err: unknown) => err)) as ArtifactAuthenticationError;
     expect(error).toBeInstanceOf(ArtifactAuthenticationError);
     expect(error.status).toBe(403);
-    expect(error.verdict.saved_paths).toEqual([join(dir, "illustration.png")]);
+    expect(error.verdict.saved_paths).toEqual([join(dir, "0.png")]);
     expect(error.verdict.artifacts.map((artifact) => artifact.error?.code)).toEqual([
       undefined,
       "aborted",
@@ -969,13 +1309,13 @@ describe("downloadArtifacts", () => {
     }).catch((err: unknown) => err)) as ArtifactAuthenticationError;
 
     expect(error).toBeInstanceOf(ArtifactAuthenticationError);
-    expect(error.verdict.saved_paths).toEqual([join(dir, "illustration.png")]);
+    expect(error.verdict.saved_paths).toEqual([join(dir, "0.png")]);
     expect(error.verdict.artifacts.map((artifact) => artifact.error?.code)).toEqual([
       undefined,
       "aborted",
       "aborted",
     ]);
-    expect(await readFile(join(dir, "illustration.png"))).toEqual(Buffer.from(PNG_BYTES));
+    expect(await readFile(join(dir, "0.png"))).toEqual(Buffer.from(PNG_BYTES));
   });
 
   it("refuses a declared oversize and cuts an undeclared one mid-stream, unlinking the partial file", async () => {
@@ -1024,7 +1364,7 @@ describe("downloadArtifacts", () => {
     expect(verdict.artifacts[1]!.error).toMatchObject({ code: "total_limit_exceeded" });
     expect(verdict.artifacts[2]!.error).toMatchObject({ code: "total_limit_exceeded" });
     expect(verdict.artifacts[2]!.error!.detail).toMatch(/^Skipped/);
-    expect(await readdir(dir)).toEqual(["illustration.png"]);
+    expect(await readdir(dir)).toEqual(["0.png"]);
   });
 
   it("reserves a declared length, so parallel files never cut each other past the total cap", async () => {
@@ -1133,7 +1473,7 @@ describe("downloadArtifacts", () => {
       "too_large",
       undefined,
     ]);
-    expect(await readdir(dir)).toEqual(["report"]);
+    expect(await readdir(dir)).toEqual(["1"]);
   });
 
   it("enforces the total cap mid-stream on an undeclared body, unlinking the partial file", async () => {

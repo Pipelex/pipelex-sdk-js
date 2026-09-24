@@ -151,7 +151,7 @@ describe("uploadFile", () => {
     );
   });
 
-  it("maps a 413 to RejectedAssetError carrying the filename and status", async () => {
+  it("maps a 413 to RejectedAssetError carrying the filename, status and code", async () => {
     const client = throwingClient(apiError(413, "too big"));
     const bytes = new Uint8Array([1]);
 
@@ -159,6 +159,7 @@ describe("uploadFile", () => {
       name: "RejectedAssetError",
       filename: "big.pdf",
       status: 413,
+      code: "too_large",
     });
     await expect(uploadFile(client, bytes, { filename: "big.pdf" })).rejects.toBeInstanceOf(
       RejectedAssetError,
@@ -186,6 +187,7 @@ describe("uploadFile", () => {
     await expect(uploadFile(server, new Uint8Array([1]))).rejects.toBeInstanceOf(
       UploadTransportError,
     );
+    await expect(uploadFile(server, new Uint8Array([1]))).rejects.toMatchObject({ status: 500 });
 
     const unreachable = throwingClient(
       new ApiUnreachableError("down", "https://api.pipelex.com", "ECONNREFUSED"),
@@ -193,6 +195,38 @@ describe("uploadFile", () => {
     await expect(uploadFile(unreachable, new Uint8Array([1]))).rejects.toBeInstanceOf(
       UploadTransportError,
     );
+    await expect(uploadFile(unreachable, new Uint8Array([1]))).rejects.toMatchObject({
+      status: undefined,
+    });
+  });
+
+  it.each([
+    ["a 503", apiError(503), "server_error"],
+    ["a 500", apiError(500), "server_error"],
+    ["a 429", apiError(429), "unexpected"],
+    [
+      "the client's own timeout",
+      new ApiUnreachableError("timed out", "https://api.pipelex.com", "ABORT_TIMEOUT"),
+      "timeout",
+    ],
+    [
+      "a refused connection",
+      new ApiUnreachableError("down", "https://api.pipelex.com", "ECONNREFUSED"),
+      "unreachable",
+    ],
+    [
+      "an unreachable host with no code",
+      new ApiUnreachableError("down", "https://api.pipelex.com", undefined),
+      "unreachable",
+    ],
+    ["a failure that is not HTTP", new SyntaxError("Unexpected token"), "unexpected"],
+  ])("sets UploadTransportError's code for %s", async (_case, failure, code) => {
+    const error = await uploadFile(throwingClient(failure), new Uint8Array([1])).catch(
+      (e: unknown) => e,
+    );
+
+    expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as UploadTransportError).code).toBe(code);
   });
 
   it("wraps an unexpected non-transport error as UploadTransportError, preserving the cause", async () => {

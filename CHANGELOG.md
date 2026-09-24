@@ -10,6 +10,54 @@
 
 - **The `mthds` range moves to `^0.27.0`**: the SDK now rests on `mthds` 0.27. Its one breaking change is in the `mthds-agent share` command, which this SDK does not use, so the protocol surface it re-exports is unchanged.
 
+### Removed
+
+- **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
+
+## [v0.24.0] - 2026-09-24
+
+### Added
+
+- **`UploadTransportError.code` and `UploadTransportCode`**: an upload's transport failure now says which it was in a closed vocabulary — `timeout`, `unreachable`, `server_error` and `unexpected` from `uploadFile` and `uploadWithGrant`, and `storage_timeout`, `conflict`, `redirected` and `invalid_grant_url` from `uploadWithGrant` — so a caller tells a timeout from an unreachable host or a `5xx` by a field rather than by the message or the error's `name`. The type is exported from the main entry and from `@pipelex/sdk/upload`.
+
+### Changed
+
+- **`uploadWithGrant` bounds its `PUT` to storage, and takes `timeoutMs` (Breaking)**: a call now fails with an `UploadTransportError` whose `code` is `timeout` once 60 s plus 1 s for every started 128 KiB of the file have passed — 460 s for a 50 MiB file — instead of waiting forever when no signal was passed, so a caller no longer needs a timeout formula of its own. `timeoutMs` replaces the default, for a link slower than about 1 Mbit/s, and a caller's `signal` can still end the upload sooner. Only the first 16 KiB of storage's error body are read, and when the limit runs out while that body is still arriving the call settles as storage's answer, classified from its status.
+- **`uploadWithGrant` reports storage's `409 ConditionalRequestConflict` as an `UploadTransportError` (Breaking)**: the conflict S3 answers when two uploads with one grant overlap was a `RejectedAssetError` advising a new grant; it is now an `UploadTransportError` whose `code` is `conflict`, advising a retry with the same grant, which either stores the file or reports the grant as used.
+
+### Fixed
+
+- **`uploadWithGrant`'s messages on an unknown outcome**: an unreachable storage now also gives the same-grant retry advice, since the connection may have failed after the file went out, a `5xx` whose storage message ends with a period no longer prints two, and a successful upload no longer waits on the cancellation of storage's response body, which a `fetch` wrapper keeping a clone of the response could hold open indefinitely.
+- **The client's own timeout is `ABORT_TIMEOUT` in a browser too**: when the request timeout ran out while a response body was still arriving, Chrome and Firefox error the body with a generic `AbortError`, so the resulting `ApiUnreachableError` carried no `code`; it now carries `ABORT_TIMEOUT` in every runtime, and `uploadFile` reports it as a `timeout`.
+- **A `timeoutMs` no timer can honour is refused instead of failing at once**: a delay above 2147483647 overflowed `setTimeout`, which then fired almost at once as a false timeout. `validate`, `validateFiles` and `buildRunner` now throw a `RangeError` for such a `timeoutMs`, and for `Infinity`, zero, a negative or `NaN`; `fetchArtifact` and `downloadArtifacts` throw an `ArtifactOperationError`; and `waitForResult` refuses a `NaN` `intervalMs` or `timeoutMs` and caps its sleep, so it no longer polls in a tight loop. `startAndWaitForResult` refuses such a poll option before it starts the run.
+- **The `.mthds` check hook's lint engine accepts the expanded input-slot form and intent hints**: the bundle built by `npm run build:hook` now embeds `@pipelex/tools-wasm` 0.3.0, whose MTHDS schema carries `inputs = { x = { concept = "…", hints = { … } } }` and `hints` on concepts and structure fields, so the hook no longer blocks those valid forms with a schema error; malformed hints are still refused. The engine is pinned exactly, so the bundle's provenance line, the manifest and the lockfile name the same version.
+
+## [v0.23.0] - 2026-09-24
+
+### Added
+
+- **`locateArtifacts` and `ArtifactLocation`**: `locateArtifacts(value)` is the artifact walk with its paths — every `pipelex-storage://` reference in a JSON value, deduplicated in discovery order exactly as `collectArtifacts` returns them, each with `found_at`, every `$`-rooted path at which it sits (`$.rooms[3].staged_photo.url`, `$.items[0].url`, `$["a key"].url`).
+
+### Changed
+
+- **`downloadArtifacts` names each file after the field it fills, and `artifactFilename` takes a location (Breaking)**: a saved file is named after the first path at which its reference sits — `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and an output that is one image as `main_stuff.png` — instead of after the last segment of its storage key, which now supplies only the extension. `artifactFilename(location, contentType, scope)` replaces `artifactFilename(uri, contentType, index)` and throws `ArtifactOperationError` for a location whose first path is not in the walk's notation; a field whose name Windows reserves for a device (`aux`, `nul`, `com1` and the like) is saved with a trailing `_` (`aux_.png`); the full rule is on `docs/artifact-download.md`.
+- **`DownloadedArtifact` items carry a required `found_at` (Breaking)**: every item of a `downloadArtifacts` verdict carries its reference's `found_at`, on the saved arm and the error arm alike, so a file that was not saved still says which field it would have filled. The field is required, so code that builds `DownloadedArtifact` values — a test fake standing in for `downloadArtifacts` — must now supply it.
+
+### Fixed
+
+- **`downloadArtifacts` refuses an unknown `scope`**: a scope other than `main_stuff` or `working_memory` used to walk the working memory while reporting the unknown name back; it is now an `ArtifactOperationError`, raised before anything is read.
+
+## [v0.22.0] - 2026-09-23
+
+### Added
+
+- **`requestUploadGrant`, and the browser-safe `@pipelex/sdk/upload` entry with `uploadWithGrant`**: `PipelexApiClient.requestUploadGrant({ filename, content_type, size })` calls `POST /v1/upload/grant` and returns an `UploadGrant` — a presigned, create-only `PUT` for one new object, its signed headers, the `pipelex-storage://` URI the object will carry, its expiry and the service's `max_bytes`. The standalone `uploadWithGrant(grant, file)` sends a `Blob` or `File` straight to storage with it and returns `{ uri }`, so a browser page that holds a file but no API key can store it without the bytes crossing a server or the API gateway's size ceiling; storage's refusals map onto `RejectedAssetError` (a used grant's `412`, a signature mismatch's `403`, an expired grant) and `UploadTransportError` (a `5xx`, storage's `400 RequestTimeout`, no response, or a grant `url` that is not an absolute `http(s)` URL free of user info, refused before anything is sent). No error it throws carries the grant's URL, the bearer credential: an unreachable storage is described by its origin and the error names and codes, never by the runtime's message or error, which can name the whole URL. It ships from the new `@pipelex/sdk/upload` subpath, which reaches no Node builtin and bundles for the browser with nothing marked external, as well as from the main entry. Documented on `docs/input-preparation.md`.
+- **`RejectedAssetError.code` and `UploadTransportError.status`**: a rejected asset now says why in a closed `RejectedAssetCode` vocabulary — `too_large` for `uploadFile`'s `413`, and `grant_used`, `grant_expired`, `signature_mismatch`, `unsigned_header` or `store_refused` for storage refusing an upload with a grant — so a caller branches on a field rather than on the message. `UploadTransportError` carries the HTTP status when a response produced it. Both are set through the options bag, so existing constructor calls still compile.
+
+### Fixed
+
+- **A caller's abort now reaches it as its own reason in a browser too**: when an abort cut short a response body that was still arriving, the client rethrew the runtime's error, and Chrome and Firefox error that body with a generic `AbortError` rather than the signal's reason — so a caller comparing the rejection to its reason, or using `AbortSignal.timeout()`, saw the wrong error. The client's request pipeline and `fetchArtifact` (whose returned body is read after the call resolves) now throw `signal.reason` whenever the caller's signal has aborted. Node's `fetch` already passed the reason through.
+
 ## [v0.21.0] - 2026-09-23
 
 ### Added

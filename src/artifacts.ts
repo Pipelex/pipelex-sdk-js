@@ -2,8 +2,9 @@
  * The artifact stack — the download twin of `prepareInputs`, in layers so each
  * operation is usable without the next:
  *
- * - {@link collectArtifacts} — a pure walk of any JSON value for the strings that
- *   ARE `pipelex-storage://` references. No network, no key.
+ * - {@link locateArtifacts} — a pure walk of any JSON value for the strings that
+ *   ARE `pipelex-storage://` references, each with every path it sits at.
+ *   {@link collectArtifacts} is the same walk's bare references. No network, no key.
  * - {@link resolveArtifacts} — the platform's bulk resolve route over a whole
  *   list, chunked at the route's bound, one verdict per reference.
  * - {@link fetchArtifact} — a bounded `Response` for one reference: resolved
@@ -20,7 +21,7 @@
  *
  * `node:fs/promises`, `node:path` and `undici` are imported dynamically, behind
  * `isNodeRuntime()`, so the module's static import graph stays free of Node
- * builtins: `collectArtifacts` and `resolveArtifacts` run anywhere, `fetchArtifact`
+ * builtins: the walk and `resolveArtifacts` run anywhere, `fetchArtifact`
  * runs anywhere the global `fetch` does (the dispatcher is a Node refinement), and
  * only `downloadArtifacts` touches a filesystem.
  */
@@ -37,6 +38,7 @@ import {
 } from "./errors.js";
 import type { RunResults, RunResultState } from "./runs.js";
 import { isNodeRuntime } from "./upload.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -77,13 +79,27 @@ const EXPIRY_MARGIN_MS = 10_000;
 /** Longest filename `downloadArtifacts` writes, extension included. */
 const MAX_FILENAME_LENGTH = 128;
 
+/**
+ * Longest extension taken from a storage key, dot excluded. Anything longer after
+ * the key's last dot is read as part of a name rather than as an extension, and
+ * the content type's extension is used instead.
+ */
+const MAX_EXTENSION_LENGTH = 10;
+
+/**
+ * Stems Windows reserves for a device, in any case and whatever the extension:
+ * `aux.png` there names the auxiliary device, not a file. A stem is a field name
+ * the method author chose, so `$.aux.url` would otherwise reach one.
+ */
+const WINDOWS_DEVICE_STEM = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+
 /** Ceiling on collision suffixes before the never-overwrite rule gives up. */
 const MAX_UNIQUE_ATTEMPTS = 10_000;
 
 /**
- * The extension to add when the storage key has none and the resolved content
- * type is one of the artifact types a run produces. Deliberately short: an
- * unknown type simply gets no extension, never a guessed one.
+ * The extension a saved file takes when its storage key carries none and the
+ * resolved content type is one of the artifact types a run produces. Deliberately
+ * short: an unknown type simply gets no extension, never a guessed one.
  */
 const EXTENSION_BY_CONTENT_TYPE: Record<string, string> = {
   "image/png": ".png",
@@ -153,7 +169,10 @@ export interface BulkResolvedStorageUrls {
 export interface FetchArtifactOptions {
   /** Refuse (before a byte is written) and cut (mid-stream) a body over this many bytes. Default 1 GiB. */
   maxBytes?: number;
-  /** Budget for the whole exchange — connect, headers and body. Default 120 s. */
+  /**
+   * Budget for the whole exchange — connect, headers and body. Default 120 s. At most
+   * 2147483647, the longest delay a timer honours.
+   */
   timeoutMs?: number;
   /**
    * Accept a plain `http:` link. Off by default: a general-purpose library does
@@ -197,14 +216,37 @@ export type DownloadArtifactsRequest = DownloadArtifactsOptions &
   ({ run_id: string; results?: never } | { results: RunResults; run_id?: never });
 
 /**
+ * Where one `pipelex-storage://` reference sits in a walked value — what
+ * {@link locateArtifacts} answers per reference. `found_at` lists every path at
+ * which the reference occurs, in walk order, and is never empty: `found_at[0]` is
+ * where it was first seen, and the path a saved file is named after.
+ *
+ * A path is `$`-rooted: `$` is the walked value itself, an object key matching
+ * `^[A-Za-z_][A-Za-z0-9_]*$` is `.key`, any other key is `["…"]` in JSON string
+ * escaping, and an array index is `[n]` — `$.rooms[3].staged_photo.url`,
+ * `$.items[0].url`, `$["a key"].url`. It is the exact path of the string, the
+ * final `url` of a content object included.
+ */
+export interface ArtifactLocation {
+  /** The reference, exactly as it appears in the walked value. */
+  uri: string;
+  /** Every `$`-rooted path at which the reference occurs, in walk order. */
+  found_at: string[];
+}
+
+/**
  * One reference's outcome in a download verdict — one shape with nullable fields,
  * like {@link ResolvedArtifact}: either `path` and `size` are set and `error` is
- * null, or `error` is set and both are null. `content_type` is the platform's
- * guess from the reference's extension, known before the fetch, on both arms.
+ * null, or `error` is set and both are null. `found_at` says where the reference
+ * sits in the walked scope, and `content_type` is the platform's guess from the
+ * reference's extension, known before the fetch; both are on both arms, so an
+ * item that was not saved still says which field it would have filled.
  */
 export type DownloadedArtifact =
   | {
       uri: string;
+      /** Every `$`-rooted path in the walked scope where the reference sits; the first one named the file. */
+      found_at: string[];
       /** Absolute path of the written file. */
       path: string;
       content_type: string | null;
@@ -214,6 +256,8 @@ export type DownloadedArtifact =
     }
   | {
       uri: string;
+      /** Every `$`-rooted path in the walked scope where the reference sits. */
+      found_at: string[];
       path: null;
       content_type: string | null;
       size: null;
@@ -250,36 +294,149 @@ export interface ArtifactCapableClient {
   getRunResult(runId: string, options?: { signal?: AbortSignal }): Promise<RunResultState>;
 }
 
-// ── collectArtifacts ─────────────────────────────────────────────────
+// ── locateArtifacts / collectArtifacts ───────────────────────────────
+
+/** One step of a path into a walked value: an object key, or an array index. */
+type PathSegment = string | number;
+
+/**
+ * A reference as the walk records it: the raw segments of every path it was
+ * found at. `downloadArtifacts` names its files from these segments directly, so
+ * it never parses a rendered path back; `found_at` is only their rendering.
+ */
+interface LocatedReference {
+  uri: string;
+  paths: PathSegment[][];
+}
+
+/** An object key rendered as `.key` in a path; any other key is rendered as `["…"]`. */
+const IDENTIFIER_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/**
+ * Every `pipelex-storage://` reference inside a JSON-shaped value, each with
+ * every path at which it occurs. The references are deduplicated and kept in
+ * discovery order (the order of their first sighting), and each one's `found_at`
+ * lists its paths in walk order, so `found_at[0]` is where it was first seen.
+ *
+ * The string test is {@link collectArtifacts}'s: a string counts only when it IS
+ * a reference. A path is rooted at `$`, the walked value itself; an object key
+ * matching `^[A-Za-z_][A-Za-z0-9_]*$` is written `.key`, any other key `["…"]` in
+ * JSON string escaping, and an array index `[n]`. The runtime serializes a
+ * produced image or document as content carrying its reference in `url`, so a
+ * typical path ends there: `$.rooms[3].staged_photo.url`, `$.items[0].url`, or
+ * `$.url` for an output that is one image. Pure — no network, no key.
+ */
+export function locateArtifacts(value: unknown): ArtifactLocation[] {
+  return walkReferences(value).map(renderLocation);
+}
 
 /**
  * Every `pipelex-storage://` reference inside a JSON-shaped value, deduplicated,
- * in discovery order. A string counts only when it IS a reference — the whole
- * string, scheme first, with something after the scheme; text that merely
- * contains one does not. The scheme is unambiguous, so this walk is a contract
- * rather than a heuristic: the runtime serializes a produced image or document
- * as content carrying its reference in `url`, beside an expiring `public_url`
- * this walk ignores. Pure — no network, no key — so a consumer can count or
- * list a run's produced files without resolving any of them.
+ * in discovery order — the references of {@link locateArtifacts}, without their
+ * paths. A string counts only when it IS a reference — the whole string, scheme
+ * first, with something after the scheme; text that merely contains one does
+ * not. The scheme is unambiguous, so this walk is a contract rather than a
+ * heuristic: the runtime serializes a produced image or document as content
+ * carrying its reference in `url`, beside an expiring `public_url` this walk
+ * ignores. Pure — no network, no key — so a consumer can count or list a run's
+ * produced files without resolving any of them.
  */
 export function collectArtifacts(value: unknown): string[] {
-  const found = new Set<string>();
-  walkForReferences(value, found);
-  return [...found];
+  return walkReferences(value, false).map((located) => located.uri);
 }
 
-function walkForReferences(value: unknown, found: Set<string>): void {
-  if (typeof value === "string") {
-    if (isStorageReference(value)) found.add(value);
-    return;
+/**
+ * The walk both public functions share: depth first, keys in `Object.entries`
+ * order. With `withPaths` off it records each reference once and no path at
+ * all, which is what `collectArtifacts` needs: copying the trail for every
+ * occurrence costs memory in proportion to occurrences times depth, where the
+ * deduplicated list needs only one entry per unique reference.
+ */
+function walkReferences(value: unknown, withPaths = true): LocatedReference[] {
+  // A Map keeps insertion order, which is the order of first sighting.
+  const byUri = new Map<string, LocatedReference>();
+  const trail: PathSegment[] = [];
+  const visit = (node: unknown): void => {
+    if (typeof node === "string") {
+      if (!isStorageReference(node)) return;
+      const known = byUri.get(node);
+      if (!withPaths) {
+        if (known === undefined) byUri.set(node, { uri: node, paths: [] });
+        return;
+      }
+      const path = [...trail];
+      if (known === undefined) byUri.set(node, { uri: node, paths: [path] });
+      else known.paths.push(path);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (let index = 0; index < node.length; index += 1) {
+        trail.push(index);
+        visit(node[index]);
+        trail.pop();
+      }
+      return;
+    }
+    if (typeof node === "object" && node !== null) {
+      for (const [key, entry] of Object.entries(node)) {
+        trail.push(key);
+        visit(entry);
+        trail.pop();
+      }
+    }
+  };
+  visit(value);
+  return [...byUri.values()];
+}
+
+function renderLocation(located: LocatedReference): ArtifactLocation {
+  return { uri: located.uri, found_at: located.paths.map(renderPath) };
+}
+
+/** Segments to the `$`-rooted notation `found_at` carries. */
+function renderPath(segments: readonly PathSegment[]): string {
+  let path = "$";
+  for (const segment of segments) {
+    if (typeof segment === "number") path += `[${segment}]`;
+    else if (IDENTIFIER_KEY.test(segment)) path += `.${segment}`;
+    else path += `[${JSON.stringify(segment)}]`;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) walkForReferences(item, found);
-    return;
+  return path;
+}
+
+/**
+ * The `$`-rooted notation back to segments, for a location that reaches
+ * {@link artifactFilename} from outside the walk. The rendering is lossless, so
+ * this is exact for every path the walk produced; anything else is `undefined`.
+ */
+function parsePath(path: string): PathSegment[] | undefined {
+  if (!path.startsWith("$")) return undefined;
+  const segments: PathSegment[] = [];
+  let at = 1;
+  while (at < path.length) {
+    const rest = path.slice(at);
+    const key = /^\.([A-Za-z_][A-Za-z0-9_]*)/.exec(rest);
+    if (key !== null) {
+      segments.push(key[1]!);
+      at += key[0].length;
+      continue;
+    }
+    const index = /^\[(\d+)\]/.exec(rest);
+    if (index !== null) {
+      segments.push(Number(index[1]));
+      at += index[0].length;
+      continue;
+    }
+    const quoted = /^\[("(?:[^"\\]|\\.)*")\]/s.exec(rest);
+    if (quoted === null) return undefined;
+    try {
+      segments.push(JSON.parse(quoted[1]!) as string);
+    } catch {
+      return undefined;
+    }
+    at += quoted[0].length;
   }
-  if (typeof value === "object" && value !== null) {
-    for (const entry of Object.values(value)) walkForReferences(entry, found);
-  }
+  return segments;
 }
 
 /** A string that is a storage reference: the scheme, then at least one character. */
@@ -290,22 +447,112 @@ export function isStorageReference(value: string): boolean {
 // ── artifactFilename ─────────────────────────────────────────────────
 
 /**
- * The bare filename a storage reference is saved under: the last segment of the
- * storage key, reduced to a conservative character set so it can never name
- * anything but a regular file directly inside the target directory. Path
- * separators are the split point, so no traversal survives; leading dots are
- * stripped, so no hidden file and no `..`; everything outside `[A-Za-z0-9._-]`
- * becomes `_`; an empty result falls back to a numbered `artifact-N`. Length is
- * capped with the extension preserved, and an extension is added from the
- * content type when the key carries none. A collision on disk is not this
+ * The bare filename a reference is saved under, named after the field it fills:
+ * the path in `location.found_at[0]`, where the reference was first seen.
+ *
+ * 1. A final object key `url` is dropped, since the runtime's image and
+ *    document contents carry their reference there; a reference under any other
+ *    key keeps that key, and a `url` key that is not final is kept.
+ * 2. Each key is reduced to `[A-Za-z0-9_]`, every other character (`-` and `.`
+ *    included) becoming `_`; an index stays its decimal digits.
+ * 3. The segments are joined with `-`. An empty result — the reference is the
+ *    walked value itself, or its `url` — becomes the scope's name.
+ * 4. Over the filename length cap (`MAX_FILENAME_LENGTH`, extension included),
+ *    the tail is kept: whole leading segments are dropped first, since the last
+ *    ones are the specific ones, and a single segment still too long is cut to
+ *    fit.
+ * 5. A stem Windows reserves for a device (`con`, `prn`, `aux`, `nul`,
+ *    `com0`–`com9`, `lpt0`–`lpt9`, in any case) gets a trailing `_`, so
+ *    `$.aux.url` is saved as `aux_.png`.
+ * 6. The extension is the storage key's own, reduced to `[A-Za-z0-9]`, when it
+ *    has a short one; otherwise the content type's, for the types a run
+ *    produces; otherwise there is none.
+ *
+ * So `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and
+ * `$.url` in `main_stuff` as `main_stuff.png`. The stem is ASCII letters, digits,
+ * `_` and the `-` joins, never empty and never a device name, so the name can
+ * only ever be a regular file directly inside the target directory. A collision on disk is not this
  * function's concern: `downloadArtifacts` suffixes the stem (`name-1.ext`) on
  * exclusive creation, so a file is never overwritten.
+ *
+ * Throws `ArtifactOperationError` for a location whose `found_at[0]` is not a path
+ * in the notation {@link locateArtifacts} writes, or for an unknown scope.
  */
 export function artifactFilename(
+  location: ArtifactLocation,
+  contentType: string | null | undefined,
+  scope: ArtifactScope,
+): string {
+  requireScope(scope);
+  // A JavaScript caller can hand anything here — the old signature's bare uri
+  // string among them — and every shape must reach the documented refusal
+  // rather than a TypeError, or a string's first character.
+  const loose = location as { uri?: unknown; found_at?: unknown } | null | undefined;
+  const uri: unknown = loose?.uri;
+  if (typeof uri !== "string") {
+    throw new ArtifactOperationError(
+      `artifactFilename needs a location carrying its reference as a string "uri"; got ${String(uri)}.`,
+    );
+  }
+  const foundAt: unknown = loose?.found_at;
+  const first: unknown = Array.isArray(foundAt) ? foundAt[0] : undefined;
+  const segments = typeof first === "string" ? parsePath(first) : undefined;
+  if (segments === undefined) {
+    throw new ArtifactOperationError(
+      `artifactFilename needs a location whose first "found_at" entry is a path such as ` +
+        `"$.items[0].url"; got ${typeof first === "string" ? JSON.stringify(first) : String(first)}.`,
+    );
+  }
+  return filenameFor(segments, uri, contentType, scope);
+}
+
+/** The naming rule of {@link artifactFilename}, over the walk's own segments. */
+function filenameFor(
+  segments: readonly PathSegment[],
   uri: string,
   contentType: string | null | undefined,
-  index: number,
+  scope: ArtifactScope,
 ): string {
+  const named = segments.at(-1) === "url" ? segments.slice(0, -1) : segments;
+  const words = named
+    .map((segment) =>
+      typeof segment === "number" ? String(segment) : segment.replace(/[^A-Za-z0-9_]/gu, "_"),
+    )
+    // Only the empty key reduces to nothing, and it says nothing about the field.
+    .filter((word) => word !== "");
+  const extension = extensionFor(uri, contentType);
+  const stem = fitStem(words.length > 0 ? words : [scope], MAX_FILENAME_LENGTH - extension.length);
+  // A device stem is at most four characters, so the `_` cannot overrun the cap.
+  return (WINDOWS_DEVICE_STEM.test(stem) ? `${stem}_` : stem) + extension;
+}
+
+/** The words joined with `-` within `budget` characters, keeping the tail. */
+function fitStem(words: readonly string[], budget: number): string {
+  let start = 0;
+  let length = words.reduce((sum, word) => sum + word.length, 0) + words.length - 1;
+  while (length > budget && start < words.length - 1) {
+    length -= words[start]!.length + 1;
+    start += 1;
+  }
+  const stem = words.slice(start).join("-");
+  return stem.length > budget ? stem.slice(0, budget) : stem;
+}
+
+/** `.ext` for the saved file — the storage key's own, else the content type's — or `""`. */
+function extensionFor(uri: string, contentType: string | null | undefined): string {
+  const fromKey = storageKeyExtension(uri);
+  if (fromKey !== "") return `.${fromKey}`;
+  if (contentType == null) return "";
+  return EXTENSION_BY_CONTENT_TYPE[contentType.split(";")[0]!.trim().toLowerCase()] ?? "";
+}
+
+/**
+ * The extension the storage key's last segment carries, without its dot, reduced
+ * to `[A-Za-z0-9]` — or `""` when it has none, or none that short. The segment is
+ * what follows the last `/` or `\` once the scheme, query and fragment are gone,
+ * percent-decoded when it decodes; a leading dot is not an extension.
+ */
+function storageKeyExtension(uri: string): string {
   const key = uri.startsWith(PIPELEX_STORAGE_SCHEME)
     ? uri.slice(PIPELEX_STORAGE_SCHEME.length)
     : uri;
@@ -319,47 +566,27 @@ export function artifactFilename(
   try {
     decoded = decodeURIComponent(segment);
   } catch {
-    // A malformed escape sequence is kept as typed; sanitization handles it.
+    // A malformed escape sequence is kept as typed; the reduction handles it.
   }
 
-  let name = decoded
-    .replace(/[^A-Za-z0-9._-]/g, "_")
-    .replace(/^[._-]+/, "")
-    .replace(/[._-]+$/, "");
-
-  if (name === "") {
-    name = `artifact-${index + 1}`;
-  }
-
-  if (name.length > MAX_FILENAME_LENGTH) {
-    const ext = extensionOf(name);
-    // The extension is kept only if there is room left for a stem. An extension
-    // at least as long as the cap would give `slice` a negative start, which
-    // counts from the END and yields a name LONGER than the cap — so a
-    // pathological extension is dropped rather than preserved.
-    name =
-      ext.length < MAX_FILENAME_LENGTH
-        ? name.slice(0, MAX_FILENAME_LENGTH - ext.length) + ext
-        : name.slice(0, MAX_FILENAME_LENGTH);
-  }
-
-  if (extensionOf(name) === "") {
-    const ext =
-      contentType == null
-        ? undefined
-        : EXTENSION_BY_CONTENT_TYPE[contentType.split(";")[0]!.trim().toLowerCase()];
-    if (ext !== undefined) {
-      name += ext;
-    }
-  }
-
-  return name;
+  const dot = decoded.lastIndexOf(".");
+  if (dot <= 0) return "";
+  const extension = decoded.slice(dot + 1).replace(/[^A-Za-z0-9]/g, "");
+  return extension.length <= MAX_EXTENSION_LENGTH ? extension : "";
 }
 
 /** `path.extname` for a bare filename, without the `node:path` import: `.ext`, or `""` (a leading dot is not an extension). */
 function extensionOf(name: string): string {
   const dot = name.lastIndexOf(".");
   return dot > 0 ? name.slice(dot) : "";
+}
+
+function requireScope(scope: unknown): asserts scope is ArtifactScope {
+  if (scope !== "main_stuff" && scope !== "working_memory") {
+    throw new ArtifactOperationError(
+      `"scope" must be "main_stuff" or "working_memory", got ${String(scope)}.`,
+    );
+  }
 }
 
 // ── resolveArtifacts ─────────────────────────────────────────────────
@@ -448,7 +675,13 @@ function fetchBounds(options: FetchArtifactOptions): FetchBounds {
   const maxBytes = options.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS;
   requirePositive("maxBytes", maxBytes);
-  requirePositive("timeoutMs", timeoutMs);
+  // A longer delay overflows the timer, which then fires at once as a false timeout.
+  if (!isTimerDelay(timeoutMs)) {
+    throw new ArtifactOperationError(
+      `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
+        `${String(timeoutMs)}.`,
+    );
+  }
   return { maxBytes, timeoutMs, allowHttp: options.allowHttp ?? false, signal: options.signal };
 }
 
@@ -573,7 +806,9 @@ async function fetchResolvedUrl(
         { cause: err },
       );
     }
-    if (userSignal?.aborted) return err;
+    // The caller's reason, not `err`: a browser rejects the fetch, and errors a body
+    // cut short, with a generic AbortError rather than the signal's reason.
+    if (userSignal?.aborted) return userSignal.reason;
     if (err instanceof ArtifactFetchError) return err;
     return new ArtifactFetchError(
       `The artifact could not be fetched: ${err instanceof Error ? err.message : String(err)}.`,
@@ -868,12 +1103,19 @@ const SKIPPED_TOTAL =
   "Skipped: the download's total byte limit was reached by an earlier artifact.";
 
 function itemError(
-  uri: string,
+  location: ArtifactLocation,
   contentType: string | null,
   code: string,
   detail: string,
 ): DownloadedArtifact {
-  return { uri, path: null, content_type: contentType, size: null, error: { code, detail } };
+  return {
+    uri: location.uri,
+    found_at: location.found_at,
+    path: null,
+    content_type: contentType,
+    size: null,
+    error: { code, detail },
+  };
 }
 
 function isExpired(expiresAt: string): boolean {
@@ -910,19 +1152,20 @@ async function readCompletedResults(
  * Save a run's produced files under `dir` — Node-only, like the path-string arm
  * of `uploadFile`. Takes a `run_id` (the results are re-read, so a run is
  * downloadable days later) or a `RunResults` in hand; walks the requested scope
- * with {@link collectArtifacts}; resolves the whole set through the bulk route
+ * with {@link locateArtifacts}; resolves the whole set through the bulk route
  * ahead of the workers; then a bounded pool of workers each fetch → open with
  * `wx` → write, re-resolving any link that has expired by the time a worker
- * reaches it. The embedded `public_url` is never used. Files are named by
- * {@link artifactFilename} and never overwritten; a failed or aborted download
- * unlinks its partial file.
+ * reaches it. The embedded `public_url` is never used. Each file is named after
+ * the field it fills, by {@link artifactFilename}'s rule, and never overwritten;
+ * a failed or aborted download unlinks its partial file.
  *
  * Returns a produced verdict: one entry per reference, errors as values. It
  * throws only when no verdict can be produced — `RunStillRunningError` or
  * `RunFailedError` for a run that has not completed, `ScopeUnavailableError`
  * when the scope's artifact is null or missing, `ArtifactAuthenticationError`
  * (carrying the verdict so far) when the resolve route refuses the credential,
- * `ArtifactOperationError` outside Node or for an unusable `dir`, and the
+ * `ArtifactOperationError` outside Node, for an unusable `dir` or for an
+ * unknown `scope`, and the
  * transport and lifecycle errors of the reads it makes (`ApiResponseError` for
  * a deployment without the bulk route, `RunLifecycleUnavailableError` for a
  * bare runner asked by id, `ApiUnreachableError`).
@@ -938,6 +1181,7 @@ export async function downloadArtifacts(
     );
   }
   const scope = request.scope ?? "main_stuff";
+  requireScope(scope);
   const concurrency = request.concurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
   const maxTotalBytes = request.maxTotalBytes ?? DEFAULT_DOWNLOAD_MAX_TOTAL_BYTES;
   if (!Number.isInteger(concurrency) || concurrency < 1) {
@@ -971,10 +1215,13 @@ export async function downloadArtifacts(
     throw new ScopeUnavailableError(scope, runId);
   }
 
-  const uris = collectArtifacts(walked);
-  if (uris.length === 0) {
+  // The walk's own record names the files; `locations` is what the verdict reports.
+  const located = walkReferences(walked);
+  if (located.length === 0) {
     return { scope, artifacts: [], saved_paths: [], all_saved: true };
   }
+  const locations = located.map(renderLocation);
+  const uris = located.map((reference) => reference.uri);
 
   const fs = (await import("node:fs/promises")) as unknown as NodeFs;
   const path = (await import("node:path")) as unknown as NodePath;
@@ -996,7 +1243,8 @@ export async function downloadArtifacts(
   );
   const verdictSoFar = (): DownloadArtifactsResult => {
     const artifacts = outcomes.map(
-      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_CREDENTIAL),
+      (outcome, index) =>
+        outcome ?? itemError(locations[index]!, null, "aborted", SKIPPED_CREDENTIAL),
     );
     return assembleVerdict(scope, artifacts, request.signal?.aborted === true);
   };
@@ -1043,15 +1291,16 @@ export async function downloadArtifacts(
 
   const saveOne = async (
     index: number,
-    uri: string,
     url: string,
     contentType: string | null,
   ): Promise<DownloadedArtifact> => {
+    const location = locations[index]!;
+    const uri = location.uri;
     let response: Response;
     try {
       response = await fetchResolvedUrl(uri, url, workerBounds, dispatcher, () => undefined);
     } catch (err) {
-      return itemError(uri, contentType, ...classifyFailure(err, signal));
+      return itemError(location, contentType, ...classifyFailure(err, signal));
     }
 
     const declaredLength = Number(response.headers.get("content-length"));
@@ -1060,7 +1309,7 @@ export async function downloadArtifacts(
       if (savedBytes + reserved > maxTotalBytes) limitReached = true;
       await discard(response);
       return itemError(
-        uri,
+        location,
         contentType,
         "total_limit_exceeded",
         `Saving this ${formatMiB(reserved)} artifact would take the download past its ` +
@@ -1073,12 +1322,13 @@ export async function downloadArtifacts(
 
     let target: { handle: NodeFileHandle; path: string };
     try {
-      target = await openUniqueFile(fs, path, dir, artifactFilename(uri, contentType, index));
+      const filename = filenameFor(located[index]!.paths[0]!, uri, contentType, scope);
+      target = await openUniqueFile(fs, path, dir, filename);
     } catch (err) {
       committedBytes -= share();
       await discard(response);
       return itemError(
-        uri,
+        location,
         contentType,
         "write_failed",
         `The file could not be created: ${err instanceof Error ? err.message : String(err)}.`,
@@ -1097,14 +1347,21 @@ export async function downloadArtifacts(
       } catch (err) {
         await removePartial();
         return itemError(
-          uri,
+          location,
           contentType,
           "write_failed",
           `The file could not be closed: ${err instanceof Error ? err.message : String(err)}.`,
         );
       }
       committedBytes -= share();
-      return { uri, path: target.path, content_type: contentType, size: 0, error: null };
+      return {
+        uri,
+        found_at: location.found_at,
+        path: target.path,
+        content_type: contentType,
+        size: 0,
+        error: null,
+      };
     }
     const reader = response.body.getReader();
     try {
@@ -1118,7 +1375,7 @@ export async function downloadArtifacts(
           await reader.cancel().catch(() => undefined);
           await removePartial();
           return itemError(
-            uri,
+            location,
             contentType,
             "total_limit_exceeded",
             `This artifact took the download past its ${formatMiB(maxTotalBytes)} total limit.`,
@@ -1137,13 +1394,13 @@ export async function downloadArtifacts(
       await removePartial();
       if (err instanceof ArtifactWriteError) {
         return itemError(
-          uri,
+          location,
           contentType,
           "write_failed",
           `The file could not be written: ${err.message}.`,
         );
       }
-      return itemError(uri, contentType, ...classifyFailure(err, signal));
+      return itemError(location, contentType, ...classifyFailure(err, signal));
     }
 
     try {
@@ -1151,7 +1408,7 @@ export async function downloadArtifacts(
     } catch (err) {
       await removePartial();
       return itemError(
-        uri,
+        location,
         contentType,
         "write_failed",
         `The file could not be closed: ${err instanceof Error ? err.message : String(err)}.`,
@@ -1160,7 +1417,14 @@ export async function downloadArtifacts(
     // A body shorter than it declared gives the unused reservation back.
     committedBytes -= share() - written;
     savedBytes += written;
-    return { uri, path: target.path, content_type: contentType, size: written, error: null };
+    return {
+      uri,
+      found_at: location.found_at,
+      path: target.path,
+      content_type: contentType,
+      size: written,
+      error: null,
+    };
   };
 
   const worker = async (): Promise<void> => {
@@ -1168,11 +1432,11 @@ export async function downloadArtifacts(
       const index = next;
       next += 1;
       if (index >= uris.length) return;
-      const uri = uris[index]!;
+      const location = locations[index]!;
       let entry = resolved[index]!;
       if (credentialFailure !== undefined || aborted()) {
         outcomes[index] = itemError(
-          uri,
+          location,
           entry.content_type,
           "aborted",
           credentialFailure ? SKIPPED_CREDENTIAL : SKIPPED_ABORTED,
@@ -1180,25 +1444,35 @@ export async function downloadArtifacts(
         continue;
       }
       if (limitReached) {
-        outcomes[index] = itemError(uri, entry.content_type, "total_limit_exceeded", SKIPPED_TOTAL);
+        outcomes[index] = itemError(
+          location,
+          entry.content_type,
+          "total_limit_exceeded",
+          SKIPPED_TOTAL,
+        );
         continue;
       }
       if (entry.error === null && isExpired(entry.expires_at)) {
         try {
-          const again = await resolveArtifacts(client, [uri], { signal });
+          const again = await resolveArtifacts(client, [location.uri], { signal });
           entry = again[0]!;
         } catch (err) {
           if (isCredentialRefusal(err)) {
             credentialFailure = err;
-            outcomes[index] = itemError(uri, entry.content_type, "aborted", SKIPPED_CREDENTIAL);
+            outcomes[index] = itemError(
+              location,
+              entry.content_type,
+              "aborted",
+              SKIPPED_CREDENTIAL,
+            );
             continue;
           }
           if (aborted()) {
-            outcomes[index] = itemError(uri, entry.content_type, "aborted", SKIPPED_ABORTED);
+            outcomes[index] = itemError(location, entry.content_type, "aborted", SKIPPED_ABORTED);
             continue;
           }
           outcomes[index] = itemError(
-            uri,
+            location,
             entry.content_type,
             "resolve_failed",
             `The expired link could not be re-resolved: ${err instanceof Error ? err.message : String(err)}.`,
@@ -1207,10 +1481,10 @@ export async function downloadArtifacts(
         }
       }
       if (entry.error !== null) {
-        outcomes[index] = itemError(uri, null, entry.error.code, entry.error.detail);
+        outcomes[index] = itemError(location, null, entry.error.code, entry.error.detail);
         continue;
       }
-      outcomes[index] = await saveOne(index, uri, entry.url, entry.content_type);
+      outcomes[index] = await saveOne(index, entry.url, entry.content_type);
     }
   };
 
@@ -1233,7 +1507,7 @@ export async function downloadArtifacts(
   return assembleVerdict(
     scope,
     outcomes.map(
-      (outcome, index) => outcome ?? itemError(uris[index]!, null, "aborted", SKIPPED_ABORTED),
+      (outcome, index) => outcome ?? itemError(locations[index]!, null, "aborted", SKIPPED_ABORTED),
     ),
     request.signal?.aborted === true,
   );

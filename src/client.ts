@@ -45,6 +45,7 @@ import type {
   ValidationErrorItem,
 } from "./models.js";
 import {
+  assertWaitOptions,
   pollUntilResult,
   type RunRead,
   type RunResults,
@@ -56,8 +57,6 @@ import type {
   BillingPortalResponse,
   ChangePlanResponse,
   CheckoutResponse,
-  GatewayApiKey,
-  GatewayApiKeyStatus,
   InvoiceView,
   Membership,
   MembershipsResponse,
@@ -78,6 +77,8 @@ import type {
   ResolvedStorageUrl,
   SubscriptionResponse,
   UpdateRunInput,
+  UploadGrant,
+  UploadGrantInput,
   UploadInput,
   UploadedFile,
   UserProfile,
@@ -113,6 +114,7 @@ import type {
   ResolvedArtifact,
 } from "./artifacts.js";
 import { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
 //
@@ -226,7 +228,10 @@ export interface ValidateFilesOptions {
   render?: string[];
   /** Optional structured-view opt-in tokens, e.g. ["input_form", "output_form"]; sent only when given. */
   views?: string[];
-  /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
+  /**
+   * Per-call request ceiling; defaults to the 20-min execute ceiling. A positive number
+   * no larger than 2147483647, the longest delay a timer honours, else a `RangeError`.
+   */
   timeoutMs?: number;
   /** Caller-driven cancellation; the abort reason propagates untouched. */
   signal?: AbortSignal;
@@ -428,6 +433,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     const headers = this.requestHeaders(hasBody);
 
     const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // A longer delay overflows the timer, which then fires at once as a false timeout.
+    if (!isTimerDelay(timeoutMs)) {
+      throw new RangeError(
+        `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
+          `${String(timeoutMs)}.`,
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new DOMException("Request timed out.", "TimeoutError")),
@@ -456,12 +468,17 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     } catch (err) {
       // A caller-initiated abort (not our timeout) propagates untouched so
       // `waitForResult` callers can distinguish "I stopped waiting" from a
-      // network failure.
-      if (userSignal?.aborted) throw err;
+      // network failure. It is the signal's reason rather than `err`: a browser
+      // errors a body stream cut short by an abort with a generic AbortError.
+      if (userSignal?.aborted) throw userSignal.reason;
       // undici (Node fetch) wraps DNS/connect/TLS failures as
       // `TypeError("fetch failed")` with the system error attached as `cause`.
-      // Our timeout aborts the controller with a "TimeoutError" DOMException.
-      const code = extractNetworkErrorCode(err);
+      // Our timeout aborts the controller with a "TimeoutError" DOMException, which
+      // is classified from the controller rather than from `err`: a browser errors a
+      // body stream cut short by that abort with a generic AbortError instead.
+      const code = extractNetworkErrorCode(
+        controller.signal.aborted ? controller.signal.reason : err,
+      );
       throw new ApiUnreachableError(
         `Could not reach Pipelex API at ${this.baseUrl} (${code ?? "network error"})`,
         this.baseUrl,
@@ -1175,7 +1192,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
    * routes use, and it is the ONLY extension route that takes transport options at all
    * (the policy note on `requestExtension` says why the static ones do not). Override it
-   * per call with `options.timeoutMs`; a caller that stops caring mid-sweep can cancel
+   * per call with `options.timeoutMs`, a positive number no larger than 2147483647 (else a
+   * `RangeError`); a caller that stops caring mid-sweep can cancel
    * via `options.signal` instead of waiting it out.
    */
   async buildRunner(
@@ -1315,6 +1333,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     options: PipelexStartOptions,
     pollOptions?: WaitForResultOptions,
   ): Promise<RunResults> {
+    // Before the run starts: a RangeError after it would carry no run id to re-poll by.
+    assertWaitOptions(pollOptions);
     if (await this.supportsRunLifecycle()) {
       // A runner can look hosted yet lack the durable routes — `implementation`
       // is an extension field, so a compliant bare runner that omits it is
@@ -1600,20 +1620,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return this.requestProduct("POST", `pipelex-api-keys/${encodeURIComponent(id)}/rotate`);
   }
 
-  /**
-   * Provision the gateway (LLM inference) API key — `POST /v1/gateway-api-key`.
-   * The JSON body is ALWAYS sent (even with `promo_code: null`) — the server
-   * 422s an empty body.
-   */
-  async createGatewayApiKey(input: { promo_code: string | null }): Promise<GatewayApiKey> {
-    return this.requestProduct("POST", "gateway-api-key", input);
-  }
-
-  /** The gateway key status (`null` until provisioned) — `GET /v1/gateway-api-key`. */
-  async getGatewayApiKey(): Promise<GatewayApiKeyStatus> {
-    return this.requestProduct("GET", "gateway-api-key");
-  }
-
   /** Submit the onboarding questionnaire — `POST /v1/onboarding/submit`. */
   async submitOnboarding(input: OnboardingSubmission): Promise<void> {
     await this.requestProduct("POST", "onboarding/submit", input);
@@ -1669,8 +1675,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * {@link prepareInputs}, Node-only. Keyed on a `run_id` (the results are
    * re-read, so it works days after the run) or a `RunResults` in hand; walks the
    * `main_stuff` scope by default, `working_memory` on request; resolves every
-   * link fresh (never the embedded `public_url`); and returns a produced verdict,
-   * one entry per reference, errors as values. See `docs/artifact-download.md`.
+   * link fresh (never the embedded `public_url`); names each file after the field
+   * it fills; and returns a produced verdict, one entry per reference with the
+   * paths it sits at, errors as values. See `docs/artifact-download.md`.
    */
   async downloadArtifacts(request: DownloadArtifactsRequest): Promise<DownloadArtifactsResult> {
     return downloadArtifactsImpl(this, request);
@@ -1679,6 +1686,29 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /** Upload a base64 file — `POST /v1/upload`. */
   async upload(input: UploadInput): Promise<UploadedFile> {
     return this.requestProduct("POST", "upload", input);
+  }
+
+  /**
+   * Request a grant to upload one file straight to storage — `POST /v1/upload/grant`.
+   * `upload` for a caller that holds the bytes but not this client's credential, such
+   * as a browser page: the credential-holding side asks for the grant, hands it over,
+   * and the holder of the bytes sends them with `uploadWithGrant`, from the
+   * browser-safe `@pipelex/sdk/upload` entry. The bytes cross neither this client nor
+   * the API gateway, so the gateway's request quota does not cap the file below the
+   * service's own limit (`max_bytes`).
+   *
+   * The grant describes one new object: its `uri` exists once the `PUT` succeeds, and
+   * not before. It is create-only and short-lived, and it is a bearer capability, so
+   * keep it out of logs. The route never replays a grant: ask again for a new one
+   * rather than retrying. A declared `size` over the cap is a `413` `ApiResponseError`
+   * (`code` `payload_too_large`); a deployment without the route answers a `404`. See
+   * `docs/input-preparation.md`.
+   */
+  async requestUploadGrant(
+    input: UploadGrantInput,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<UploadGrant> {
+    return this.requestProduct("POST", "upload/grant", input, options);
   }
 
   /**
