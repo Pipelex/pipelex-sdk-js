@@ -57,8 +57,6 @@ import type {
   BillingPortalResponse,
   ChangePlanResponse,
   CheckoutResponse,
-  GatewayApiKey,
-  GatewayApiKeyStatus,
   InvoiceView,
   Membership,
   MembershipsResponse,
@@ -1620,20 +1618,6 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    */
   async rotatePipelexApiKey(id: string): Promise<PipelexApiKeyCreated> {
     return this.requestProduct("POST", `pipelex-api-keys/${encodeURIComponent(id)}/rotate`);
-  }
-
-  /**
-   * Provision the gateway (LLM inference) API key — `POST /v1/gateway-api-key`.
-   * The JSON body is ALWAYS sent (even with `promo_code: null`) — the server
-   * 422s an empty body.
-   */
-  async createGatewayApiKey(input: { promo_code: string | null }): Promise<GatewayApiKey> {
-    return this.requestProduct("POST", "gateway-api-key", input);
-  }
-
-  /** The gateway key status (`null` until provisioned) — `GET /v1/gateway-api-key`. */
-  async getGatewayApiKey(): Promise<GatewayApiKeyStatus> {
-    return this.requestProduct("GET", "gateway-api-key");
   }
 
   /** Submit the onboarding questionnaire — `POST /v1/onboarding/submit`. */
