@@ -401,6 +401,44 @@ describe("PipelexApiClient.waitForResult", () => {
     expect(polls).toEqual([1]);
   });
 
+  it.each([
+    ["intervalMs", { intervalMs: Number.NaN }],
+    ["timeoutMs", { timeoutMs: Number.NaN }],
+  ])("refuses a NaN %s before polling", async (_name, options) => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(client.waitForResult("run-1", options)).rejects.toBeInstanceOf(RangeError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("sleeps no shorter than asked when the interval is past what a timer honours", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = makeClient();
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch")
+        .mockImplementation(async () => emptyResponse(202));
+      const controller = new AbortController();
+
+      const pending = client
+        .waitForResult("run-1", {
+          intervalMs: 2 ** 31,
+          timeoutMs: Number.POSITIVE_INFINITY,
+          signal: controller.signal,
+        })
+        .catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // An overflowing timer would fire every millisecond and poll thousands of times.
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      controller.abort();
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("propagates RunLifecycleUnavailableError out of the poll loop (bare runner)", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse(404, { detail: "Not Found" }));
