@@ -69,6 +69,7 @@ Files: `docs/hook-bundle.md` (new), `docs/architecture.md`, `CHANGELOG.md`.
 
 - File one item owned by `pipelex-plugins`, `--blocked-by L-260924-bdb054 --discovered-from L-260924-bdb054`, for the work in the design's "Downstream" section: re-vendor with `make vendor-hook` once this lands on `dev`, flip `test_a_relative_path_in_a_codex_patch_is_read_from_the_session_directory`, add the wrong-file and note cases to `tests/unit/test_hook_commands.py`, and rewrite the paragraph "A relative path in a patch is read from the session's directory" in `docs/hooks.md`. Name its id here.
 - After the merge, `/ledger-land` closes L-260924-bdb054 with the merge as evidence, which releases the follow-up.
+- Filed as L-260924-dd7bf2 on 2026-09-24. On 2026-09-25 its scope grew to cover removing the wrapper's empty-directory run for `Bash` payloads, which `pipelex-plugins` added on `feature/Review-fix-first` as a stopgap and which this bundle's payload-`cwd` anchor makes inert.
 
 ## Decisions log
 
@@ -99,3 +100,17 @@ Decisions taken while implementing:
 - **A header held by no command cannot come from a script the reader lexes**, since every non-blank line is either some command's text or a heredoc body. The drop in `extractCodexMthdsTargets` stays as a guard, and `outside` is tested at the level of `directoryAt`.
 
 Nothing in the design turned out wrong. The lexer was fuzzed with 200,000 random scripts over its special tokens, and none hung or threw past its guard. A script with thousands of chained relative `cd`s is quadratic, but only through the length of the path it builds.
+
+### Checkpoint B, taken at `9be6faa`
+
+Phases 3 and 4 are complete on top of the round-1 fixes (`76ae387`). `selectCodexTargets` in `src/hooks/check-core.ts` decides which of a Codex patch's targets are checked. A target a shell patch named by a relative path must carry the added lines of some section that wrote it (`carriesAddedLines`), and a section that adds no line confirms nothing. The paths it could not place, confirm or find, unless the patch removed them, go into `uncheckedShellPatchNote`. The entry point reads each file once, loads the engine only when there is a file to check, and appends the note before the merge. `docs/hook-bundle.md` describes the reading for a reader who has not seen the design, `docs/architecture.md` links to it, and `CHANGELOG.md` has the entry under Unreleased. `make check` and `make test` passed at this SHA.
+
+Decisions taken while implementing: the round-1 entry under "Decisions log" above. The design's Decisions 3, 5 and 6 and its known limits were updated to match, and nothing else in it turned out wrong. After the round-1 fixes, a relative-`cd` chain past `PATH_MAX` is unknown and the walk has a budget, so reading stays linear. 300,000 fuzzed scripts over the lexer's tokens and the new keywords neither threw nor took longer than a millisecond each, and a 50,000-line script reads in about 0.2 s.
+
+Verification against `dist-hooks/check.mjs` built at this SHA, with `PIPELEX_API_KEY` unset so that only the local stages ran. The payload's `cwd` was a `project/` directory. `broken.mthds` is a method whose pipe type the patch changes to `NotAPipe`, and the session directory's `valid.mthds` is a valid method that the formatter would rewrite:
+
+1. `cd sub; apply_patch <<'PATCH' …`, with the broken file only in `project/sub/`: the hook blocked on `project/sub/broken.mthds` with `[schema/error] "NotAPipe" is not one of [...] (pipe.echo.type, line 13, col 8)`.
+2. `cd sub && apply_patch <<'PATCH' … PATCH` then `echo applied`, with the broken file in `project/sub/` and the valid file at `project/broken.mthds`: the same block on `project/sub/broken.mthds`, and `project/broken.mthds` kept its SHA-1 `42ccfb14`.
+3. The same patch with no `cd`, standing in for `exec_command`'s `workdir`, with the same two files: no block, the note "The .mthds hook did not check `broken.mthds`: it could not confirm which file this shell command patched. …" as `additionalContext`, and `project/broken.mthds` still `42ccfb14`.
+4. A pure deletion after `cd sub`, with valid files in both directories: the note, and `project/broken.mthds` still `42ccfb14`.
+5. Control: an `apply_patch` tool payload with a pure deletion, the hook run from an empty directory: it blocked on the session directory's broken file, anchored on the payload's `cwd`, with no content check.
