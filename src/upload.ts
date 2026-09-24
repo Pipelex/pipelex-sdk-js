@@ -220,14 +220,19 @@ function mapUploadError(error: unknown, filename: string): Error {
       default:
         return new UploadTransportError(
           `Upload of "${filename}" failed (${error.status}): ${error.serverMessage ?? error.statusText}.`,
-          { cause: error, status: error.status },
+          {
+            cause: error,
+            status: error.status,
+            code: error.status >= 500 ? "server_error" : "unexpected",
+          },
         );
     }
   }
   if (error instanceof ApiUnreachableError) {
     return new UploadTransportError(
       `Upload of "${filename}" could not reach the Pipelex API (${error.code ?? "unreachable"}).`,
-      { cause: error },
+      // The client's own request timeout surfaces as an unreachable host with this code.
+      { cause: error, code: error.code === "ABORT_TIMEOUT" ? "timeout" : "unreachable" },
     );
   }
   // Only errors thrown by the `client.upload()` call reach here — the local-source
@@ -238,5 +243,6 @@ function mapUploadError(error: unknown, filename: string): Error {
   const detail = error instanceof Error ? error.message : String(error);
   return new UploadTransportError(`Upload of "${filename}" failed unexpectedly: ${detail}.`, {
     cause: error,
+    code: "unexpected",
   });
 }

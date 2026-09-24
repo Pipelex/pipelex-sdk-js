@@ -251,4 +251,4 @@ export {
   ArtifactFetchError,
   ScopeUnavailableError,
 } from "./errors.js";
-export type { RejectedAssetCode } from "./errors.js";
+export type { RejectedAssetCode, UploadTransportCode } from "./errors.js";

@@ -74,7 +74,7 @@ export async function GET(request: Request, { params }: { params: { uri: string 
 
 Resolves the reference fresh and returns the object store's response as a bounded `Response`. The bounds:
 
-- **A timeout** covering the connection, the headers and the whole body (`timeoutMs`, default 120 s). On Node the fetch also runs on an `undici` dispatcher carrying `headersTimeout` and `bodyTimeout` at the same value, the per-stall bounds an `AbortSignal` alone does not give.
+- **A timeout** covering the connection, the headers and the whole body (`timeoutMs`, default 120 s). On Node the fetch also runs on an `undici` dispatcher carrying `headersTimeout` and `bodyTimeout` at the same value, the per-stall bounds an `AbortSignal` alone does not give. It must be a positive number no larger than 2147483647, the longest delay a timer honours, or the call throws an `ArtifactOperationError` before anything is resolved.
 - **Redirects refused** (`redirect: "manual"`): a presigned link has no reason to redirect, and one that does is refused rather than followed.
 - **The byte cap enforced mid-stream** (`maxBytes`, default 1 GiB): a declared `Content-Length` over the cap is refused before a byte is read, and a body that crosses the cap while streaming errors the returned stream — never buffered.
 - **No credentials forwarded**: the request carries no headers of ours. The link's authorization is in its query string, and nothing else may ride along to the store.

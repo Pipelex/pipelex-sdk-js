@@ -45,6 +45,7 @@ import type {
   ValidationErrorItem,
 } from "./models.js";
 import {
+  assertWaitOptions,
   pollUntilResult,
   type RunRead,
   type RunResults,
@@ -115,6 +116,7 @@ import type {
   ResolvedArtifact,
 } from "./artifacts.js";
 import { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
 //
@@ -228,7 +230,10 @@ export interface ValidateFilesOptions {
   render?: string[];
   /** Optional structured-view opt-in tokens, e.g. ["input_form", "output_form"]; sent only when given. */
   views?: string[];
-  /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
+  /**
+   * Per-call request ceiling; defaults to the 20-min execute ceiling. A positive number
+   * no larger than 2147483647, the longest delay a timer honours, else a `RangeError`.
+   */
   timeoutMs?: number;
   /** Caller-driven cancellation; the abort reason propagates untouched. */
   signal?: AbortSignal;
@@ -430,6 +435,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     const headers = this.requestHeaders(hasBody);
 
     const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // A longer delay overflows the timer, which then fires at once as a false timeout.
+    if (!isTimerDelay(timeoutMs)) {
+      throw new RangeError(
+        `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
+          `${String(timeoutMs)}.`,
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new DOMException("Request timed out.", "TimeoutError")),
@@ -463,8 +475,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       if (userSignal?.aborted) throw userSignal.reason;
       // undici (Node fetch) wraps DNS/connect/TLS failures as
       // `TypeError("fetch failed")` with the system error attached as `cause`.
-      // Our timeout aborts the controller with a "TimeoutError" DOMException.
-      const code = extractNetworkErrorCode(err);
+      // Our timeout aborts the controller with a "TimeoutError" DOMException, which
+      // is classified from the controller rather than from `err`: a browser errors a
+      // body stream cut short by that abort with a generic AbortError instead.
+      const code = extractNetworkErrorCode(
+        controller.signal.aborted ? controller.signal.reason : err,
+      );
       throw new ApiUnreachableError(
         `Could not reach Pipelex API at ${this.baseUrl} (${code ?? "network error"})`,
         this.baseUrl,
@@ -1178,7 +1194,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
    * routes use, and it is the ONLY extension route that takes transport options at all
    * (the policy note on `requestExtension` says why the static ones do not). Override it
-   * per call with `options.timeoutMs`; a caller that stops caring mid-sweep can cancel
+   * per call with `options.timeoutMs`, a positive number no larger than 2147483647 (else a
+   * `RangeError`); a caller that stops caring mid-sweep can cancel
    * via `options.signal` instead of waiting it out.
    */
   async buildRunner(
@@ -1318,6 +1335,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     options: PipelexStartOptions,
     pollOptions?: WaitForResultOptions,
   ): Promise<RunResults> {
+    // Before the run starts: a RangeError after it would carry no run id to re-poll by.
+    assertWaitOptions(pollOptions);
     if (await this.supportsRunLifecycle()) {
       // A runner can look hosted yet lack the durable routes — `implementation`
       // is an extension field, so a compliant bare runner that omits it is

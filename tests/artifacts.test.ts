@@ -736,6 +736,10 @@ describe("fetchArtifact", () => {
     await expect(fetchArtifact(client, PICTURE_URI, { timeoutMs: -1 })).rejects.toBeInstanceOf(
       ArtifactOperationError,
     );
+    // Past the longest delay a timer honours, which would otherwise fire at once.
+    await expect(fetchArtifact(client, PICTURE_URI, { timeoutMs: 2 ** 31 })).rejects.toThrow(
+      /"timeoutMs" must be a positive number no larger than 2147483647/,
+    );
     expect(client.resolveCalls).toHaveLength(0);
   });
 
