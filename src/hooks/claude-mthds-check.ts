@@ -18,13 +18,14 @@
  *
  * A Codex patch run through the shell (`tool_name: "Bash"`) is placed by
  * following the script's working directory. A file it names by a relative
- * path is checked only when it carries the patch's added lines, and the paths
- * it could not check are named in one non-blocking note, which a block from
- * another file outranks (see docs/hook-bundle.md).
+ * path, or by an absolute one no patch command reads, is checked only when it
+ * carries the patch's added lines, and the relative paths it could not check
+ * are named in one non-blocking note, which a block from another file
+ * outranks (see docs/hook-bundle.md).
  *
  * Failure posture (fail-open, per the networked-hook plan):
  * - no `.mthds` in the payload / unparseable stdin → pass silently
- * - WASM engine fails to load → whole hook unavailable → pass silently
+ * - WASM engine fails to load → no file is checked; the note above is still sent
  * - validate unavailable (no `PIPELEX_API_KEY`, network error, timeout, any
  *   non-2xx, bundle-gather overflow) → the local lint/format verdicts already
  *   applied; the validate stage passes silently
@@ -240,14 +241,12 @@ async function main(): Promise<void> {
 
   const outcomes: HookOutcome[] = [];
   if (targets.length > 0) {
-    let engine: ToolsWasmModule;
-    try {
-      engine = await loadEngine();
-    } catch {
-      return; // engine unavailable — whole hook fails open
-    }
-    for (const target of targets) {
-      outcomes.push(await checkOneFile(engine, target));
+    // An engine that cannot load fails the checks open, and only them: the note needs none.
+    const engine = await loadEngine().catch(() => null);
+    if (engine) {
+      for (const target of targets) {
+        outcomes.push(await checkOneFile(engine, target));
+      }
     }
   }
   if (unchecked.length > 0) {

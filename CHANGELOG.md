@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- **The `.mthds` check hook finds the file a Codex shell patch wrote**: for a patch Codex runs through the shell, the hook built by `npm run build:hook` follows the script's `cd`s, branches and scopes before resolving the patch's relative paths, where it used to read them against the session directory. It checks and formats such a file only when it holds the lines the patch added, so it no longer rewrites a same-named file the patch never touched, and it names the files it could not check in a non-blocking note asking for an absolute path or the `apply_patch` tool. Relative paths now resolve against the payload's `cwd` rather than the hook's working directory.
+- **The `.mthds` check hook finds the file a Codex shell patch wrote**: for a patch Codex runs through the shell, the hook built by `npm run build:hook` follows the script's `cd`s, branches and scopes before resolving the patch's relative paths, where it used to read them against the session directory. It checks and formats such a file only when it holds the lines the patch added, as the shell passed them, so it no longer rewrites a same-named file the patch never touched, nor a file named by an absolute path in a patch the script only stored, and it names the files it could not check in a non-blocking note asking for an absolute path or the `apply_patch` tool. Relative paths now resolve against the payload's `cwd` rather than the hook's working directory.
 
 ### Removed
 

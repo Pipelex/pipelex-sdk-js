@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { readShellScript } from "../../src/hooks/shell-script.js";
+import { lineAsRead, readShellScript } from "../../src/hooks/shell-script.js";
 
 const SESSION = "/s";
 const PATCH = "*** Begin Patch\n*** Update File: a.mthds\n@@\n+x\n*** End Patch";
@@ -160,6 +160,30 @@ describe("readShellScript: branches", () => {
     ],
     ["a cd in the condition", `if cd sub; then echo in; fi\n${APPLY}`, ["/s/sub"]],
     [
+      "a patch in else after a cd in the condition",
+      `if cd sub; then :; else ${APPLY}\nfi`,
+      ["unknown"],
+    ],
+    [
+      "a patch in elif after a cd in the condition",
+      `if cd sub; then :; elif true; then ${APPLY}\nfi`,
+      ["unknown"],
+    ],
+    [
+      "an else that does not move after a cd in the condition",
+      `if cd sub; then :; else exit 1; fi\n${APPLY}`,
+      ["/s/sub"],
+    ],
+    [
+      "a cd in elif after a cd in the condition",
+      `if cd a; then :; elif cd b; then :; fi\n${APPLY}`,
+      ["unknown"],
+    ],
+    ["a patch after a negated cd", `if ! cd sub; then ${APPLY}\nfi`, ["unknown"]],
+    ["a negated cd guarding an exit", `if ! cd sub; then exit 1; fi\n${APPLY}`, ["/s/sub"]],
+    ["a patch after a negated cd and &&", `! cd sub && ${APPLY}`, ["unknown"]],
+    ["a patch after a negated cd and ||", `! cd sub || ${APPLY}`, ["/s/sub"]],
+    [
       "the same cd in every elif branch",
       `if a; then cd x; elif b; then cd x; else cd x; fi\n${APPLY}`,
       ["/s/x"],
@@ -197,7 +221,12 @@ describe("readShellScript: loops", () => {
     ["a pass that does not return", `for d in a b; do cd sub && ${APPLY}\ndone`, ["unknown"]],
     ["an absolute cd in the body", `for d in a b; do cd /abs && ${APPLY}\ndone`, ["/abs"]],
     ["a loop that does not move", `while read l; do ${APPLY}\ndone`, ["/s"]],
-    ["a condition that moves", `while cd sub; do cd ..; done\n${APPLY}`, ["/s/sub"]],
+    ["a while condition that moves", `while cd sub; do cd ..; done\n${APPLY}`, ["unknown"]],
+    [
+      "a patch in an until loop whose condition moves",
+      `until cd sub; do ${APPLY}\ndone`,
+      ["unknown"],
+    ],
     ["nested loops", `for a in x; do for b in y; do cd sub; done; done\n${APPLY}`, ["unknown"]],
     ["a select loop", `select d in a; do cd sub; break; done\n${APPLY}`, ["unknown"]],
     ["a for loop over the arguments", `for d\ndo cd sub; done\n${APPLY}`, ["unknown"]],
@@ -227,8 +256,8 @@ describe("readShellScript: what reads the patch", () => {
     ["a heredoc on a group", `{ cd sub; apply_patch; } <<'EOF'\n${PATCH}\nEOF\n`],
     ["a pipeline into a subshell", `cat <<'EOF' | (cd sub && apply_patch)\n${PATCH}\nEOF\n`],
     ["a command named by a variable", `cd sub && $AP <<'EOF'\n${PATCH}\nEOF\n`],
-  ])("reads %s as unknown", (_name, script) => {
-    expect(placements(script)).toEqual(["unknown"]);
+  ])("reads %s as unread", (_name, script) => {
+    expect(placements(script)).toEqual(["unread"]);
   });
 
   it.each([
@@ -317,18 +346,34 @@ describe("readShellScript: lexing", () => {
     expect(placements(`diff <(cd other; ls) b\ncd sub && ${APPLY}`)).toEqual(["/s/sub"]);
   });
 
+  it.each([
+    ["a regex", "[[ $x =~ ^(a|b)$ ]] && cd sub"],
+    ["parentheses and operators", "[[ ( -d a ) || ( $a < $b ) ]]\ncd sub"],
+    ["an expression over two lines", "[[ -d a &&\n  -d b ]] > /dev/null; cd sub"],
+  ])("reads a [[ … ]] conditional holding %s as one command", (_name, script) => {
+    expect(placements(`${script}\n${APPLY}`)).toEqual(["/s/sub"]);
+  });
+
+  it.each([
+    ["an input", "while read f; do :; done < <(find . -name x)"],
+    ["an output", "exec > >(tee log) 2>&1"],
+    ["a scope", "cat < <(cd other; ls)"],
+  ])("reads a process substitution as a redirection's target, as %s", (_name, script) => {
+    expect(placements(`${script}\ncd sub && ${APPLY}`)).toEqual(["/s/sub"]);
+  });
+
   it("reads an arithmetic command", () => {
     expect(placements(`(( x = 1 << 2 ))\ncd sub && ${APPLY}`)).toEqual(["/s/sub"]);
   });
 
-  it("answers outside between commands, and unknown for text no patch command reads", () => {
+  it("answers outside between commands, and unread for text no patch command reads", () => {
     const script = `# a comment\n\ncd sub\napply_patch x\n`;
     const reading = readShellScript(script, SESSION);
     expect(reading).not.toBe("unparsed");
     if (reading === "unparsed") return;
     expect(reading.directoryAt(script.indexOf("comment"))).toEqual({ kind: "outside" });
     expect(reading.directoryAt(script.indexOf("\n\n") + 1)).toEqual({ kind: "outside" });
-    expect(reading.directoryAt(script.indexOf("sub"))).toEqual({ kind: "unknown" });
+    expect(reading.directoryAt(script.indexOf("sub"))).toEqual({ kind: "unread" });
     expect(reading.directoryAt(script.indexOf(" x"))).toEqual({
       kind: "directory",
       path: "/s/sub",
@@ -352,6 +397,7 @@ describe("readShellScript: lexing", () => {
 
 describe("readShellScript: unparsed", () => {
   it.each([
+    ["an unterminated [[", `[[ -d a\n${APPLY}`],
     ["an unterminated single quote", `cd 'sub && ${APPLY}`],
     ["an unterminated double quote", `cd "sub && ${APPLY}`],
     ["an unterminated substitution", `x=$(cd sub\n${APPLY}`],
@@ -370,5 +416,50 @@ describe("readShellScript: unparsed", () => {
     ["a pipe with nothing after it", `${APPLY}\ncd sub |`],
   ])("%s", (_name, script) => {
     expect(placements(script)).toBe("unparsed");
+  });
+});
+
+describe("readShellScript: quoting", () => {
+  const quotingAtHeader = (script: string) => {
+    const reading = readShellScript(script, SESSION);
+    if (reading === "unparsed") return "unparsed";
+    return reading.quotingAt(script.indexOf("*** Update File"));
+  };
+
+  it.each([
+    ["a quoted heredoc", `apply_patch <<'EOF'\n${PATCH}\nEOF`, "verbatim"],
+    ["an unquoted heredoc", `apply_patch <<EOF\n${PATCH}\nEOF`, "heredoc"],
+    ["a single-quoted argument", `apply_patch '${PATCH}'`, "verbatim"],
+    ["a double-quoted argument", `apply_patch "${PATCH}"`, "double-quoted"],
+    [
+      "a quoted heredoc in double quotes",
+      `apply_patch "$(cat <<'EOF'\n${PATCH}\nEOF\n)"`,
+      "verbatim",
+    ],
+    [
+      "an unquoted heredoc in double quotes",
+      `apply_patch "$(cat <<EOF\n${PATCH}\nEOF\n)"`,
+      "heredoc",
+    ],
+  ])("tells a patch in %s", (_name, script, quoting) => {
+    expect(quotingAtHeader(script)).toBe(quoting);
+  });
+
+  it.each([
+    ["verbatim", String.raw`a \"b\" $c`, String.raw`a \"b\" $c`],
+    ["double-quoted", String.raw`domain = \"d\" \$x \\ \n`, String.raw`domain = "d" $x \ \n`],
+    ["heredoc", String.raw`a \"b\" \$x \\ \``, String.raw`a \"b\" $x \ ` + "`"],
+    ["heredoc", "cost in $ and $'x'", "cost in $ and $'x'"],
+  ] as const)("reads a line %s as the shell passes it", (quoting, line, read) => {
+    expect(lineAsRead(line, quoting)).toBe(read);
+  });
+
+  it.each([
+    ["double-quoted", "prompt = $text"],
+    ["heredoc", "prompt = ${text}"],
+    ["heredoc", "now = `date`"],
+    ["double-quoted", 'domain = "d"'],
+  ] as const)("cannot tell a %s line holding an expansion or a closing quote", (quoting, line) => {
+    expect(lineAsRead(line, quoting)).toBeNull();
   });
 });

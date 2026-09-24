@@ -358,6 +358,35 @@ describe("extractCodexMthdsTargets", () => {
       ]);
     });
 
+    it("confirms an absolute path that no patch command reads, and keeps one that does", () => {
+      const absolute = PATCH.replace("broken.mthds", "/abs/broken.mthds");
+      const staged = `cat > /tmp/p <<'EOF'\n${absolute}\nEOF\n`;
+      expect(extractCodexMthdsTargets(shell(staged), HOOK_CWD).targets).toMatchObject([
+        { path: "/abs/broken.mthds", confirm: true },
+      ]);
+      const unparsed = `cd 'sub && apply_patch <<'EOF'\n${absolute}\nEOF\n`;
+      expect(extractCodexMthdsTargets(shell(unparsed), HOOK_CWD).targets).toMatchObject([
+        { path: "/abs/broken.mthds", confirm: true },
+      ]);
+    });
+
+    it("reads the added lines through the shell's quoting", () => {
+      const lines = '+domain = \\"d\\"\n+prompt = \\$text\n+now = $(date)\n+plain';
+      const quoted = PATCH.replace("+x", lines);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch "${quoted}"\n`), HOOK_CWD).targets[0]!
+          .addedLines,
+      ).toEqual([['domain = "d"', "prompt = $text", "plain"]]);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch <<EOF\n${quoted}\nEOF\n`), HOOK_CWD).targets[0]!
+          .addedLines,
+      ).toEqual([['domain = \\"d\\"', "prompt = $text", "plain"]]);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch <<'EOF'\n${quoted}\nEOF\n`), HOOK_CWD)
+          .targets[0]!.addedLines,
+      ).toEqual([['domain = \\"d\\"', "prompt = \\$text", "now = $(date)", "plain"]]);
+    });
+
     it("lists a patch held in a variable and applied later as unplaced", () => {
       const script = `PATCH=$(cat <<'EOF'\n${PATCH}\nEOF\n)\ncd sub && apply_patch "$PATCH"\n`;
       expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({
@@ -474,6 +503,16 @@ describe("selectCodexTargets", () => {
     const unconfirmed = target({ confirm: false, addedLines: [[]] });
     expect(select([unconfirmed], { "/work/sub/a.mthds": "x\n" }).targets).toHaveLength(1);
     expect(select([unconfirmed], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("drops an absolute path it could not confirm without naming it", () => {
+    const absolute = target({ path: "/abs/a.mthds", writtenAs: "/abs/a.mthds" });
+    expect(select([absolute], { "/abs/a.mthds": "other\n" })).toEqual({
+      targets: [],
+      unchecked: [],
+    });
+    expect(select([absolute], {})).toEqual({ targets: [], unchecked: [] });
+    expect(select([absolute], { "/abs/a.mthds": "added\n" }).targets).toHaveLength(1);
   });
 
   it("names the unplaced paths too, each once", () => {
