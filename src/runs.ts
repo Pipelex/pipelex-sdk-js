@@ -1,6 +1,7 @@
 import type { InputForm, OutputForm, PipeIOContracts } from "mthds/protocol";
 
 import { RunFailedError, RunTimeoutError } from "./errors.js";
+import { MAX_TIMER_DELAY_MS } from "./timers.js";
 import type { DictPipeOutput, DictWorkingMemory } from "./models.js";
 
 /**
@@ -286,7 +287,10 @@ export interface WaitForResultOptions {
    * header overrides this when it asks for a longer wait.
    */
   intervalMs?: number;
-  /** Max ms to wait before throwing `RunTimeoutError` (default 1_200_000 — 20 min). */
+  /**
+   * Max ms to wait before throwing `RunTimeoutError` (default 1_200_000 — 20 min).
+   * `Infinity` waits for as long as the run takes; `NaN` is a `RangeError`.
+   */
   timeoutMs?: number;
   /** Abort the poll loop (Ctrl-C / agent walk-away). */
   signal?: AbortSignal;
@@ -306,6 +310,21 @@ export type FetchResultOnce = (
 ) => Promise<RunResultState>;
 
 /**
+ * Refuse wait options no poll loop can honour. A NaN would reach the sleep's timer as a
+ * 1 ms delay and poll in a tight loop. `startAndWaitForResult` calls this before it starts
+ * the run, so a bad option never leaves a started run the caller holds no id for.
+ */
+export function assertWaitOptions(options: WaitForResultOptions = {}): void {
+  const { intervalMs, timeoutMs } = options;
+  if (Number.isNaN(intervalMs) || Number.isNaN(timeoutMs)) {
+    throw new RangeError(
+      `"intervalMs" and "timeoutMs" must be numbers, got ${String(intervalMs)} and ` +
+        `${String(timeoutMs)}.`,
+    );
+  }
+}
+
+/**
  * Poll a single-shot result lookup (`fetchOnce`) until the run reaches a
  * terminal state. Returns the artifacts on `COMPLETED`, throws `RunFailedError`
  * on any other terminal status, and throws `RunTimeoutError` if `timeoutMs`
@@ -319,6 +338,7 @@ export async function pollUntilResult(
   runId: string,
   options: WaitForResultOptions = {},
 ): Promise<RunResults> {
+  assertWaitOptions(options);
   const intervalMs = options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
   const startedAt = Date.now();
@@ -378,10 +398,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       clearTimeout(timer);
       reject(abortError(signal));
     };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
+    // Clamped, since a longer delay overflows the timer and would fire at once: a sleep
+    // past the cap ends at the cap, and the loop simply polls again.
+    const timer = setTimeout(
+      () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      Math.min(ms, MAX_TIMER_DELAY_MS),
+    );
     if (signal) {
       if (signal.aborted) {
         clearTimeout(timer);
