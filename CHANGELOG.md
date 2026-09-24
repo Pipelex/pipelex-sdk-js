@@ -2,8 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`UploadTransportError.code` and `UploadTransportCode`**: an upload's transport failure now says which it was in a closed vocabulary — `timeout`, `unreachable`, `server_error` and `unexpected` from `uploadFile` and `uploadWithGrant`, and `storage_timeout`, `conflict`, `redirected` and `invalid_grant_url` from `uploadWithGrant` — so a caller tells a timeout from an unreachable host or a `5xx` by a field rather than by the message or the error's `name`. The type is exported from the main entry and from `@pipelex/sdk/upload`.
+
+### Changed
+
+- **`uploadWithGrant` bounds its `PUT` to storage, and takes `timeoutMs` (Breaking)**: a call now fails with an `UploadTransportError` whose `code` is `timeout` once 60 s plus 1 s for every started 128 KiB of the file have passed — 460 s for a 50 MiB file — instead of waiting forever when no signal was passed, so a caller no longer needs a timeout formula of its own. `timeoutMs` replaces the default, for a link slower than about 1 Mbit/s, and a caller's `signal` can still end the upload sooner; only the first 16 KiB of storage's error body are read.
+- **`uploadWithGrant` reports storage's `409 ConditionalRequestConflict` as an `UploadTransportError` (Breaking)**: the conflict S3 answers when two uploads with one grant overlap was a `RejectedAssetError` advising a new grant; it is now an `UploadTransportError` whose `code` is `conflict`, advising a retry with the same grant, which either stores the file or reports the grant as used.
+
 ### Fixed
 
+- **`uploadWithGrant`'s messages on an unknown outcome**: an unreachable storage now also gives the same-grant retry advice, since the connection may have failed after the file went out, and a `5xx` whose storage message ends with a period no longer prints two.
+- **The client's own timeout is `ABORT_TIMEOUT` in a browser too**: when the request timeout ran out while a response body was still arriving, Chrome and Firefox error the body with a generic `AbortError`, so the resulting `ApiUnreachableError` carried no `code`; it now carries `ABORT_TIMEOUT` in every runtime, and `uploadFile` reports it as a `timeout`.
 - **The `.mthds` check hook's lint engine accepts the expanded input-slot form and intent hints**: the bundle built by `npm run build:hook` now embeds `@pipelex/tools-wasm` 0.3.0, whose MTHDS schema carries `inputs = { x = { concept = "…", hints = { … } } }` and `hints` on concepts and structure fields, so the hook no longer blocks those valid forms with a schema error; malformed hints are still refused. The engine is pinned exactly, so the bundle's provenance line, the manifest and the lockfile name the same version.
 
 ## [v0.23.0] - 2026-09-24

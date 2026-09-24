@@ -1441,6 +1441,36 @@ describe("PipelexApiClient.validateFiles", () => {
       expect(await failure).toBe(walkAway);
     });
 
+    it("reports its own timeout as ABORT_TIMEOUT when it cuts the body short with a generic AbortError", async () => {
+      // A browser errors a body stream cut short by the client's own timeout with a
+      // generic AbortError, not with the TimeoutError the controller was aborted with.
+      vi.useFakeTimers();
+      vi.spyOn(globalThis, "fetch").mockImplementation((async (
+        _url: string,
+        init?: RequestInit,
+      ) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(stream) {
+            stream.enqueue(new TextEncoder().encode('{"is_valid":'));
+            init?.signal?.addEventListener("abort", () =>
+              stream.error(new DOMException("The user aborted a request.", "AbortError")),
+            );
+          },
+        });
+        return new Response(body, { status: 200 });
+      }) as typeof fetch);
+      const client = makeClient();
+
+      const failure = client
+        .validateFiles([{ content: "domain = 'x'" }], { timeoutMs: 1_000 })
+        .catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(1_500);
+      const err = await failure;
+      expect(err).toBeInstanceOf(ApiUnreachableError);
+      expect((err as ApiUnreachableError).code).toBe("ABORT_TIMEOUT");
+    });
+
     it("propagates the caller's reason when an abort cuts the body short with a generic AbortError", async () => {
       // A browser answers the headers, then errors the body stream with its own
       // AbortError when the request is aborted, not with the signal's reason.

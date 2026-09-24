@@ -463,8 +463,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       if (userSignal?.aborted) throw userSignal.reason;
       // undici (Node fetch) wraps DNS/connect/TLS failures as
       // `TypeError("fetch failed")` with the system error attached as `cause`.
-      // Our timeout aborts the controller with a "TimeoutError" DOMException.
-      const code = extractNetworkErrorCode(err);
+      // Our timeout aborts the controller with a "TimeoutError" DOMException, which
+      // is classified from the controller rather than from `err`: a browser errors a
+      // body stream cut short by that abort with a generic AbortError instead.
+      const code = extractNetworkErrorCode(
+        controller.signal.aborted ? controller.signal.reason : err,
+      );
       throw new ApiUnreachableError(
         `Could not reach Pipelex API at ${this.baseUrl} (${code ?? "network error"})`,
         this.baseUrl,

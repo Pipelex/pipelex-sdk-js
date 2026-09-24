@@ -134,20 +134,57 @@ export class UploadAuthenticationError extends InputPreparationError {
 }
 
 /**
+ * Which transport failure an upload met, in a closed vocabulary a caller branches on
+ * rather than on the message or the error's name. The first three come from both
+ * `uploadFile` and `uploadWithGrant`, the next four from `uploadWithGrant` only:
+ *
+ * - `timeout` — the SDK's own time limit ran out first: `uploadWithGrant`'s bound on
+ *   its `PUT`, or the client's request timeout under `uploadFile`. Whether the file
+ *   was stored is unknown.
+ * - `unreachable` — no response reached the SDK. In a browser, a refused cross-origin
+ *   request looks like this.
+ * - `server_error` — a `5xx`. Whether the file was stored is unknown.
+ * - `storage_timeout` — storage's `400 RequestTimeout`: it stopped waiting for the
+ *   file's bytes and stored nothing.
+ * - `conflict` — storage's `409 ConditionalRequestConflict`: another `PUT` with the
+ *   same grant was in flight.
+ * - `redirected` — storage redirected the `PUT`, and the redirect was refused.
+ * - `invalid_grant_url` — the grant's `url` is not an absolute `http(s)` URL free of
+ *   user info, so nothing was sent.
+ * - `unexpected` — a status or a failure the SDK has no specific mapping for.
+ */
+export type UploadTransportCode =
+  | "timeout"
+  | "unreachable"
+  | "server_error"
+  | "storage_timeout"
+  | "conflict"
+  | "redirected"
+  | "invalid_grant_url"
+  | "unexpected";
+
+/**
  * A network or server fault reaching the upload route or storage — an unreachable
- * host, a `5xx`, a refused redirect, storage timing out on the body, or any other
- * unexpected `upload()` failure. `status` is the HTTP status when a response
- * produced it, and undefined when none did. From `uploadFile` the wrapped
- * `ApiResponseError` is also reachable via `cause`; `uploadWithGrant` wraps no
- * response, because storage's error body can echo the grant's credential.
+ * host, a timeout, a `5xx`, a refused redirect, storage timing out on the body, or
+ * any other unexpected `upload()` failure. `code` says which: the SDK sets it on
+ * every one it raises, so it is undefined only on one a caller constructs without
+ * it. `status` is the HTTP status when a response produced it, and undefined when
+ * none did. From `uploadFile` the wrapped `ApiResponseError` is also reachable via
+ * `cause`; `uploadWithGrant` wraps no response, because storage's error body can
+ * echo the grant's credential.
  */
 export class UploadTransportError extends InputPreparationError {
   public readonly status: number | undefined;
+  public readonly code: UploadTransportCode | undefined;
 
-  constructor(message: string, options?: { cause?: unknown; status?: number }) {
+  constructor(
+    message: string,
+    options?: { cause?: unknown; status?: number; code?: UploadTransportCode },
+  ) {
     super(message, options);
     this.name = "UploadTransportError";
     this.status = options?.status;
+    this.code = options?.code;
   }
 }
 
