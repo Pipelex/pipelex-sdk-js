@@ -411,6 +411,37 @@ describe("artifactFilename", () => {
     );
   });
 
+  it("refuses a location of the wrong shape, as a JavaScript caller can pass one", () => {
+    const misshapen: unknown[] = [
+      PICTURE_URI, // the old signature's bare uri
+      { uri: PICTURE_URI },
+      { uri: PICTURE_URI, found_at: "$.cover.url" }, // a string's first character is "$"
+      null,
+      undefined,
+    ];
+    for (const location of misshapen) {
+      expect(() => artifactFilename(location as ArtifactLocation, null, "main_stuff")).toThrow(
+        ArtifactOperationError,
+      );
+    }
+  });
+
+  it("suffixes a stem Windows reserves for a device, however it was reached", () => {
+    expect(artifactFilename(at("$.aux.url"), null, "main_stuff")).toBe("aux_.png");
+    expect(artifactFilename(at("$.NUL"), null, "main_stuff")).toBe("NUL_.png");
+    expect(artifactFilename(at("$.Com1.url"), null, "main_stuff")).toBe("Com1_.png");
+    expect(artifactFilename(at("$.lpt9", REPORT_URI), null, "main_stuff")).toBe("lpt9_");
+    expect(artifactFilename(at('$[""].con.url'), null, "main_stuff")).toBe("con_.png");
+    // The cap drops every leading segment and leaves the device name alone.
+    expect(artifactFilename(at(`$.${"x".repeat(130)}.prn.url`), null, "main_stuff")).toBe(
+      "prn_.png",
+    );
+    // Only the whole stem is a device name: a join or a longer word is not one.
+    expect(artifactFilename(at("$.a.nul.url"), null, "main_stuff")).toBe("a-nul.png");
+    expect(artifactFilename(at("$.auxiliary.url"), null, "main_stuff")).toBe("auxiliary.png");
+    expect(artifactFilename(at("$.com10.url"), null, "main_stuff")).toBe("com10.png");
+  });
+
   it("names every location locateArtifacts writes, through the round trip of its notation", () => {
     const value = {
       'say "hi"\\': { url: "pipelex-storage://org/a.png" },

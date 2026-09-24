@@ -4,11 +4,12 @@
 
 ### Added
 
-- **`locateArtifacts`, `ArtifactLocation` and `DownloadedArtifact.found_at`**: `locateArtifacts(value)` is the artifact walk with its paths — every `pipelex-storage://` reference in a JSON value, deduplicated in discovery order exactly as `collectArtifacts` returns them, each with `found_at`, every `$`-rooted path at which it sits (`$.rooms[3].staged_photo.url`, `$.items[0].url`, `$["a key"].url`). Every item of a `downloadArtifacts` verdict carries the same `found_at`, on the saved arm and the error arm alike, so a file that was not saved still says which field it would have filled.
+- **`locateArtifacts` and `ArtifactLocation`**: `locateArtifacts(value)` is the artifact walk with its paths — every `pipelex-storage://` reference in a JSON value, deduplicated in discovery order exactly as `collectArtifacts` returns them, each with `found_at`, every `$`-rooted path at which it sits (`$.rooms[3].staged_photo.url`, `$.items[0].url`, `$["a key"].url`).
 
 ### Changed
 
-- **`downloadArtifacts` names each file after the field it fills, and `artifactFilename` takes a location (Breaking)**: a saved file is named after the first path at which its reference sits — `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and an output that is one image as `main_stuff.png` — instead of after the last segment of its storage key, which now supplies only the extension. `artifactFilename(location, contentType, scope)` replaces `artifactFilename(uri, contentType, index)` and throws `ArtifactOperationError` for a location whose first path is not in the walk's notation; the full rule is on `docs/artifact-download.md`.
+- **`downloadArtifacts` names each file after the field it fills, and `artifactFilename` takes a location (Breaking)**: a saved file is named after the first path at which its reference sits — `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and an output that is one image as `main_stuff.png` — instead of after the last segment of its storage key, which now supplies only the extension. `artifactFilename(location, contentType, scope)` replaces `artifactFilename(uri, contentType, index)` and throws `ArtifactOperationError` for a location whose first path is not in the walk's notation; a field whose name Windows reserves for a device (`aux`, `nul`, `com1` and the like) is saved with a trailing `_` (`aux_.png`); the full rule is on `docs/artifact-download.md`.
+- **`DownloadedArtifact` items carry a required `found_at` (Breaking)**: every item of a `downloadArtifacts` verdict carries its reference's `found_at`, on the saved arm and the error arm alike, so a file that was not saved still says which field it would have filled. The field is required, so code that builds `DownloadedArtifact` values — a test fake standing in for `downloadArtifacts` — must now supply it.
 
 ### Fixed
 

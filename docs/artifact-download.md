@@ -114,7 +114,8 @@ if (!verdict.all_saved) {
 2. Each key is reduced to `[A-Za-z0-9_]`, every other character becoming `_` — `-` and `.` included, since one is the separator and the other would fake an extension. An index stays its digits.
 3. The segments are joined with `-`. A reference that is the walked value itself, or its `url`, has no segment left and takes the scope's name, so an output that is one image is saved as `main_stuff.png`.
 4. A name over the length cap (128 characters, extension included) keeps its tail: whole leading segments are dropped first, since the last ones are the specific ones, and a single segment still too long is cut to fit.
-5. The extension is the one the storage key's last segment carries, reduced to `[A-Za-z0-9]`, when it has a short one; otherwise the content type's, for the types a run produces (`image/png` gives `.png`, `application/pdf` gives `.pdf`); otherwise there is none.
+5. A stem Windows reserves for a device — `con`, `prn`, `aux`, `nul`, `com0` to `com9` or `lpt0` to `lpt9`, in any case — gets a trailing `_`, so a field named `aux` is saved as `aux_.png`. Windows reserves those names whatever the extension, and a field name is the method author's to choose.
+6. The extension is the one the storage key's last segment carries, reduced to `[A-Za-z0-9]`, when it has a short one; otherwise the content type's, for the types a run produces (`image/png` gives `.png`, `application/pdf` gives `.pdf`); otherwise there is none.
 
 For example, a home-staging method whose output is
 
@@ -132,7 +133,7 @@ For example, a home-staging method whose output is
 
 is saved as `rooms-0-original_photo.png`, `rooms-0-staged_photo.png`, `rooms-1-original_photo.png` and `rooms-1-staged_photo.png`, where the storage keys alone (`53174b03.png`, `2325fcfe.png`) would not say which picture is which. Each verdict item's `found_at` carries the unreduced path, `$.rooms[0].staged_photo.url`.
 
-The result is always a bare filename — ASCII letters, digits, `_` and the `-` joins, then an optional extension — never empty and never starting with a dot, so it can name nothing but a regular file directly inside `dir`. `artifactFilename` takes a location from `locateArtifacts`, which is how a consumer predicts a name before downloading; it throws `ArtifactOperationError` for a location whose `found_at[0]` is not a path in the notation above, or for an unknown scope.
+The result is always a bare filename — ASCII letters, digits, `_` and the `-` joins, then an optional extension — never empty, never starting with a dot and never a device name, so it can name nothing but a regular file directly inside `dir`. `artifactFilename` takes a location from `locateArtifacts`, which is how a consumer predicts a name before downloading; it throws `ArtifactOperationError` for a location with no `found_at` array or whose `found_at[0]` is not a path in the notation above, or for an unknown scope.
 
 Files are **never overwritten**: a name already on disk gets a numeric suffix (`report-1.pdf`, `report-2.pdf`), through exclusive creation rather than an exists-check, so two workers cannot race for one name. Two references whose paths reduce to one name (`"staged photo"` and `"staged-photo"`) are told apart by the same suffix, and the verdict says which file is which. A reference found at several paths is saved once, under the name of the first. `dir` is created if missing.
 

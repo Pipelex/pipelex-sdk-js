@@ -85,6 +85,13 @@ const MAX_FILENAME_LENGTH = 128;
  */
 const MAX_EXTENSION_LENGTH = 10;
 
+/**
+ * Stems Windows reserves for a device, in any case and whatever the extension:
+ * `aux.png` there names the auxiliary device, not a file. A stem is a field name
+ * the method author chose, so `$.aux.url` would otherwise reach one.
+ */
+const WINDOWS_DEVICE_STEM = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])$/i;
+
 /** Ceiling on collision suffixes before the never-overwrite rule gives up. */
 const MAX_UNIQUE_ATTEMPTS = 10_000;
 
@@ -440,14 +447,17 @@ export function isStorageReference(value: string): boolean {
  *    the tail is kept: whole leading segments are dropped first, since the last
  *    ones are the specific ones, and a single segment still too long is cut to
  *    fit.
- * 5. The extension is the storage key's own, reduced to `[A-Za-z0-9]`, when it
+ * 5. A stem Windows reserves for a device (`con`, `prn`, `aux`, `nul`,
+ *    `com0`–`com9`, `lpt0`–`lpt9`, in any case) gets a trailing `_`, so
+ *    `$.aux.url` is saved as `aux_.png`.
+ * 6. The extension is the storage key's own, reduced to `[A-Za-z0-9]`, when it
  *    has a short one; otherwise the content type's, for the types a run
  *    produces; otherwise there is none.
  *
  * So `$.rooms[3].staged_photo.url` is saved as `rooms-3-staged_photo.png`, and
  * `$.url` in `main_stuff` as `main_stuff.png`. The stem is ASCII letters, digits,
- * `_` and the `-` joins, never empty, so the name can only ever be a regular file
- * directly inside the target directory. A collision on disk is not this
+ * `_` and the `-` joins, never empty and never a device name, so the name can
+ * only ever be a regular file directly inside the target directory. A collision on disk is not this
  * function's concern: `downloadArtifacts` suffixes the stem (`name-1.ext`) on
  * exclusive creation, so a file is never overwritten.
  *
@@ -460,7 +470,11 @@ export function artifactFilename(
   scope: ArtifactScope,
 ): string {
   requireScope(scope);
-  const first: unknown = location.found_at[0];
+  // A JavaScript caller can hand anything here — the old signature's bare uri
+  // string among them — and every shape must reach the documented refusal
+  // rather than a TypeError, or a string's first character.
+  const foundAt: unknown = (location as { found_at?: unknown } | null | undefined)?.found_at;
+  const first: unknown = Array.isArray(foundAt) ? foundAt[0] : undefined;
   const segments = typeof first === "string" ? parsePath(first) : undefined;
   if (segments === undefined) {
     throw new ArtifactOperationError(
@@ -486,9 +500,9 @@ function filenameFor(
     // Only the empty key reduces to nothing, and it says nothing about the field.
     .filter((word) => word !== "");
   const extension = extensionFor(uri, contentType);
-  return (
-    fitStem(words.length > 0 ? words : [scope], MAX_FILENAME_LENGTH - extension.length) + extension
-  );
+  const stem = fitStem(words.length > 0 ? words : [scope], MAX_FILENAME_LENGTH - extension.length);
+  // A device stem is at most four characters, so the `_` cannot overrun the cap.
+  return (WINDOWS_DEVICE_STEM.test(stem) ? `${stem}_` : stem) + extension;
 }
 
 /** The words joined with `-` within `budget` characters, keeping the tail. */
