@@ -13,7 +13,11 @@ import {
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
+  carriesAddedLines,
+  selectCodexTargets,
   truncate,
+  uncheckedShellPatchNote,
+  type CodexMthdsTarget,
 } from "../../src/hooks/check-core.js";
 import type { Diagnostic, ValidationErrorItem } from "../../src/models.js";
 
@@ -231,6 +235,7 @@ describe("extractCodexMthdsTargets", () => {
         writtenAs: "sub/a.mthds",
         addedLines: [["new"]],
         removedByPatch: false,
+        confirm: false,
       },
     ]);
   });
@@ -287,6 +292,7 @@ describe("extractCodexMthdsTargets", () => {
             writtenAs: "broken.mthds",
             addedLines: [["x"]],
             removedByPatch: false,
+            confirm: true,
           },
         ],
         unplaced: [],
@@ -317,7 +323,7 @@ describe("extractCodexMthdsTargets", () => {
         ),
         HOOK_CWD,
       );
-      expect(result.targets.map((target) => target.path)).toEqual(["/abs/broken.mthds"]);
+      expect(result.targets).toMatchObject([{ path: "/abs/broken.mthds", confirm: false }]);
       expect(result.unplaced).toEqual([]);
     });
 
@@ -371,6 +377,7 @@ describe("extractCodexMthdsTargets", () => {
             writtenAs: "broken.mthds",
             addedLines: [["x"]],
             removedByPatch: false,
+            confirm: false,
           },
         ],
         unplaced: [],
@@ -381,6 +388,133 @@ describe("extractCodexMthdsTargets", () => {
       const stdin = JSON.stringify({ cwd: "/work", tool_input: { command: `cd sub\n${PATCH}` } });
       expect(extractCodexMthdsTargets(stdin, HOOK_CWD).targets[0]!.path).toBe("/work/broken.mthds");
     });
+  });
+});
+
+describe("carriesAddedLines", () => {
+  const CONTENT = 'domain = "demo"\n\n[pipe.a]\ntype = "PipeLLM"   \nprompt = "x"\n';
+
+  it("finds the added lines in order, with other lines between them", () => {
+    expect(carriesAddedLines(CONTENT, ['domain = "demo"', 'prompt = "x"'])).toBe(true);
+  });
+
+  it("refuses lines out of order, or one the file does not hold", () => {
+    expect(carriesAddedLines(CONTENT, ['prompt = "x"', 'domain = "demo"'])).toBe(false);
+    expect(carriesAddedLines(CONTENT, ['domain = "demo"', 'prompt = "y"'])).toBe(false);
+  });
+
+  it("ignores trailing whitespace on either side, and keeps leading whitespace", () => {
+    expect(carriesAddedLines(CONTENT, ['type = "PipeLLM"', 'prompt = "x"  '])).toBe(true);
+    expect(carriesAddedLines(CONTENT, ['  prompt = "x"'])).toBe(false);
+  });
+
+  it("skips blank added lines", () => {
+    expect(carriesAddedLines(CONTENT, ["", "[pipe.a]", "   ", 'prompt = "x"'])).toBe(true);
+  });
+
+  it("reads CRLF content", () => {
+    expect(carriesAddedLines(CONTENT.replaceAll("\n", "\r\n"), ["[pipe.a]", 'prompt = "x"'])).toBe(
+      true,
+    );
+  });
+
+  it("finds no evidence in a section that adds no line, or only blank ones", () => {
+    expect(carriesAddedLines(CONTENT, [])).toBe(false);
+    expect(carriesAddedLines(CONTENT, ["", "  "])).toBe(false);
+  });
+});
+
+describe("selectCodexTargets", () => {
+  const target = (overrides: Partial<CodexMthdsTarget> = {}): CodexMthdsTarget => ({
+    path: "/work/sub/a.mthds",
+    writtenAs: "a.mthds",
+    addedLines: [["added"]],
+    removedByPatch: false,
+    confirm: true,
+    ...overrides,
+  });
+  const select = (
+    targets: CodexMthdsTarget[],
+    files: Record<string, string>,
+    unplaced: string[] = [],
+  ) => selectCodexTargets({ fromShell: true, targets, unplaced }, (path) => files[path] ?? null);
+
+  it("checks a file that carries the patch's added lines, with the content it read", () => {
+    expect(select([target()], { "/work/sub/a.mthds": "x\nadded\n" })).toEqual({
+      targets: [{ filePath: "/work/sub/a.mthds", content: "x\nadded\n" }],
+      unchecked: [],
+    });
+  });
+
+  it("names a file that does not carry them, rather than checking it", () => {
+    expect(select([target()], { "/work/sub/a.mthds": "other\n" })).toEqual({
+      targets: [],
+      unchecked: ["a.mthds"],
+    });
+  });
+
+  it("names a missing file, unless the patch itself removed it", () => {
+    expect(select([target()], {}).unchecked).toEqual(["a.mthds"]);
+    expect(select([target({ removedByPatch: true })], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("names a file whose sections add no line, since nothing confirms it", () => {
+    const selected = select([target({ addedLines: [[]] })], { "/work/sub/a.mthds": "x\n" });
+    expect(selected).toEqual({ targets: [], unchecked: ["a.mthds"] });
+  });
+
+  it("checks a file that carries the lines of any envelope that wrote it", () => {
+    const selected = select([target({ addedLines: [["first"], ["second"]] })], {
+      "/work/sub/a.mthds": "second\n",
+    });
+    expect(selected.targets).toHaveLength(1);
+  });
+
+  it("checks a target that needs no confirming whenever its file exists", () => {
+    const unconfirmed = target({ confirm: false, addedLines: [[]] });
+    expect(select([unconfirmed], { "/work/sub/a.mthds": "x\n" }).targets).toHaveLength(1);
+    expect(select([unconfirmed], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("names the unplaced paths too, each once", () => {
+    const selected = select([target()], {}, ["a.mthds", "b.mthds"]);
+    expect(selected.unchecked).toEqual(["a.mthds", "b.mthds"]);
+  });
+});
+
+describe("uncheckedShellPatchNote", () => {
+  it("names one file", () => {
+    expect(uncheckedShellPatchNote(["broken.mthds"])).toEqual({
+      kind: "context",
+      context:
+        "The .mthds hook did not check `broken.mthds`: it could not confirm which file this " +
+        "shell command patched. Name the file by its absolute path, or edit it with the " +
+        "apply_patch tool, and the hook will check it.",
+    });
+  });
+
+  it("names several files", () => {
+    const note = uncheckedShellPatchNote(["a.mthds", "b.mthds", "c.mthds"]);
+    expect(note).toEqual({
+      kind: "context",
+      context:
+        "The .mthds hook did not check `a.mthds`, `b.mthds` and `c.mthds`: it could not " +
+        "confirm which files this shell command patched. Name the files by their absolute " +
+        "paths, or edit them with the apply_patch tool, and the hook will check them.",
+    });
+  });
+
+  it("gives way to a block from another file, and joins another file's context", () => {
+    const note = uncheckedShellPatchNote(["a.mthds"]);
+    expect(mergeOutcomes([note, { kind: "block", reason: "lint failed" }])).toEqual({
+      kind: "block",
+      reason: "lint failed",
+    });
+    const merged = mergeOutcomes([{ kind: "context", context: "pending signatures" }, note]);
+    expect(merged.kind).toBe("context");
+    expect(merged.kind === "context" && merged.context.startsWith("pending signatures\n\n")).toBe(
+      true,
+    );
   });
 });
 

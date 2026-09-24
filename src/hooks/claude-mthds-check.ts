@@ -16,6 +16,12 @@
  * files — outcomes are merged, any block wins); Vibe reads the stable
  * `post_tool` payload (`tool_status` gate, path resolved against `cwd`).
  *
+ * A Codex patch run through the shell (`tool_name: "Bash"`) is placed by
+ * following the script's working directory. A file it names by a relative
+ * path is checked only when it carries the patch's added lines, and the paths
+ * it could not check are named in one non-blocking note, which a block from
+ * another file outranks (see docs/hook-bundle.md).
+ *
  * Failure posture (fail-open, per the networked-hook plan):
  * - no `.mthds` in the payload / unparseable stdin → pass silently
  * - WASM engine fails to load → whole hook unavailable → pass silently
@@ -27,7 +33,7 @@
  * exit code.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import {
   decideAfterLint,
@@ -37,6 +43,9 @@ import {
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
+  selectCodexTargets,
+  uncheckedShellPatchNote,
+  type CheckTarget,
   type HookOutcome,
   type HookPlatform,
   type LintStage,
@@ -70,8 +79,23 @@ function parsePlatform(argv: string[]): HookPlatform {
   return "claude";
 }
 
-/** The absolute paths of edited `.mthds` files that exist on disk, per platform. */
-function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
+/** A file's content, or null when there is no file to read. */
+function readFileOrNull(filePath: string): string | null {
+  try {
+    return readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The edited `.mthds` files to check, per platform, each read once, and the
+ * relative paths of a Codex shell patch the hook could not check.
+ */
+function resolveTargets(
+  platform: HookPlatform,
+  stdinJson: string,
+): { targets: CheckTarget[]; unchecked: string[] } {
   let candidates: string[];
   switch (platform) {
     case "claude": {
@@ -79,12 +103,8 @@ function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
       candidates = filePath ? [filePath] : [];
       break;
     }
-    case "codex": {
-      candidates = extractCodexMthdsTargets(stdinJson, process.cwd()).targets.map(
-        (target) => target.path,
-      );
-      break;
-    }
+    case "codex":
+      return selectCodexTargets(extractCodexMthdsTargets(stdinJson, process.cwd()), readFileOrNull);
     case "vibe": {
       const extracted = extractVibeMthdsFilePath(stdinJson);
       candidates = extracted
@@ -93,9 +113,15 @@ function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
       break;
     }
   }
-  // Deleted/renamed-away files have nothing to check (Codex envelopes list
-  // paths that may not survive the patch; Claude edits can race a delete).
-  return candidates.filter((filePath) => existsSync(filePath));
+  // A deleted file has nothing to check (a Claude edit can race a delete).
+  const targets: CheckTarget[] = [];
+  for (const filePath of candidates) {
+    const content = readFileOrNull(filePath);
+    if (content !== null) {
+      targets.push({ filePath, content });
+    }
+  }
+  return { targets, unchecked: [] };
 }
 
 /**
@@ -179,14 +205,10 @@ function warn(message: string): void {
 }
 
 /** The full pipeline on one edited file: lint → format write-back → validate. */
-async function checkOneFile(engine: ToolsWasmModule, filePath: string): Promise<HookOutcome> {
-  let content: string;
-  try {
-    content = readFileSync(filePath, "utf-8");
-  } catch {
-    return { kind: "pass" }; // file gone since the existence check — nothing to gate
-  }
-
+async function checkOneFile(
+  engine: ToolsWasmModule,
+  { filePath, content }: CheckTarget,
+): Promise<HookOutcome> {
   // Stage 1 — local lint
   const lintStage: LintStage = {
     status: "diagnostics",
@@ -214,21 +236,22 @@ async function checkOneFile(engine: ToolsWasmModule, filePath: string): Promise<
 
 async function main(): Promise<void> {
   const platform = parsePlatform(process.argv.slice(2));
-  const filePaths = resolveTargets(platform, await readStdin());
-  if (filePaths.length === 0) {
-    return;
-  }
-
-  let engine: ToolsWasmModule;
-  try {
-    engine = await loadEngine();
-  } catch {
-    return; // engine unavailable — whole hook fails open
-  }
+  const { targets, unchecked } = resolveTargets(platform, await readStdin());
 
   const outcomes: HookOutcome[] = [];
-  for (const filePath of filePaths) {
-    outcomes.push(await checkOneFile(engine, filePath));
+  if (targets.length > 0) {
+    let engine: ToolsWasmModule;
+    try {
+      engine = await loadEngine();
+    } catch {
+      return; // engine unavailable — whole hook fails open
+    }
+    for (const target of targets) {
+      outcomes.push(await checkOneFile(engine, target));
+    }
+  }
+  if (unchecked.length > 0) {
+    outcomes.push(uncheckedShellPatchNote(unchecked));
   }
   emit(mergeOutcomes(outcomes), platform);
 }

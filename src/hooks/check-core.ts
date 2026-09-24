@@ -85,6 +85,12 @@ export interface CodexMthdsTarget {
   addedLines: string[][];
   /** Some section of the patch deletes the file or moves it away. */
   removedByPatch: boolean;
+  /**
+   * A shell patch named the file by a relative path, which the hook resolved
+   * through its reading of the script, so the file must carry the patch's
+   * added lines before it is checked (see `selectCodexTargets`).
+   */
+  confirm: boolean;
 }
 
 /** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
@@ -166,12 +172,101 @@ export function extractCodexMthdsTargets(stdinJson: string, processCwd: string):
         writtenAs: file.path,
         addedLines: file.sections.map((section) => section.addedLines),
         removedByPatch: file.removedByPatch,
+        confirm: fromShell && !isAbsolutePath(file.path),
       });
     } else if (!unplaced.includes(file.path)) {
       unplaced.push(file.path);
     }
   }
   return { fromShell, targets, unplaced };
+}
+
+/** A file the hook checks, with the content every stage reads. */
+export interface CheckTarget {
+  filePath: string;
+  content: string;
+}
+
+/**
+ * Which of a Codex patch's targets the hook checks, and which relative paths
+ * of a shell patch it could not check. `readFile` returns a file's content,
+ * or null when there is no file to read.
+ *
+ * A target that needs confirming is checked only when its file carries the
+ * added lines of some section that wrote it (see `carriesAddedLines`), since
+ * a file in another directory than the one the script wrote to almost never
+ * does. When it does not, or when no file exists where the path resolves, the
+ * path joins the unplaced ones as unchecked, unless the patch itself removed
+ * the missing file. Any other target is checked when its file exists.
+ */
+export function selectCodexTargets(
+  extracted: CodexMthdsTargets,
+  readFile: (path: string) => string | null,
+): { targets: CheckTarget[]; unchecked: string[] } {
+  const targets: CheckTarget[] = [];
+  const unchecked = [...extracted.unplaced];
+  for (const target of extracted.targets) {
+    const content = readFile(target.path);
+    const confirmed =
+      !target.confirm ||
+      (content !== null &&
+        target.addedLines.some((addedLines) => carriesAddedLines(content, addedLines)));
+    if (content !== null && confirmed) {
+      targets.push({ filePath: target.path, content });
+    } else if (
+      target.confirm &&
+      (content !== null || !target.removedByPatch) &&
+      !unchecked.includes(target.writtenAs)
+    ) {
+      unchecked.push(target.writtenAs);
+    }
+  }
+  return { targets, unchecked };
+}
+
+/**
+ * Whether `content` carries `addedLines` in order, the evidence that a patch
+ * adding them wrote it. Each line is compared with its trailing whitespace
+ * trimmed, and blank lines are skipped on both sides. Only added lines count,
+ * because they are the only ones Codex writes verbatim: it matches context
+ * lines loosely. A section that adds no line, a pure deletion or a bare
+ * rename, leaves no evidence, so it is never carried.
+ */
+export function carriesAddedLines(content: string, addedLines: readonly string[]): boolean {
+  const wanted = addedLines.map((line) => line.trimEnd()).filter((line) => line !== "");
+  if (wanted.length === 0) {
+    return false;
+  }
+  let next = 0;
+  for (const line of content.split("\n")) {
+    if (line.trimEnd() === wanted[next]) {
+      next++;
+      if (next === wanted.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The non-blocking note naming the relative paths of a shell patch that the
+ * hook could not check. Without it, the agent would read the hook's silence
+ * as a clean check.
+ */
+export function uncheckedShellPatchNote(paths: readonly string[]): HookOutcome {
+  const named = paths.map((path) => `\`${path}\``);
+  const list =
+    named.length === 1 ? named[0]! : `${named.slice(0, -1).join(", ")} and ${named.at(-1)!}`;
+  const context =
+    named.length === 1
+      ? `The .mthds hook did not check ${list}: it could not confirm which file this shell ` +
+        "command patched. Name the file by its absolute path, or edit it with the apply_patch " +
+        "tool, and the hook will check it."
+      : `The .mthds hook did not check ${list}: it could not confirm which files this shell ` +
+        "command patched. Name the files by their absolute paths, or edit them with the " +
+        "apply_patch tool, and the hook will check them.";
+  return { kind: "context", context: truncate(context) };
 }
 
 /**

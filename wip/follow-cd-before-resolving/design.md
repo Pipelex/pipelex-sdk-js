@@ -67,7 +67,7 @@ When the directory at a header is unknown, or the script is unparsed, a relative
 
 ### 5. Before checking a file a shell patch named, the hook confirms the file carries the patch's added lines
 
-For a target that came from a `Bash` payload, the hook reads the file and checks that it contains the section's added lines in order, before any stage runs. The added lines are the section's `+` lines with the marker stripped and trailing whitespace trimmed, skipping blank ones; the file's lines are trimmed the same way. When several sections name the same file, the last one's lines are used. A section that adds no line, a bare rename or a pure deletion, confirms nothing and is accepted.
+For a target that came from a `Bash` payload by a relative path, the hook reads the file and checks that it contains the section's added lines in order, before any stage runs. The added lines are the section's `+` lines with the marker stripped and trailing whitespace trimmed, skipping blank ones; the file's lines are trimmed the same way. When several sections of one envelope name the same file, the last one's lines are used; when several envelopes of a script do, the file passes on any one's, since branches may have run only one of them. A section that adds no line, a bare rename or a pure deletion, confirms nothing, so its file is not checked and the note of Decision 6 names it. (Until the Checkpoint A review, such a section was accepted unconfirmed; the review showed it was the one way a misreading still reached a wrong file, see the plan's Decisions log.)
 
 Only added lines count, because they are the only lines Codex writes verbatim. Context lines are matched loosely by Codex's applier, exactly, then ignoring trailing whitespace, then ignoring whitespace at both ends (`apply-patch/src/seek_sequence.rs`), so a context line in the patch may not appear verbatim in the file, and comparing them would reject the right file.
 
@@ -75,7 +75,7 @@ This check is what makes the hook safe against the `workdir` route and against a
 
 ### 6. When a shell patch's `.mthds` file goes unchecked, the hook tells the agent
 
-A relative `.mthds` path from a `Bash` payload that ends up unchecked, because its directory is unknown, because no file exists where it resolves, or because the file there fails the content check, is listed in one non-blocking note, sent as additional context:
+A relative `.mthds` path from a `Bash` payload that ends up unchecked, because its directory is unknown, because no file exists where it resolves and the patch did not remove it, or because the file there fails the content check, is listed in one non-blocking note, sent as additional context:
 
 > The .mthds hook did not check `broken.mthds`: it could not confirm which file this shell command patched. Name the file by its absolute path, or edit it with the apply_patch tool, and the hook will check it.
 
