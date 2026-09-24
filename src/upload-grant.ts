@@ -7,9 +7,10 @@
  *
  * **This module is the browser-safe entry, `@pipelex/sdk/upload`.** Its runtime
  * import graph must never reach a Node builtin, `undici` or the client: a page
- * bundles it as is, with nothing marked external. It imports the error classes
- * and the wire types only, and `tests/upload-grant.test.ts` bundles it for the
- * browser with esbuild to hold it to that.
+ * bundles it as is, with nothing marked external. It imports the error classes,
+ * the timer bound in `timers.ts` and the wire types only, and
+ * `tests/upload-grant.test.ts` bundles it for the browser with esbuild to hold it
+ * to that.
  */
 
 import { InputPreparationError, RejectedAssetError, UploadTransportError } from "./errors.js";
