@@ -1,5 +1,5 @@
 ---
-status: active
+status: landed
 item: L-260924-8d5bb5
 ---
 
@@ -125,4 +125,8 @@ Phases 1 to 3 are done as planned, with two additions and one deviation.
 ### Review round 4, 2026-09-24
 
 `/rev` at profile 3, bar `freeze`, over `d7be15c`: cubic, Codex (review) and the official code-review all produced a review, and the pass ran because the session was unattended, which is the default a `freeze` bar takes then. Codex and the code-review found nothing. cubic found that the changelog's Breaking entry for the time limit names only callers who passed no signal, although a caller who passed a longer signal is now cut off at the default too and needs `timeoutMs`. It is not a critical, so the bar defers it, and it is filed as L-260924-373924 rather than left here, so the trace outlives this plan.
+
+### Landed, 2026-09-24
+
+Pull request #71 was squash-merged into `dev` as `99e9655` after round 4 converged, and `/ledger-land` closed L-260924-8d5bb5. The change ships with the next `pipelex-sdk-js` release. The three consumer items are now unblocked: L-260924-10735b (`pipelex-mcp`), L-260924-652ca9 (`pipelex-method-apps`) and L-260924-6d61f4 (`pipelex-starter-js`). They need the published release rather than the merge, so pending for whoever runs `/release`: add the release item that carries this change to each consumer item's `blocked_by`. The changelog correction deferred from round 4 is L-260924-373924, and it should land before that release is cut, since it corrects the Breaking entry.
 
