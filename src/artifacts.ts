@@ -338,19 +338,29 @@ export function locateArtifacts(value: unknown): ArtifactLocation[] {
  * produced files without resolving any of them.
  */
 export function collectArtifacts(value: unknown): string[] {
-  return walkReferences(value).map((located) => located.uri);
+  return walkReferences(value, false).map((located) => located.uri);
 }
 
-/** The walk both public functions share: depth first, keys in `Object.entries` order. */
-function walkReferences(value: unknown): LocatedReference[] {
+/**
+ * The walk both public functions share: depth first, keys in `Object.entries`
+ * order. With `withPaths` off it records each reference once and no path at
+ * all, which is what `collectArtifacts` needs: copying the trail for every
+ * occurrence costs memory in proportion to occurrences times depth, where the
+ * deduplicated list needs only one entry per unique reference.
+ */
+function walkReferences(value: unknown, withPaths = true): LocatedReference[] {
   // A Map keeps insertion order, which is the order of first sighting.
   const byUri = new Map<string, LocatedReference>();
   const trail: PathSegment[] = [];
   const visit = (node: unknown): void => {
     if (typeof node === "string") {
       if (!isStorageReference(node)) return;
-      const path = [...trail];
       const known = byUri.get(node);
+      if (!withPaths) {
+        if (known === undefined) byUri.set(node, { uri: node, paths: [] });
+        return;
+      }
+      const path = [...trail];
       if (known === undefined) byUri.set(node, { uri: node, paths: [path] });
       else known.paths.push(path);
       return;
@@ -473,7 +483,14 @@ export function artifactFilename(
   // A JavaScript caller can hand anything here — the old signature's bare uri
   // string among them — and every shape must reach the documented refusal
   // rather than a TypeError, or a string's first character.
-  const foundAt: unknown = (location as { found_at?: unknown } | null | undefined)?.found_at;
+  const loose = location as { uri?: unknown; found_at?: unknown } | null | undefined;
+  const uri: unknown = loose?.uri;
+  if (typeof uri !== "string") {
+    throw new ArtifactOperationError(
+      `artifactFilename needs a location carrying its reference as a string "uri"; got ${String(uri)}.`,
+    );
+  }
+  const foundAt: unknown = loose?.found_at;
   const first: unknown = Array.isArray(foundAt) ? foundAt[0] : undefined;
   const segments = typeof first === "string" ? parsePath(first) : undefined;
   if (segments === undefined) {
@@ -482,7 +499,7 @@ export function artifactFilename(
         `"$.items[0].url"; got ${typeof first === "string" ? JSON.stringify(first) : String(first)}.`,
     );
   }
-  return filenameFor(segments, location.uri, contentType, scope);
+  return filenameFor(segments, uri, contentType, scope);
 }
 
 /** The naming rule of {@link artifactFilename}, over the walk's own segments. */

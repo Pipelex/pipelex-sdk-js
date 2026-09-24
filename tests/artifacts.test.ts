@@ -416,6 +416,8 @@ describe("artifactFilename", () => {
       PICTURE_URI, // the old signature's bare uri
       { uri: PICTURE_URI },
       { uri: PICTURE_URI, found_at: "$.cover.url" }, // a string's first character is "$"
+      { found_at: ["$.cover.url"] },
+      { uri: 42, found_at: ["$.cover.url"] },
       null,
       undefined,
     ];
