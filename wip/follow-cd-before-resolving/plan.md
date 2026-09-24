@@ -76,4 +76,17 @@ Files: `docs/hook-bundle.md` (new), `docs/architecture.md`, `CHANGELOG.md`.
 
 ## Checkpoint log
 
-Nothing yet.
+### Checkpoint A, taken at `df1dfb8`
+
+Phases 1 and 2 are complete: `src/hooks/patch-envelope.ts` reads the envelope as sections and computes the surviving files, `src/hooks/shell-script.ts` lexes a `Bash` script and places each offset, and `extractCodexMthdsTargets` in `src/hooks/check-core.ts` replaces `extractCodexMthdsFiles`, returning the targets and the unplaced relative paths. The entry point still checks only the placed targets; the content check and the note are Phase 3. `make check` and `make test` passed at this SHA.
+
+Decisions taken while implementing:
+
+- **Pipelines and background lists are read as the subshells they are.** Each member of a pipeline starts in the directory the pipeline starts in, and the commands of a list sent to the background follow each other as usual. The directory after either becomes unknown only when something inside it changed the directory, so `ls | cat` no longer costs the rest of the script its directory, and `cd sub | apply_patch …` places the patch in the directory the pipeline started in, which is right in both bash and zsh. The design's table said only that a `cd` there makes the directory unknown, which still holds for everything after it.
+- **`{ … }` is read as a group rather than flattened**, so a group in a pipeline or in the background gets the subshell reading above. The bodies of `if`, `while`, `until`, `for` and `case` stay flattened, as the design says.
+- **`case` is followed:** while a `case` is open in the current list, a `)` ends a pattern instead of closing a scope, so a `cd` in a branch is followed like any other.
+- **More of the command name is recognised:** leading assignments (`CDPATH= cd sub`), `builtin cd`, `command cd` and a quoted `"cd"` are all read as `cd`. An unknown option (`cd -e sub`) and zsh's directory stack (`cd +1`) make the directory unknown.
+- **An unterminated heredoc is read to the end of the script**, as bash does, rather than making the script unparsed: its owner is still known.
+- **A header held by no command cannot come from a script the reader lexes**, since every non-blank line is either some command's text or a heredoc body. The drop in `extractCodexMthdsTargets` stays as a guard, and `outside` is tested at the level of `directoryAt`.
+
+Nothing in the design turned out wrong. The lexer was fuzzed with 200,000 random scripts over its special tokens, and none hung or threw past its guard. A script with thousands of chained relative `cd`s is quadratic, but only through the length of the path it builds.
