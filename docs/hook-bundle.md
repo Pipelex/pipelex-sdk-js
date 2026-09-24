@@ -4,7 +4,7 @@
 
 ## What the hook does with a file
 
-Each file goes through three stages: a local lint that blocks on any diagnostic, a local format that rewrites the file in place when its layout changes, and a validation by the hosted API (`POST /v1/validate`) that blocks on an invalid verdict and adds a non-blocking note about pending pipe signatures. The hook fails open: when the engine cannot load, when `PIPELEX_API_KEY` is unset or the API cannot be reached, the stage that could not run passes silently and the others stand. When several files are checked, one block among them wins and the notes are joined. The hook always exits 0, since its verdict is on stdout.
+Each file goes through three stages: a local lint that blocks on any diagnostic, a local format that rewrites the file in place when its layout changes, and a validation by the hosted API (`POST /v1/validate`) that blocks on an invalid verdict and adds a non-blocking note about pending pipe signatures. The hook fails open: when the engine cannot load, when `PIPELEX_API_KEY` is unset or the API cannot be reached, the stage that could not run passes silently and the others stand. When several files are checked, one block among them wins and the notes are joined, and each file is read when its turn comes, so an edit made to it while an earlier file was being validated is checked rather than overwritten. The hook always exits 0, since its verdict is on stdout.
 
 ## Which file it checks
 
@@ -52,7 +52,7 @@ A section held by any other command is not placed. That includes a patch kept in
 | Heredoc bodies, quoted strings, comments, and the expression of a `[[ … ]]` | Never read as commands. |
 | An unterminated quote, substitution, backtick or compound command, a heredoc inside backticks, an unbalanced `)`, or a closing word such as `fi` with nothing to close | The script is unparsed, and every relative path in it is unplaced. |
 
-A relative path under an unknown directory, or anywhere in an unparsed script, is not resolved at all: the hook does not fall back to the session directory, because an unknown directory means the script moved somewhere the hook cannot follow, which is exactly when the session directory is the wrong guess. An absolute path is checked wherever the script ran. When one script applies several patches, each is read on its own, so a patch deleting a file in one directory never hides another patch's edit of a same-named file, and a file any of them leaves on disk is a target.
+A relative path under an unknown directory, or anywhere in an unparsed script, is not resolved at all: the hook does not fall back to the session directory, because an unknown directory means the script moved somewhere the hook cannot follow, which is exactly when the session directory is the wrong guess. An absolute path resolves wherever the script ran. When one script applies several patches, in heredocs or as quoted arguments, each is read on its own, so a patch deleting a file in one directory never hides another patch's edit of a same-named file, and a file any of them leaves on disk is a target.
 
 ### The content check
 
@@ -62,13 +62,15 @@ The lines are compared as the patch program received them. In a quoted heredoc (
 
 A file in another directory than the one the patch wrote almost never holds the lines the patch just added, so it is skipped rather than checked and reformatted. A section that adds no line, a pure deletion or a bare rename, gives the hook nothing to compare, so its file is not checked either.
 
+An absolute path that a patch command reads names its file for certain, but the reading does not know whether the script reached that command: it reads a branch that did not run, or a function nobody called, like any other. So the hook checks such a file unless it lacks the lines the patch added, which shows the script did not write it. A section that adds no line shows nothing, so its file is checked.
+
 ### The note
 
 When a relative `.mthds` path from a `Bash` patch goes unchecked, because it is unplaced, because the file there does not carry the patch's added lines, or because no file exists where it resolves (unless the patch itself deleted or moved it), the hook names it in one non-blocking note, sent as additional context:
 
 > The .mthds hook did not check `broken.mthds`: it could not confirm which file this shell command patched. Name the file by its absolute path, or edit it with the apply_patch tool, and the hook will check it.
 
-An absolute path that fails the content check is dropped without a note: no patch command read it, and its file does not hold the patch's lines, so the script did not write it.
+An absolute path that fails the content check is dropped without a note: its file does not hold the lines of a patch the script only stored or never reached, so the script did not write it.
 
 The note never blocks, and a block from another file in the same call wins over it. It is sent even when the engine that runs the checks cannot load. It exists because a missing file or an unknown directory is something the agent can fix, unlike a missing API key, and without it the agent would read the hook's silence as a clean check. It is never sent for the `apply_patch` tool, whose paths are anchored reliably.
 

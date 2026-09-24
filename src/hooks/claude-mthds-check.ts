@@ -19,9 +19,10 @@
  * A Codex patch run through the shell (`tool_name: "Bash"`) is placed by
  * following the script's working directory. A file it names by a relative
  * path, or by an absolute one no patch command reads, is checked only when it
- * carries the patch's added lines, and the relative paths it could not check
- * are named in one non-blocking note, which a block from another file
- * outranks (see docs/hook-bundle.md).
+ * carries the patch's added lines, and one named by another absolute path
+ * only when it does not lack them. The relative paths it could not check are
+ * named in one non-blocking note, which a block from another file outranks
+ * (see docs/hook-bundle.md).
  *
  * Failure posture (fail-open, per the networked-hook plan):
  * - no `.mthds` in the payload / unparseable stdin → pass silently
@@ -46,7 +47,6 @@ import {
   mergeOutcomes,
   selectCodexTargets,
   uncheckedShellPatchNote,
-  type CheckTarget,
   type HookOutcome,
   type HookPlatform,
   type LintStage,
@@ -90,13 +90,13 @@ function readFileOrNull(filePath: string): string | null {
 }
 
 /**
- * The edited `.mthds` files to check, per platform, each read once, and the
- * relative paths of a Codex shell patch the hook could not check.
+ * The edited `.mthds` files to check, per platform, and the relative paths of
+ * a Codex shell patch the hook could not check.
  */
 function resolveTargets(
   platform: HookPlatform,
   stdinJson: string,
-): { targets: CheckTarget[]; unchecked: string[] } {
+): { targets: string[]; unchecked: string[] } {
   let candidates: string[];
   switch (platform) {
     case "claude": {
@@ -114,15 +114,7 @@ function resolveTargets(
       break;
     }
   }
-  // A deleted file has nothing to check (a Claude edit can race a delete).
-  const targets: CheckTarget[] = [];
-  for (const filePath of candidates) {
-    const content = readFileOrNull(filePath);
-    if (content !== null) {
-      targets.push({ filePath, content });
-    }
-  }
-  return { targets, unchecked: [] };
+  return { targets: candidates, unchecked: [] };
 }
 
 /**
@@ -205,11 +197,18 @@ function warn(message: string): void {
   writeFileSync(2, `[mthds-hook] ${message}\n`);
 }
 
-/** The full pipeline on one edited file: lint → format write-back → validate. */
-async function checkOneFile(
-  engine: ToolsWasmModule,
-  { filePath, content }: CheckTarget,
-): Promise<HookOutcome> {
+/**
+ * The full pipeline on one edited file: lint → format write-back → validate.
+ * The file is read here, when its turn comes, and no await separates the read
+ * from the write-back, so an edit made while an earlier file was validated is
+ * never overwritten with older content.
+ */
+async function checkOneFile(engine: ToolsWasmModule, filePath: string): Promise<HookOutcome> {
+  const content = readFileOrNull(filePath);
+  if (content === null) {
+    return { kind: "pass" }; // a deleted file has nothing to check (an edit can race a delete)
+  }
+
   // Stage 1 — local lint
   const lintStage: LintStage = {
     status: "diagnostics",

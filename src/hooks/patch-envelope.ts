@@ -22,7 +22,12 @@ export interface PatchSection {
   moveTo: string | null;
   /** Offset of the section's header line in the text read. */
   offset: number;
-  /** How many `*** Begin Patch` lines precede the section: the sections of one envelope share it. */
+  /**
+   * How many `*** Begin Patch` and `*** End Patch` lines precede the section:
+   * the sections of one envelope share it, and no others do, since an envelope
+   * ends on its `End Patch` line even when its `Begin Patch` does not start a
+   * line, as in `apply_patch '*** Begin Patch`.
+   */
   envelope: number;
   /** The section's `+` lines, marker stripped, otherwise as written. */
   addedLines: string[];
@@ -56,7 +61,8 @@ const SECTION_KINDS: Record<string, PatchSection["kind"]> = {
  * headers are anchored at the start of a line, as the `pipelex-plugins`
  * wrapper's pre-filter reads them; a `Move to` counts only inside an `Update
  * File` section, and a `Begin Patch` or `End Patch` line closes the section
- * before it, so script lines after a patch are not read as its content.
+ * before it and starts a new envelope, so script lines after a patch are not
+ * read as its content, and the patches of a script stay apart.
  */
 export function readPatchSections(text: string): PatchSection[] {
   const sections: PatchSection[] = [];
@@ -84,9 +90,7 @@ export function readPatchSections(text: string): PatchSection[] {
       }
     } else if (boundary) {
       current = null;
-      if (boundary[1] === "Begin") {
-        envelope++;
-      }
+      envelope++;
     } else if (current) {
       const move = MOVE_HEADER.exec(line);
       if (move) {

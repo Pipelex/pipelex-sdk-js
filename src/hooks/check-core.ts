@@ -87,12 +87,16 @@ export interface CodexMthdsTarget {
   /** Some section of the patch deletes the file or moves it away. */
   removedByPatch: boolean;
   /**
-   * The file must carry the patch's added lines before it is checked (see
-   * `selectCodexTargets`): a shell patch named it by a relative path, which
-   * the hook resolved through its reading of the script, or by an absolute
-   * path that no patch command in the script reads.
+   * What the file's content must show before it is checked (see
+   * `selectCodexTargets`). `carried`: it carries the patch's added lines,
+   * because a shell patch named it by a relative path, which the hook resolved
+   * through its reading of the script, or by an absolute path that no patch
+   * command in the script reads. `unrefuted`: it does not lack lines the patch
+   * added, because a shell patch command reads its absolute path, but the
+   * script may not have reached that command. `null` for the `apply_patch`
+   * tool, whose patch was applied where its paths say.
    */
-  confirm: boolean;
+  confirm: "carried" | "unrefuted" | null;
 }
 
 /** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
@@ -124,8 +128,10 @@ const UNPLACED_KEY = "\0";
  * against it, one under an unknown directory, in text no patch command reads,
  * or anywhere in a script that could not be read, is listed as unplaced
  * rather than guessed, and a header no command holds is dropped. An absolute
- * path in text no patch command reads resolves, and is confirmed like a
- * relative one. Any other `tool_name` is the `apply_patch` tool's, whose
+ * path resolves wherever it sits, and is confirmed: like a relative one in
+ * text no patch command reads, and against the patch's added lines otherwise,
+ * since the reading follows every branch and function body whether or not
+ * the script ran it. Any other `tool_name` is the `apply_patch` tool's, whose
  * paths are relative to the session directory.
  */
 export function extractCodexMthdsTargets(stdinJson: string, processCwd: string): CodexMthdsTargets {
@@ -186,7 +192,11 @@ export function extractCodexMthdsTargets(stdinJson: string, processCwd: string):
         writtenAs: file.path,
         addedLines: file.sections.map(addedLinesOf),
         removedByPatch: file.removedByPatch,
-        confirm: fromShell && (!isAbsolutePath(file.path) || !file.sections.some(readByPatch)),
+        confirm: !fromShell
+          ? null
+          : !isAbsolutePath(file.path) || !file.sections.some(readByPatch)
+            ? "carried"
+            : "unrefuted",
       });
     } else if (!unplaced.includes(file.path)) {
       unplaced.push(file.path);
@@ -195,43 +205,47 @@ export function extractCodexMthdsTargets(stdinJson: string, processCwd: string):
   return { fromShell, targets, unplaced };
 }
 
-/** A file the hook checks, with the content every stage reads. */
-export interface CheckTarget {
-  filePath: string;
-  content: string;
-}
-
 /**
  * Which of a Codex patch's targets the hook checks, and which relative paths
  * of a shell patch it could not check. `readFile` returns a file's content,
  * or null when there is no file to read.
  *
- * A target that needs confirming is checked only when its file carries the
- * added lines of some section that wrote it (see `carriesAddedLines`), since
- * a file in another directory than the one the script wrote to almost never
- * does, and neither does a file the script never patched. When a relative
- * path's file does not, or when no file exists where it resolves, the path
- * joins the unplaced ones as unchecked, unless the patch itself removed the
- * missing file. An absolute path left unconfirmed was not patched by this
- * script, so it is dropped without a note. Any other target is checked when
- * its file exists.
+ * A `carried` target is checked only when its file carries the added lines
+ * of some section that wrote it (see `carriesAddedLines`), since a file in
+ * another directory than the one the script wrote to almost never does, and
+ * neither does a file the script never patched. An `unrefuted` one is checked
+ * unless every section that wrote it added lines its file lacks, which is
+ * the evidence that the script did not run the patch; a section that adds no
+ * line refutes nothing. When a relative path's file fails, or when no file
+ * exists where it resolves, the path joins the unplaced ones as unchecked,
+ * unless the patch itself removed the missing file. An absolute path that
+ * fails was not patched by this script, so it is dropped without a note. Any
+ * other target is checked when its file exists.
+ *
+ * The files are returned as paths: each stage reads its file again when its
+ * turn comes, so a file changed while an earlier one was checked is never
+ * overwritten with the content read here.
  */
 export function selectCodexTargets(
   extracted: CodexMthdsTargets,
   readFile: (path: string) => string | null,
-): { targets: CheckTarget[]; unchecked: string[] } {
-  const targets: CheckTarget[] = [];
+): { targets: string[]; unchecked: string[] } {
+  const targets: string[] = [];
   const unchecked = [...extracted.unplaced];
   for (const target of extracted.targets) {
     const content = readFile(target.path);
     const confirmed =
-      !target.confirm ||
-      (content !== null &&
-        target.addedLines.some((addedLines) => carriesAddedLines(content, addedLines)));
-    if (content !== null && confirmed) {
-      targets.push({ filePath: target.path, content });
+      content !== null &&
+      (target.confirm === null ||
+        target.addedLines.some(
+          (addedLines) =>
+            carriesAddedLines(content, addedLines) ||
+            (target.confirm === "unrefuted" && comparedLines(addedLines).length === 0),
+        ));
+    if (confirmed) {
+      targets.push(target.path);
     } else if (
-      target.confirm &&
+      target.confirm === "carried" &&
       !isAbsolutePath(target.writtenAs) &&
       (content !== null || !target.removedByPatch) &&
       !unchecked.includes(target.writtenAs)
@@ -251,7 +265,7 @@ export function selectCodexTargets(
  * deletion or a bare rename, leaves no evidence, so it is never carried.
  */
 export function carriesAddedLines(content: string, addedLines: readonly string[]): boolean {
-  const wanted = addedLines.map((line) => line.trimEnd()).filter((line) => line !== "");
+  const wanted = comparedLines(addedLines);
   if (wanted.length === 0) {
     return false;
   }
@@ -265,6 +279,11 @@ export function carriesAddedLines(content: string, addedLines: readonly string[]
     }
   }
   return false;
+}
+
+/** The added lines a file is compared on: trailing whitespace trimmed, blank lines skipped. */
+function comparedLines(addedLines: readonly string[]): string[] {
+  return addedLines.map((line) => line.trimEnd()).filter((line) => line !== "");
 }
 
 /**

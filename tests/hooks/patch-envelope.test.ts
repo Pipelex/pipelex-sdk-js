@@ -88,7 +88,18 @@ describe("readPatchSections", () => {
     const text = patch("*** Update File: a.mthds", "+a") + patch("*** Add File: b.mthds", "+b");
     expect(readPatchSections(text).map(({ path, envelope }) => [path, envelope])).toEqual([
       ["a.mthds", 1],
-      ["b.mthds", 2],
+      ["b.mthds", 3],
+    ]);
+  });
+
+  it("ends an envelope on its End Patch line when its Begin Patch does not start a line", () => {
+    const argument = (...lines: string[]) =>
+      `apply_patch '*** Begin Patch\n${lines.join("\n")}\n*** End Patch'\n`;
+    const text = argument("*** Add File: a.mthds", "+x") + argument("*** Delete File: a.mthds");
+    const envelopes = readPatchSections(text).map((section) => section.envelope);
+    expect(envelopes[0]).not.toBe(envelopes[1]);
+    expect(patchTargets(readPatchSections(text))).toMatchObject([
+      { path: "a.mthds", removedByPatch: true },
     ]);
   });
 

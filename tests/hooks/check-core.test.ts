@@ -235,7 +235,7 @@ describe("extractCodexMthdsTargets", () => {
         writtenAs: "sub/a.mthds",
         addedLines: [["new"]],
         removedByPatch: false,
-        confirm: false,
+        confirm: null,
       },
     ]);
   });
@@ -292,7 +292,7 @@ describe("extractCodexMthdsTargets", () => {
             writtenAs: "broken.mthds",
             addedLines: [["x"]],
             removedByPatch: false,
-            confirm: true,
+            confirm: "carried",
           },
         ],
         unplaced: [],
@@ -323,7 +323,7 @@ describe("extractCodexMthdsTargets", () => {
         ),
         HOOK_CWD,
       );
-      expect(result.targets).toMatchObject([{ path: "/abs/broken.mthds", confirm: false }]);
+      expect(result.targets).toMatchObject([{ path: "/abs/broken.mthds", confirm: "unrefuted" }]);
       expect(result.unplaced).toEqual([]);
     });
 
@@ -358,15 +358,37 @@ describe("extractCodexMthdsTargets", () => {
       ]);
     });
 
-    it("confirms an absolute path that no patch command reads, and keeps one that does", () => {
+    it("confirms an absolute path that no patch command reads against its added lines", () => {
       const absolute = PATCH.replace("broken.mthds", "/abs/broken.mthds");
       const staged = `cat > /tmp/p <<'EOF'\n${absolute}\nEOF\n`;
       expect(extractCodexMthdsTargets(shell(staged), HOOK_CWD).targets).toMatchObject([
-        { path: "/abs/broken.mthds", confirm: true },
+        { path: "/abs/broken.mthds", confirm: "carried" },
       ]);
       const unparsed = `cd 'sub && apply_patch <<'EOF'\n${absolute}\nEOF\n`;
       expect(extractCodexMthdsTargets(shell(unparsed), HOOK_CWD).targets).toMatchObject([
-        { path: "/abs/broken.mthds", confirm: true },
+        { path: "/abs/broken.mthds", confirm: "carried" },
+      ]);
+    });
+
+    it("asks an absolute path a patch command reads not to lack its lines, in any branch", () => {
+      const absolute = PATCH.replace("broken.mthds", "/abs/broken.mthds");
+      for (const script of [
+        `apply_patch <<'EOF'\n${absolute}\nEOF\n`,
+        `if false; then apply_patch <<'EOF'\n${absolute}\nEOF\nfi\n`,
+        `f() { apply_patch <<'EOF'\n${absolute}\nEOF\n}\n`,
+      ]) {
+        expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+          { path: "/abs/broken.mthds", confirm: "unrefuted" },
+        ]);
+      }
+    });
+
+    it("keeps apart the patches passed as quoted arguments", () => {
+      const add = "*** Begin Patch\n*** Add File: a.mthds\n+x\n*** End Patch";
+      const remove = "*** Begin Patch\n*** Delete File: a.mthds\n*** End Patch";
+      const script = `cd sub\napply_patch '${add}'\nif false; then apply_patch '${remove}'; fi\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/sub/a.mthds", addedLines: [["x"]], removedByPatch: true },
       ]);
     });
 
@@ -406,7 +428,7 @@ describe("extractCodexMthdsTargets", () => {
             writtenAs: "broken.mthds",
             addedLines: [["x"]],
             removedByPatch: false,
-            confirm: false,
+            confirm: null,
           },
         ],
         unplaced: [],
@@ -459,7 +481,7 @@ describe("selectCodexTargets", () => {
     writtenAs: "a.mthds",
     addedLines: [["added"]],
     removedByPatch: false,
-    confirm: true,
+    confirm: "carried",
     ...overrides,
   });
   const select = (
@@ -468,9 +490,9 @@ describe("selectCodexTargets", () => {
     unplaced: string[] = [],
   ) => selectCodexTargets({ fromShell: true, targets, unplaced }, (path) => files[path] ?? null);
 
-  it("checks a file that carries the patch's added lines, with the content it read", () => {
+  it("checks a file that carries the patch's added lines", () => {
     expect(select([target()], { "/work/sub/a.mthds": "x\nadded\n" })).toEqual({
-      targets: [{ filePath: "/work/sub/a.mthds", content: "x\nadded\n" }],
+      targets: ["/work/sub/a.mthds"],
       unchecked: [],
     });
   });
@@ -500,7 +522,7 @@ describe("selectCodexTargets", () => {
   });
 
   it("checks a target that needs no confirming whenever its file exists", () => {
-    const unconfirmed = target({ confirm: false, addedLines: [[]] });
+    const unconfirmed = target({ confirm: null, addedLines: [[]] });
     expect(select([unconfirmed], { "/work/sub/a.mthds": "x\n" }).targets).toHaveLength(1);
     expect(select([unconfirmed], {})).toEqual({ targets: [], unchecked: [] });
   });
@@ -513,6 +535,17 @@ describe("selectCodexTargets", () => {
     });
     expect(select([absolute], {})).toEqual({ targets: [], unchecked: [] });
     expect(select([absolute], { "/abs/a.mthds": "added\n" }).targets).toHaveLength(1);
+  });
+
+  it("checks an absolute path a patch command reads unless its file lacks the added lines", () => {
+    const absolute = (addedLines: string[][]) =>
+      target({ path: "/abs/a.mthds", writtenAs: "/abs/a.mthds", confirm: "unrefuted", addedLines });
+    const lacking = { "/abs/a.mthds": "other\n" };
+    expect(select([absolute([["added"]])], lacking)).toEqual({ targets: [], unchecked: [] });
+    expect(select([absolute([["added"]])], { "/abs/a.mthds": "added\n" }).targets).toHaveLength(1);
+    expect(select([absolute([[]])], lacking).targets).toHaveLength(1);
+    expect(select([absolute([["added"], [""]])], lacking).targets).toHaveLength(1);
+    expect(select([absolute([["added"]])], {})).toEqual({ targets: [], unchecked: [] });
   });
 
   it("names the unplaced paths too, each once", () => {
