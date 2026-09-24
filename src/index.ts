@@ -52,10 +52,11 @@ export type {
 } from "./prepare-inputs.js";
 
 // ── Artifacts (the download twin of input preparation) ──────────────
-// `collectArtifacts` and `artifactFilename` are pure and standalone; the network
-// operations (`resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`) are client
-// methods, and only their public types and bounds travel with the barrel.
+// `locateArtifacts`, `collectArtifacts` and `artifactFilename` are pure and standalone;
+// the network operations (`resolveArtifacts` / `fetchArtifact` / `downloadArtifacts`) are
+// client methods, and only their public types and bounds travel with the barrel.
 export {
+  locateArtifacts,
   collectArtifacts,
   artifactFilename,
   PIPELEX_STORAGE_SCHEME,
@@ -67,6 +68,7 @@ export {
 } from "./artifacts.js";
 export type {
   ArtifactItemError,
+  ArtifactLocation,
   ArtifactScope,
   BulkResolveStorageUrlsInput,
   BulkResolvedStorageUrls,
