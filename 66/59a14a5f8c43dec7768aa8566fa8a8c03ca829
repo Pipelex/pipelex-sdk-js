@@ -1,0 +1,63 @@
+CHANGELOG.md
+  s_177b6af8a168a6::t_538a5d020d9c20 9-26
+docs/architecture.md
+  s_177b6af8a168a6::t_e5b91d14bb4fb9 35,89,96,128
+docs/artifact-download.md
+  s_177b6af8a168a6::t_66d265613421b3 77
+docs/input-preparation.md
+  s_177b6af8a168a6::t_20eac71aee3e97 57,67-68,80-81,83-87,89,232-234
+package-lock.json
+  s_177b6af8a168a6::t_13ab841207e735 3,9,18,889-891
+package.json
+  s_177b6af8a168a6::t_aceb481b5c2ac2 3,55
+src/artifacts.ts
+  s_177b6af8a168a6::t_5c68952ac72dbc 41,172-175,678-684
+src/client.ts
+  s_177b6af8a168a6::t_71b3c9e2929ced 48,117,231-234,436-442,476-481,1195-1196,1336-1337
+src/errors.ts
+  s_177b6af8a168a6::t_726719e57eec47 136-165,168-174,178,180-183,187
+src/index.ts
+  s_177b6af8a168a6::t_bcb082c46333b1 252
+src/runs.ts
+  s_177b6af8a168a6::t_f869f731469e24 4,290-293,312-326,341,401-409
+src/timers.ts
+  s_177b6af8a168a6::t_9886e97da47651 1-15
+src/upload-grant.ts
+  s_177b6af8a168a6::t_dd0b0ec371f0b6 10-13,16,19,24-40,46-47,50-57,82-91,93-105,114-116,118-119,121-133,135-185,187-215,217-220,222-224,226,228-239,242,244-289,292-308,310,337
+src/upload.ts
+  s_177b6af8a168a6::t_eaeace47ef3afd 223-227,234-235,246
+src/version.ts
+  s_177b6af8a168a6::t_a1bd90437d31eb 6
+tests/artifacts.test.ts
+  s_177b6af8a168a6::t_b01f2cecfc154d 739-742
+tests/client-lifecycle.test.ts
+  s_177b6af8a168a6::t_3c16703cfdb188 105-118
+tests/client.test.ts
+  s_177b6af8a168a6::t_9a6734dbffb23d 1410-1432,1467-1496
+tests/runs.test.ts
+  s_177b6af8a168a6::t_67bc6a615d937a 404-441
+tests/upload-grant.test.ts
+  s_177b6af8a168a6::t_693413d0093a76 5-9,75-108,125,156-173,180,182-479,604,608-647,663,679,690,695-699,767
+tests/upload.test.ts
+  s_177b6af8a168a6::t_11418fb39844b7 203-231
+wip/upload-default-timeout/design.md
+  s_177b6af8a168a6::t_cc0da81c80e6df 1-107
+wip/upload-default-timeout/plan.md
+  s_177b6af8a168a6::t_5804c0635bbaff 1-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6659a14a5f8c43dec7768aa8566fa8a8c03ca829",
+  "prompts": {},
+  "sessions": {
+    "s_177b6af8a168a6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6d0cb6e4-df5b-45ba-ab3c-25e38f06b2ed",
+        "model": "claude-opus-5"
+      },
+      "human_author": "thomashebrard <thomas@pipelex.com>"
+    }
+  }
+}
