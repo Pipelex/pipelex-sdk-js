@@ -21,9 +21,9 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PipelexApiClient } from "../../src/client.js";
-import { collectArtifacts } from "../../src/artifacts.js";
+import { artifactFilename, collectArtifacts } from "../../src/artifacts.js";
 
 const BASE_URL = process.env.PIPELEX_E2E_BASE_URL ?? "http://localhost:8081";
 
@@ -97,6 +97,11 @@ describe("the artifact round trip against a live platform", () => {
     expect(echoed!.error).toBeNull();
     expect(echoed!.content_type).toBe("application/pdf");
     expect(echoed!.size).toBe(PDF_BYTES.byteLength);
+    // The file is named after the working-memory field the echoed input sits in.
+    expect(echoed!.found_at[0]).toMatch(/^\$\./);
+    expect(basename(echoed!.path!)).toBe(
+      artifactFilename(echoed!, echoed!.content_type, "working_memory"),
+    );
     expect(verdict.saved_paths).toContain(echoed!.path);
     expect(new Uint8Array(await readFile(echoed!.path!))).toEqual(PDF_BYTES);
   }, 120_000);

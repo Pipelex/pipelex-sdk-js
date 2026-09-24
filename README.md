@@ -112,7 +112,7 @@ These pages ship inside the published package, so a reader who has only installe
 | [`docs/architecture.md`](./docs/architecture.md) | The whole client surface: the request pipeline, every route, the typed errors |
 | [`docs/run-results.md`](./docs/run-results.md) | Every field of `RunResults` — the run id as a durable handle, `main_stuff`, `working_memory`, `graph_spec`, the usage pair, produced files |
 | [`docs/run-usage.md`](./docs/run-usage.md) | What a run consumed, record by record, and `summarizeUsage` which folds them into one reading |
-| [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts` |
+| [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `locateArtifacts`, `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts`, and how a saved file is named after the field it fills |
 | [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take, and the upload grant a browser page sends a file with |
 | [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
 | [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
