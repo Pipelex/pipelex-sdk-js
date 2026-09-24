@@ -333,7 +333,7 @@ describe("uploadWithGrant — the time limit", () => {
     ["never ends", false],
     ["errors with a generic AbortError on abort, as a browser does", true],
   ])(
-    "times out while storage's error body %s, rather than reporting the body",
+    "answers with storage's status when the limit runs out while its error body %s",
     async (_case, errorsOnAbort) => {
       vi.useFakeTimers();
       vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
@@ -347,19 +347,76 @@ describe("uploadWithGrant — the time limit", () => {
             }
           },
         });
-        return new Response(body, { status: 403 });
+        return new Response(body, { status: 403, statusText: "Forbidden" });
       });
 
       const upload = track(uploadWithGrant(GRANT, pdfFile()));
       // The file is 5 bytes, so its limit is 61 s.
-      await vi.advanceTimersByTimeAsync(61_000);
+      await vi.advanceTimersByTimeAsync(60_999);
+      expect(upload.settled()).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
 
+      // Storage answered before the limit: a 403 stored nothing, so this is its refusal,
+      // read off the part of the body that arrived, and no unknown-outcome timeout.
       const error = await upload.outcome;
-      expect(error).toBeInstanceOf(UploadTransportError);
-      expect((error as UploadTransportError).code).toBe("timeout");
+      expect(error).toBeInstanceOf(RejectedAssetError);
+      expect((error as RejectedAssetError).status).toBe(403);
+      expect((error as RejectedAssetError).code).toBe("store_refused");
+      expect((error as Error).message).toContain("403 AccessDenied");
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("keeps the code S3 sent before the limit ran out mid-body", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(stream) {
+          stream.enqueue(
+            new TextEncoder().encode("<Error><Code>ConditionalRequestConflict</Code><Message>"),
+          );
+        },
+      });
+      return new Response(body, { status: 409 });
+    });
+
+    const upload = track(uploadWithGrant(GRANT, pdfFile()));
+    await vi.advanceTimersByTimeAsync(61_000);
+
+    const error = await upload.outcome;
+    expect(error).toBeInstanceOf(UploadTransportError);
+    expect((error as UploadTransportError).code).toBe("conflict");
+    expect((error as UploadTransportError).status).toBe(409);
+  });
+
+  it.each([
+    ["a success", 200, ""],
+    ["a redirect", 307, ""],
+    ["an error body past the cap", 403, s3Error("AccessDenied", "Request has expired")],
+  ])("settles on %s even when the body's cancellation never does", async (_case, status, text) => {
+    // A body whose cancel never settles: nothing may wait on it, or the call would
+    // outlive its own time limit.
+    const bytes = new TextEncoder().encode(text.padEnd(20 * 1024, " "));
+    let served = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(stream) {
+        if (!served && text !== "") stream.enqueue(bytes);
+        served = true;
+      },
+      cancel() {
+        return new Promise<void>(() => undefined);
+      },
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status }));
+
+    const outcome = await uploadWithGrant(GRANT, pdfFile(), { timeoutMs: 1_000 }).catch(
+      (e: unknown) => e,
+    );
+
+    if (status === 200) expect(outcome).toEqual({ uri: GRANT.uri });
+    if (status === 307) expect((outcome as UploadTransportError).code).toBe("redirected");
+    if (status === 403) expect((outcome as RejectedAssetError).code).toBe("grant_expired");
+  });
 });
 
 describe("uploadWithGrant — reading storage's error body", () => {

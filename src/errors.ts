@@ -138,9 +138,9 @@ export class UploadAuthenticationError extends InputPreparationError {
  * rather than on the message or the error's name. The first three come from both
  * `uploadFile` and `uploadWithGrant`, the next four from `uploadWithGrant` only:
  *
- * - `timeout` — the SDK's own time limit ran out first: `uploadWithGrant`'s bound on
- *   its `PUT`, or the client's request timeout under `uploadFile`. Whether the file
- *   was stored is unknown.
+ * - `timeout` — the SDK's own time limit ran out before an answer came back:
+ *   `uploadWithGrant`'s bound on its `PUT`, or the client's request timeout under
+ *   `uploadFile`. Whether the file was stored is unknown.
  * - `unreachable` — no response reached the SDK. In a browser, a refused cross-origin
  *   request looks like this.
  * - `server_error` — a `5xx`. Whether the file was stored is unknown.

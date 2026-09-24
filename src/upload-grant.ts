@@ -15,6 +15,7 @@
 import { InputPreparationError, RejectedAssetError, UploadTransportError } from "./errors.js";
 import type { RejectedAssetCode } from "./errors.js";
 import type { UploadGrant } from "./product-models.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 export type { UploadGrant, UploadGrantInput } from "./product-models.js";
 // The classes `uploadWithGrant` raises, so a page can branch on them without the main entry.
@@ -29,9 +30,6 @@ export type { RejectedAssetCode, UploadTransportCode } from "./errors.js";
  */
 const DEFAULT_TIMEOUT_BASE_MS = 60_000;
 const DEFAULT_TIMEOUT_BYTES_PER_SECOND = 128 * 1024;
-
-/** The longest delay `setTimeout` honours; a longer one overflows and fires at once. */
-const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * How much of storage's error body is read. S3 writes `<Code>` and `<Message>` first,
@@ -94,7 +92,10 @@ export interface GrantedUpload {
  * The whole exchange runs under a time limit: `timeoutMs` when given, else 60 s plus
  * 1 s for every started 128 KiB of the file. A caller's `signal` can end it sooner,
  * and its abort propagates as the signal's own reason, unwrapped, even when the time
- * limit ran out too. Only the first 16 KiB of storage's error body are read.
+ * limit ran out too. Only the first 16 KiB of storage's error body are read, and when
+ * the limit runs out while that body is still arriving, storage has already answered:
+ * the call settles as that answer, classified from its status and whatever part of the
+ * body arrived.
  *
  * A timeout, a `5xx`, a conflict and a connection lost after the file went out leave
  * it unknown whether the object was written: retrying with the same grant before it
@@ -128,13 +129,6 @@ export async function uploadWithGrant(
   }, limitMs);
   const onCallerAbort = (): void => controller.abort(signal?.reason);
   signal?.addEventListener("abort", onCallerAbort, { once: true });
-  // The signals' outcome, not the runtime's error: some runtimes reject, or error a body
-  // stream, with a generic AbortError instead of the reason. A caller's abort wins over
-  // the time limit, since it is the one the caller can see and act on.
-  const throwIfCutShort = (): void => {
-    if (signal?.aborted) throw signal.reason;
-    if (timedOut) throw timeoutError(label, limitMs, grant);
-  };
 
   try {
     let response: Response;
@@ -149,7 +143,11 @@ export async function uploadWithGrant(
         signal: controller.signal,
       });
     } catch (error) {
-      throwIfCutShort();
+      // The signals' outcome, not the runtime's error: some runtimes reject with a generic
+      // AbortError instead of the reason. A caller's abort wins over the time limit, since
+      // it is the one the caller can see and act on.
+      if (signal?.aborted) throw signal.reason;
+      if (timedOut) throw timeoutError(label, limitMs, grant);
       // Neither the runtime's message nor the error itself is kept: either can carry the
       // request URL, and with it the grant's credential (Bun puts it on the error's `path`).
       throw new UploadTransportError(
@@ -162,13 +160,14 @@ export async function uploadWithGrant(
       );
     }
 
+    // A body is cancelled, never awaited: a stream's cancel can outlive any time limit.
     if (response.status >= 200 && response.status < 300) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       return { uri: grant.uri };
     }
     // A browser reports a refused redirect as an opaque response with status 0.
     if (response.type === "opaqueredirect" || (response.status >= 300 && response.status < 400)) {
-      await response.body?.cancel().catch(() => undefined);
+      void response.body?.cancel().catch(() => undefined);
       throw new UploadTransportError(
         `Upload of "${label}" was redirected by storage, and the redirect was refused: a ` +
           "presigned upload is valid only at the URL it was signed for.",
@@ -179,13 +178,11 @@ export async function uploadWithGrant(
 
     // Only the error's code and message are kept, never the body: S3 echoes the
     // canonical request on a signature mismatch, and with it the grant's credential.
-    let body: string;
-    try {
-      body = await readErrorPrefix(response, ERROR_BODY_MAX_BYTES, controller.signal);
-    } catch {
-      throwIfCutShort();
-      body = "";
-    }
+    const body = await readErrorPrefix(response, ERROR_BODY_MAX_BYTES, controller.signal);
+    // A caller's abort while the body streams stays the caller's, unwrapped. The time limit
+    // running out then is no timeout: storage has answered, and its status says what
+    // happened, read with whatever part of the body arrived.
+    if (signal?.aborted) throw signal.reason;
     const refusal = parseStorageError(body);
     const status = response.status;
     if (status === 400 && refusal.code === "RequestTimeout") {
@@ -230,14 +227,14 @@ export async function uploadWithGrant(
 /** The default time limit for a file of `size` bytes, capped at what a timer honours. */
 function defaultTimeoutMs(size: number): number {
   const seconds = Math.ceil(size / DEFAULT_TIMEOUT_BYTES_PER_SECOND);
-  return Math.min(DEFAULT_TIMEOUT_BASE_MS + seconds * 1_000, MAX_TIMEOUT_MS);
+  return Math.min(DEFAULT_TIMEOUT_BASE_MS + seconds * 1_000, MAX_TIMER_DELAY_MS);
 }
 
 /** A caller's `timeoutMs`, refused before anything is sent when no timer could honour it. */
 function requireTimeout(timeoutMs: number): void {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
+  if (!isTimerDelay(timeoutMs)) {
     throw new InputPreparationError(
-      `"timeoutMs" must be a positive number no larger than ${MAX_TIMEOUT_MS}, got ` +
+      `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
         `${String(timeoutMs)}.`,
     );
   }
@@ -270,10 +267,10 @@ function withoutFinalPeriod(message: string): string {
 }
 
 /**
- * The first `maxBytes` of storage's error body as text, the rest cancelled unread. It
- * rejects when `abort` fires before the read ends, whatever the stream did then: a
- * runtime may error it with a generic AbortError, and a reader cancelled on abort ends
- * it as if it were complete.
+ * The first `maxBytes` of storage's error body as text: whatever arrived before the body
+ * ended, failed, reached the cap or was cut short by `abort`, since even a partial body
+ * may carry S3's code. The rest is cancelled unread, and the cancellation is never
+ * awaited, since a stream's cancel can outlive any time limit.
  */
 async function readErrorPrefix(
   response: Response,
@@ -281,21 +278,21 @@ async function readErrorPrefix(
   abort: AbortSignal,
 ): Promise<string> {
   if (response.body === null) return "";
-  if (abort.aborted) {
-    await response.body.cancel().catch(() => undefined);
-    throw abort.reason;
-  }
   const reader = response.body.getReader();
   // Cancelled explicitly on abort, on top of the request's own abort, so a stalled body
-  // never holds the read past the time limit.
-  const onAbort = (): void => {
-    void reader.cancel(abort.reason).catch(() => undefined);
+  // never holds the read past the time limit: a cancel ends a pending read at once.
+  const cancel = (): void => {
+    void reader.cancel().catch(() => undefined);
   };
-  abort.addEventListener("abort", onAbort, { once: true });
+  if (abort.aborted) {
+    cancel();
+    return "";
+  }
+  abort.addEventListener("abort", cancel, { once: true });
+  const decoder = new TextDecoder();
+  let text = "";
+  let received = 0;
   try {
-    const decoder = new TextDecoder();
-    let text = "";
-    let received = 0;
     while (received < maxBytes) {
       const chunk = await reader.read();
       if (chunk.done) break;
@@ -303,12 +300,13 @@ async function readErrorPrefix(
       received += bytes.byteLength;
       text += decoder.decode(bytes, { stream: true });
     }
-    if (abort.aborted) throw abort.reason;
-    if (received >= maxBytes) await reader.cancel().catch(() => undefined);
-    return text + decoder.decode();
+    if (received >= maxBytes) cancel();
+  } catch {
+    // The body failed mid-stream, or a runtime errored it on abort: what arrived stands.
   } finally {
-    abort.removeEventListener("abort", onAbort);
+    abort.removeEventListener("abort", cancel);
   }
+  return text + decoder.decode();
 }
 
 /**

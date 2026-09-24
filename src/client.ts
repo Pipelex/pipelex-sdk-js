@@ -115,6 +115,7 @@ import type {
   ResolvedArtifact,
 } from "./artifacts.js";
 import { PipelexExecuteResult, resultsFromExecute } from "./execute-result.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 // A pure RUNAWAY guard on `iterateMethods`, deliberately not a coverage limit.
 //
@@ -228,7 +229,10 @@ export interface ValidateFilesOptions {
   render?: string[];
   /** Optional structured-view opt-in tokens, e.g. ["input_form", "output_form"]; sent only when given. */
   views?: string[];
-  /** Per-call request ceiling; defaults to the 20-min execute ceiling. */
+  /**
+   * Per-call request ceiling; defaults to the 20-min execute ceiling. A positive number
+   * no larger than 2147483647, the longest delay a timer honours, else a `RangeError`.
+   */
   timeoutMs?: number;
   /** Caller-driven cancellation; the abort reason propagates untouched. */
   signal?: AbortSignal;
@@ -430,6 +434,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     const headers = this.requestHeaders(hasBody);
 
     const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // A longer delay overflows the timer, which then fires at once as a false timeout.
+    if (!isTimerDelay(timeoutMs)) {
+      throw new RangeError(
+        `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
+          `${String(timeoutMs)}.`,
+      );
+    }
     const controller = new AbortController();
     const timer = setTimeout(
       () => controller.abort(new DOMException("Request timed out.", "TimeoutError")),
@@ -1182,7 +1193,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * long, so it gets its own generous timeout (5 min) rather than the 30s the static
    * routes use, and it is the ONLY extension route that takes transport options at all
    * (the policy note on `requestExtension` says why the static ones do not). Override it
-   * per call with `options.timeoutMs`; a caller that stops caring mid-sweep can cancel
+   * per call with `options.timeoutMs`, a positive number no larger than 2147483647 (else a
+   * `RangeError`); a caller that stops caring mid-sweep can cancel
    * via `options.signal` instead of waiting it out.
    */
   async buildRunner(

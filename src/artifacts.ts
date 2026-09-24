@@ -38,6 +38,7 @@ import {
 } from "./errors.js";
 import type { RunResults, RunResultState } from "./runs.js";
 import { isNodeRuntime } from "./upload.js";
+import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -168,7 +169,10 @@ export interface BulkResolvedStorageUrls {
 export interface FetchArtifactOptions {
   /** Refuse (before a byte is written) and cut (mid-stream) a body over this many bytes. Default 1 GiB. */
   maxBytes?: number;
-  /** Budget for the whole exchange — connect, headers and body. Default 120 s. */
+  /**
+   * Budget for the whole exchange — connect, headers and body. Default 120 s. At most
+   * 2147483647, the longest delay a timer honours.
+   */
   timeoutMs?: number;
   /**
    * Accept a plain `http:` link. Off by default: a general-purpose library does
@@ -671,7 +675,13 @@ function fetchBounds(options: FetchArtifactOptions): FetchBounds {
   const maxBytes = options.maxBytes ?? DEFAULT_ARTIFACT_MAX_BYTES;
   const timeoutMs = options.timeoutMs ?? DEFAULT_ARTIFACT_TIMEOUT_MS;
   requirePositive("maxBytes", maxBytes);
-  requirePositive("timeoutMs", timeoutMs);
+  // A longer delay overflows the timer, which then fires at once as a false timeout.
+  if (!isTimerDelay(timeoutMs)) {
+    throw new ArtifactOperationError(
+      `"timeoutMs" must be a positive number no larger than ${MAX_TIMER_DELAY_MS}, got ` +
+        `${String(timeoutMs)}.`,
+    );
+  }
   return { maxBytes, timeoutMs, allowHttp: options.allowHttp ?? false, signal: options.signal };
 }
 

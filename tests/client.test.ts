@@ -1407,6 +1407,29 @@ describe("PipelexApiClient.validateFiles", () => {
       vi.useRealTimers();
     });
 
+    it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 31])(
+      "refuses a timeoutMs of %s that no timer honours, before sending anything",
+      async (timeoutMs) => {
+        const fetchSpy = vi.spyOn(globalThis, "fetch");
+        const client = makeClient();
+
+        const validateErr = await client
+          .validateFiles([{ content: "domain = 'x'" }], { timeoutMs })
+          .catch((e: unknown) => e);
+        const runnerErr = await client
+          .buildRunner({ files: [{ content: "domain = 'x'" }] }, { timeoutMs })
+          .catch((e: unknown) => e);
+
+        for (const err of [validateErr, runnerErr]) {
+          expect(err).toBeInstanceOf(RangeError);
+          expect((err as Error).message).toContain(
+            '"timeoutMs" must be a positive number no larger than 2147483647',
+          );
+        }
+        expect(fetchSpy).not.toHaveBeenCalled();
+      },
+    );
+
     it("honors a caller-supplied timeoutMs, aborting the request itself", async () => {
       vi.useFakeTimers();
       const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(hangingFetch());

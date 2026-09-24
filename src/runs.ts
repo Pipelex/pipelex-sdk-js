@@ -1,6 +1,7 @@
 import type { InputForm, OutputForm, PipeIOContracts } from "mthds/protocol";
 
 import { RunFailedError, RunTimeoutError } from "./errors.js";
+import { MAX_TIMER_DELAY_MS } from "./timers.js";
 import type { DictPipeOutput, DictWorkingMemory } from "./models.js";
 
 /**
@@ -286,7 +287,10 @@ export interface WaitForResultOptions {
    * header overrides this when it asks for a longer wait.
    */
   intervalMs?: number;
-  /** Max ms to wait before throwing `RunTimeoutError` (default 1_200_000 — 20 min). */
+  /**
+   * Max ms to wait before throwing `RunTimeoutError` (default 1_200_000 — 20 min).
+   * `Infinity` waits for as long as the run takes; `NaN` is a `RangeError`.
+   */
   timeoutMs?: number;
   /** Abort the poll loop (Ctrl-C / agent walk-away). */
   signal?: AbortSignal;
@@ -321,6 +325,13 @@ export async function pollUntilResult(
 ): Promise<RunResults> {
   const intervalMs = options.intervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const timeoutMs = options.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+  // A NaN would reach the sleep's timer as a 1 ms delay and poll in a tight loop.
+  if (Number.isNaN(intervalMs) || Number.isNaN(timeoutMs)) {
+    throw new RangeError(
+      `"intervalMs" and "timeoutMs" must be numbers, got ${String(intervalMs)} and ` +
+        `${String(timeoutMs)}.`,
+    );
+  }
   const startedAt = Date.now();
   let attempt = 0;
 
@@ -378,10 +389,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       clearTimeout(timer);
       reject(abortError(signal));
     };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
+    // Clamped, since a longer delay overflows the timer and would fire at once: a sleep
+    // past the cap ends at the cap, and the loop simply polls again.
+    const timer = setTimeout(
+      () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      Math.min(ms, MAX_TIMER_DELAY_MS),
+    );
     if (signal) {
       if (signal.aborted) {
         clearTimeout(timer);
