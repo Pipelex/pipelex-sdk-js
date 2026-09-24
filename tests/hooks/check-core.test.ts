@@ -263,6 +263,73 @@ describe("extractCodexMthdsTargets", () => {
     expect(paths("not json")).toEqual([]);
     expect(paths(JSON.stringify({ tool_input: {} }))).toEqual([]);
   });
+
+  describe("a patch run through the shell", () => {
+    const PATCH = "*** Begin Patch\n*** Update File: broken.mthds\n@@\n+x\n*** End Patch";
+    const shell = (script: string) =>
+      JSON.stringify({ tool_name: "Bash", cwd: "/work", tool_input: { command: script } });
+
+    it("resolves a relative path against the directory the script moved to", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd sub && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result).toEqual({
+        fromShell: true,
+        targets: [{ path: "/work/sub/broken.mthds", writtenAs: "broken.mthds", addedLines: ["x"] }],
+        unplaced: [],
+      });
+    });
+
+    it("lists a relative path under an unknown directory as unplaced", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd "$DIR" && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result).toEqual({ fromShell: true, targets: [], unplaced: ["broken.mthds"] });
+    });
+
+    it("lists every relative path of a script it cannot read as unplaced", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd 'sub && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result.unplaced).toEqual(["broken.mthds"]);
+      expect(result.targets).toEqual([]);
+    });
+
+    it("keeps an absolute path wherever the script ran", () => {
+      const result = extractCodexMthdsTargets(
+        shell(
+          `cd "$DIR" && apply_patch <<'PATCH'\n${PATCH.replace("broken.mthds", "/abs/broken.mthds")}\nPATCH\n`,
+        ),
+        HOOK_CWD,
+      );
+      expect(result.targets.map((target) => target.path)).toEqual(["/abs/broken.mthds"]);
+      expect(result.unplaced).toEqual([]);
+    });
+
+    it("compares a moved file across two patches by its resolved path", () => {
+      const script =
+        `cd sub && apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `cd .. && apply_patch <<'P2'\n*** Begin Patch\n*** Delete File: sub/broken.mthds\n*** End Patch\nP2\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toEqual([]);
+    });
+
+    it("reads the apply_patch tool's patch as the session directory's, whatever it holds", () => {
+      const stdin = envelope(`cd sub\n${PATCH}\n`, { cwd: "/work" });
+      expect(extractCodexMthdsTargets(stdin, HOOK_CWD)).toEqual({
+        fromShell: false,
+        targets: [{ path: "/work/broken.mthds", writtenAs: "broken.mthds", addedLines: ["x"] }],
+        unplaced: [],
+      });
+    });
+
+    it("reads a payload with no tool_name as the apply_patch tool's", () => {
+      const stdin = JSON.stringify({ cwd: "/work", tool_input: { command: `cd sub\n${PATCH}` } });
+      expect(extractCodexMthdsTargets(stdin, HOOK_CWD).targets[0]!.path).toBe("/work/broken.mthds");
+    });
+  });
 });
 
 describe("extractVibeMthdsFilePath", () => {

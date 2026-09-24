@@ -17,7 +17,8 @@
 
 import { isAbsolute as isAbsolutePath, resolve as resolvePath } from "node:path";
 import type { Diagnostic, ValidationErrorItem } from "../models.js";
-import { patchTargets, readPatchSections } from "./patch-envelope.js";
+import { patchTargets, readPatchSections, type PatchSection } from "./patch-envelope.js";
+import { readShellScript } from "./shell-script.js";
 
 /** Verdict of the local lint stage. `unavailable` = engine failed to load. */
 export type LintStage =
@@ -82,37 +83,85 @@ export interface CodexMthdsTarget {
 
 /** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
 export interface CodexMthdsTargets {
+  /** Whether the patch ran through the shell (`tool_name: "Bash"`). */
+  fromShell: boolean;
   /** The files the patch leaves on disk, in the order the patch last wrote them. */
   targets: CodexMthdsTarget[];
+  /** Relative paths from a shell patch whose directory the script does not tell. */
+  unplaced: string[];
 }
+
+/** Prefix of the key of a path whose directory is unknown; no resolved path starts with it. */
+const UNPLACED_KEY = "\0";
 
 /**
  * The `.mthds` files a Codex PostToolUse payload's patch leaves on disk.
- * `apply_patch` is Codex's freeform multi-file write tool: the patch envelope
- * rides verbatim in `tool_input.command`, and its sections are applied in
- * order, so a file the patch moves or deletes is not a target (see
- * `patchTargets`). Relative paths resolve against the payload's `cwd`, the
- * session directory, when it is absolute, and against `processCwd`
- * otherwise; Codex starts the hook in that same directory.
+ *
+ * The patch envelope rides in `tool_input.command`, and its sections are
+ * applied in order, so a file the patch moves or deletes is not a target (see
+ * `patchTargets`). Relative paths resolve against the session directory, the
+ * payload's `cwd` when it is absolute and `processCwd` otherwise, since Codex
+ * starts the hook in that same directory.
+ *
+ * With `tool_name: "Bash"`, the command is a shell script that runs the patch,
+ * and a relative path is relative to wherever the script had moved when the
+ * patch ran. Each section is placed by the command holding its header (see
+ * `readShellScript`): a relative path under a known directory resolves
+ * against it, one under an unknown directory, or anywhere in a script that
+ * could not be read, is listed as unplaced rather than guessed, and a header
+ * no command holds is dropped. Any other `tool_name` is the `apply_patch`
+ * tool's, whose paths are relative to the session directory.
  */
 export function extractCodexMthdsTargets(stdinJson: string, processCwd: string): CodexMthdsTargets {
   const parsed = parseJsonOrNull(stdinJson) as {
     cwd?: unknown;
+    tool_name?: unknown;
     tool_input?: { command?: unknown };
   } | null;
+  const fromShell = parsed?.tool_name === "Bash";
   const command = parsed?.tool_input?.command;
   if (typeof command !== "string") {
-    return { targets: [] };
+    return { fromShell, targets: [], unplaced: [] };
   }
   const sessionDir =
     typeof parsed?.cwd === "string" && isAbsolutePath(parsed.cwd) ? parsed.cwd : processCwd;
-  const keyOf = (path: string) => resolvePath(sessionDir, path);
-  const targets = patchTargets(readPatchSections(command), keyOf).map((file) => ({
-    path: keyOf(file.path),
-    writtenAs: file.path,
-    addedLines: file.section.addedLines,
-  }));
-  return { targets };
+
+  let sections = readPatchSections(command);
+  let directoryOf: (section: PatchSection) => string | null = () => sessionDir;
+  if (fromShell) {
+    const reading = readShellScript(command, sessionDir);
+    if (reading === "unparsed") {
+      directoryOf = () => null;
+    } else {
+      const placements = new Map(
+        sections.map((section) => [section, reading.directoryAt(section.offset)] as const),
+      );
+      sections = sections.filter((section) => placements.get(section)!.kind !== "outside");
+      directoryOf = (section) => {
+        const placement = placements.get(section)!;
+        return placement.kind === "directory" ? placement.path : null;
+      };
+    }
+  }
+
+  const keyOf = (path: string, section: PatchSection): string => {
+    if (isAbsolutePath(path)) {
+      return resolvePath(path);
+    }
+    const directory = directoryOf(section);
+    return directory === null ? UNPLACED_KEY + path : resolvePath(directory, path);
+  };
+  const targets: CodexMthdsTarget[] = [];
+  const unplaced: string[] = [];
+  for (const file of patchTargets(sections, keyOf)) {
+    const key = keyOf(file.path, file.section);
+    if (!key.startsWith(UNPLACED_KEY)) {
+      targets.push({ path: key, writtenAs: file.path, addedLines: file.section.addedLines });
+    } else if (!unplaced.includes(file.path)) {
+      unplaced.push(file.path);
+    }
+  }
+  return { fromShell, targets, unplaced };
 }
 
 /**
