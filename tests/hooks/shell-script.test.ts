@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { lineAsRead, readShellScript } from "../../src/hooks/shell-script.js";
+import { linesAsRead, readShellScript } from "../../src/hooks/shell-script.js";
 
 const SESSION = "/s";
 const PATCH = "*** Begin Patch\n*** Update File: a.mthds\n@@\n+x\n*** End Patch";
@@ -429,7 +429,7 @@ describe("readShellScript: quoting", () => {
   it.each([
     ["a quoted heredoc", `apply_patch <<'EOF'\n${PATCH}\nEOF`, "verbatim"],
     ["an unquoted heredoc", `apply_patch <<EOF\n${PATCH}\nEOF`, "heredoc"],
-    ["a single-quoted argument", `apply_patch '${PATCH}'`, "verbatim"],
+    ["a single-quoted argument", `apply_patch '${PATCH}'`, "single-quoted"],
     ["a double-quoted argument", `apply_patch "${PATCH}"`, "double-quoted"],
     [
       "a quoted heredoc in double quotes",
@@ -450,16 +450,31 @@ describe("readShellScript: quoting", () => {
     ["double-quoted", String.raw`domain = \"d\" \$x \\ \n`, String.raw`domain = "d" $x \ \n`],
     ["heredoc", String.raw`a \"b\" \$x \\ \``, String.raw`a \"b\" $x \ ` + "`"],
     ["heredoc", "cost in $ and $'x'", "cost in $ and $'x'"],
+    ["single-quoted", String.raw`a "b" $c \``, String.raw`a "b" $c \``],
+    ["single-quoted", String.raw`prompt = "Don'\''t"`, `prompt = "Don't"`],
+    ["single-quoted", `it'"'"'s`, "it's"],
+    ["double-quoted", 'domain = "d"', "domain = d"],
+    ["verbatim", "ends in \\", "ends in \\"],
   ] as const)("reads a line %s as the shell passes it", (quoting, line, read) => {
-    expect(lineAsRead(line, quoting)).toBe(read);
+    expect(linesAsRead([line], quoting)).toEqual([read]);
   });
 
   it.each([
     ["double-quoted", "prompt = $text"],
     ["heredoc", "prompt = ${text}"],
     ["heredoc", "now = `date`"],
-    ["double-quoted", 'domain = "d"'],
-  ] as const)("cannot tell a %s line holding an expansion or a closing quote", (quoting, line) => {
-    expect(lineAsRead(line, quoting)).toBeNull();
+    ["single-quoted", `a '$b' c`],
+  ] as const)("leaves out a %s line holding an expansion", (quoting, line) => {
+    expect(linesAsRead(["kept", line], quoting)).toEqual(["kept"]);
+  });
+
+  it.each([
+    ["single-quoted", "it's"],
+    ["single-quoted", "a' b'"],
+    ["double-quoted", 'a = "b'],
+    ["double-quoted", "joined \\"],
+    ["heredoc", "joined \\"],
+  ] as const)("gives no line of a %s section once one leaves its quoting", (quoting, line) => {
+    expect(linesAsRead(["first", line, "last"], quoting)).toEqual([]);
   });
 });

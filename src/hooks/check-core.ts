@@ -18,7 +18,7 @@
 import { isAbsolute as isAbsolutePath, resolve as resolvePath } from "node:path";
 import type { Diagnostic, ValidationErrorItem } from "../models.js";
 import { patchTargets, readPatchSections, type PatchSection } from "./patch-envelope.js";
-import { lineAsRead, readShellScript } from "./shell-script.js";
+import { linesAsRead, readShellScript } from "./shell-script.js";
 
 /** Verdict of the local lint stage. `unavailable` = engine failed to load. */
 export type LintStage =
@@ -167,12 +167,8 @@ export function extractCodexMthdsTargets(stdinJson: string, processCwd: string):
         return placement.kind === "directory" ? placement.path : null;
       };
       readByPatch = (section) => placements.get(section)!.kind !== "unread";
-      addedLinesOf = (section) => {
-        const quoting = reading.quotingAt(section.offset);
-        return section.addedLines
-          .map((line) => lineAsRead(line, quoting))
-          .filter((line) => line !== null);
-      };
+      addedLinesOf = (section) =>
+        linesAsRead(section.addedLines, reading.quotingAt(section.offset));
     }
   }
 

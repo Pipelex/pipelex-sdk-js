@@ -409,6 +409,16 @@ describe("extractCodexMthdsTargets", () => {
       ).toEqual([['domain = \\"d\\"', "prompt = \\$text", "now = $(date)", "plain"]]);
     });
 
+    it("reads the added lines of a single-quoted patch through its apostrophes", () => {
+      const quoted = PATCH.replace("broken.mthds", "/abs/broken.mthds").replace(
+        "+x",
+        `+prompt = "Don'\\''t"`,
+      );
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch '${quoted}'\n`), HOOK_CWD).targets,
+      ).toMatchObject([{ path: "/abs/broken.mthds", addedLines: [[`prompt = "Don't"`]] }]);
+    });
+
     it("lists a patch held in a variable and applied later as unplaced", () => {
       const script = `PATCH=$(cat <<'EOF'\n${PATCH}\nEOF\n)\ncd sub && apply_patch "$PATCH"\n`;
       expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({

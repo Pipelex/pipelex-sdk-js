@@ -56,8 +56,10 @@ export type Placement =
 
 /** How the shell turns a stretch of the script into the text a command reads. */
 export type Quoting =
-  /** As written: in single quotes, in a quoted heredoc, or plain. */
+  /** As written: in a quoted heredoc, or plain. */
   | "verbatim"
+  /** In single quotes: as written, up to the `'` that closes them. */
+  | "single-quoted"
   /** In double quotes: a backslash escapes `$`, a backtick, `"` or itself, and `$` and backticks expand. */
   | "double-quoted"
   /** In an unquoted heredoc: a backslash escapes `$`, a backtick or itself, and `$` and backticks expand. */
@@ -122,32 +124,94 @@ function innermost<T extends { start: number; end: number }>(spans: T[], offset:
 }
 
 /**
- * A line of the script as a command reads it, given the quoting it is in, or
- * null when an expansion, or a quote closing mid-line, makes that unknown.
+ * The lines of a patch section as the patch command reads them, given the
+ * quoting its header is in, less any line an expansion makes unknown. A line
+ * in quotes may close them and open others, as `'\''` writes an apostrophe in
+ * single quotes, and is read through each. When a line ends in other quoting
+ * than it began in, or in a backslash that joins it to the next, the lines
+ * after it are read in quoting this reading does not follow, so no line of
+ * the section is known and none is given.
  */
-export function lineAsRead(line: string, quoting: Quoting): string | null {
+export function linesAsRead(lines: readonly string[], quoting: Quoting): string[] {
+  const read: string[] = [];
+  for (const line of lines) {
+    const asRead = lineAsRead(line, quoting);
+    if (asRead === LOST) {
+      return [];
+    }
+    if (asRead !== null) {
+      read.push(asRead);
+    }
+  }
+  return read;
+}
+
+/** What `lineAsRead` gives when the quoting after the line is not the one it began in. */
+const LOST = Symbol("lost");
+
+/** A character after `$` that makes an expansion of it. */
+const EXPANSION_START = /[\w{(@*#?$!-]/;
+
+/** A character that ends an unquoted word, or may expand it. */
+const UNQUOTED_BREAK = /[\s;&|<>()*?[\]{}$]/;
+
+/**
+ * One line as read, starting in `quoting`: null when an expansion makes it
+ * unknown, and `LOST` when it does not end in the quoting it began in.
+ */
+function lineAsRead(line: string, quoting: Quoting): string | null | typeof LOST {
   if (quoting === "verbatim") {
     return line;
   }
-  const escapable = quoting === "double-quoted" ? '$`"\\' : "$`\\";
+  const initial =
+    quoting === "single-quoted" ? "single" : quoting === "double-quoted" ? "double" : "heredoc";
+  let state: "single" | "double" | "heredoc" | "unquoted" = initial;
   let read = "";
+  let known = true;
   for (let index = 0; index < line.length; index++) {
     const char = line[index]!;
     const next = line[index + 1];
-    if (char === "\\" && next !== undefined && escapable.includes(next)) {
-      read += next;
-      index++;
-    } else if (
-      char === "`" ||
-      (char === "$" && next !== undefined && /[\w{(@*#?$!-]/.test(next)) ||
-      (char === '"' && quoting === "double-quoted")
-    ) {
-      return null;
+    if (state === "single") {
+      if (char === "'") {
+        state = "unquoted";
+      } else {
+        read += char;
+      }
+    } else if (char === "\\") {
+      if (next === undefined) {
+        return LOST; // the shell removes it with the newline, joining the next line to this one
+      }
+      const escapable = state === "double" ? '$`"\\' : state === "heredoc" ? "$`\\" : next;
+      if (escapable.includes(next)) {
+        read += next;
+        index++;
+      } else {
+        read += char;
+      }
+    } else if (char === "`" || (char === "$" && next !== undefined && EXPANSION_START.test(next))) {
+      known = false;
+    } else if (state === "heredoc") {
+      read += char;
+    } else if (state === "double") {
+      if (char === '"') {
+        state = "unquoted";
+      } else {
+        read += char;
+      }
+    } else if (char === "'") {
+      state = "single";
+    } else if (char === '"') {
+      state = "double";
+    } else if (UNQUOTED_BREAK.test(char)) {
+      return LOST;
     } else {
       read += char;
     }
   }
-  return read;
+  if (state !== initial) {
+    return LOST;
+  }
+  return known ? read : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -785,7 +849,7 @@ class ScriptParser {
         }
         word.value += this.src.slice(this.pos + 1, close);
         word.quoted = true;
-        this.quoted.push({ start: this.pos, end: close + 1, quoting: "verbatim" });
+        this.quoted.push({ start: this.pos, end: close + 1, quoting: "single-quoted" });
         this.pos = close + 1;
       } else if (char === '"') {
         this.readDoubleQuoted(word);
