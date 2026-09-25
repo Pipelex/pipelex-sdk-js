@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.25.1] - 2026-09-25
+
+### Fixed
+
+- **The README and `docs/architecture.md` no longer list a gateway key**: their account of the Pipelex product routes still named the gateway key surface that v0.25.0 removed, so the package page and the shipped architecture doc now describe the client as it is.
+
 ## [v0.25.0] - 2026-09-25
 
 ### Fixed
