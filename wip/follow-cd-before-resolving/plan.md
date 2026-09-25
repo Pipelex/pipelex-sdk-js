@@ -1,5 +1,5 @@
 ---
-status: active
+status: landed
 item: L-260924-bdb054
 ---
 
@@ -129,3 +129,7 @@ Verification against `dist-hooks/check.mjs` built at this SHA, with `PIPELEX_API
 3. The same patch with no `cd`, standing in for `exec_command`'s `workdir`, with the same two files: no block, the note "The .mthds hook did not check `broken.mthds`: it could not confirm which file this shell command patched. …" as `additionalContext`, and `project/broken.mthds` still `42ccfb14`.
 4. A pure deletion after `cd sub`, with valid files in both directories: the note, and `project/broken.mthds` still `42ccfb14`.
 5. Control: an `apply_patch` tool payload with a pure deletion, the hook run from an empty directory: it blocked on the session directory's broken file, anchored on the payload's `cwd`, with no content check.
+
+### Landed, 2026-09-25
+
+Pull request #73 was squash-merged into `dev` as `6c68283` after three recorded `/rev` passes at profile 4 (rounds 2 and 3 on the pull request, the Decisions log above), and `/ledger-land` closed L-260924-bdb054. Round 4, at the `freeze` bar, was not run: Louis chose to merge on the recorded passes. No `@pipelex/sdk` release is needed, since the tarball does not ship the bundle; the merge on `dev` is what `pipelex-plugins` re-vendors from, so L-260924-dd7bf2 is now unblocked. The deferred findings of round 3 are known limits in `docs/hook-bundle.md` and in the design.
