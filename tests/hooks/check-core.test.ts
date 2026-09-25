@@ -9,11 +9,15 @@ import {
   decideAfterLint,
   decideAfterValidate,
   encodeOutcome,
-  extractCodexMthdsFiles,
+  extractCodexMthdsTargets,
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
+  carriesAddedLines,
+  selectCodexTargets,
   truncate,
+  uncheckedShellPatchNote,
+  type CodexMthdsTarget,
 } from "../../src/hooks/check-core.js";
 import type { Diagnostic, ValidationErrorItem } from "../../src/models.js";
 
@@ -204,29 +208,395 @@ describe("extractMthdsFilePath", () => {
   });
 });
 
-describe("extractCodexMthdsFiles", () => {
-  const envelope = (body: string) => JSON.stringify({ tool_input: { command: body } });
+describe("extractCodexMthdsTargets", () => {
+  const HOOK_CWD = "/hook-cwd";
+  const envelope = (body: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ tool_name: "apply_patch", tool_input: { command: body }, ...extra });
+  const paths = (stdinJson: string) =>
+    extractCodexMthdsTargets(stdinJson, HOOK_CWD).targets.map((target) => target.path);
 
-  it("extracts Update/Add/Move-to targets, deduped", () => {
-    const files = extractCodexMthdsFiles(
-      envelope(
-        "*** Begin Patch\n*** Update File: a.mthds\n@@\n*** Add File: sub/b.mthds\n" +
-          "*** Update File: a.mthds\n*** Move to: c.mthds\n*** End Patch\n",
-      ),
+  it("extracts the files the patch leaves on disk, a moved file by its destination", () => {
+    const stdin = envelope(
+      "*** Begin Patch\n*** Update File: a.mthds\n@@\n*** Add File: sub/b.mthds\n+x\n" +
+        "*** Update File: a.mthds\n*** Move to: c.mthds\n*** End Patch\n",
+      { cwd: "/work" },
     );
-    expect(files).toEqual(["a.mthds", "sub/b.mthds", "c.mthds"]);
+    expect(paths(stdin)).toEqual(["/work/sub/b.mthds", "/work/c.mthds"]);
   });
 
-  it("skips Delete File and Move from headers, and non-mthds files", () => {
-    const files = extractCodexMthdsFiles(
-      envelope("*** Delete File: gone.mthds\n*** Move from: old.mthds\n*** Update File: code.py\n"),
+  it("carries the path as written and the added lines", () => {
+    const { targets } = extractCodexMthdsTargets(
+      envelope("*** Update File: sub/a.mthds\n@@\n-old\n+new\n", { cwd: "/work" }),
+      HOOK_CWD,
     );
-    expect(files).toEqual([]);
+    expect(targets).toEqual([
+      {
+        path: "/work/sub/a.mthds",
+        writtenAs: "sub/a.mthds",
+        addedLines: [["new"]],
+        removedByPatch: false,
+        confirm: null,
+      },
+    ]);
+  });
+
+  it("skips deleted files, Move from headers, and non-mthds files", () => {
+    const stdin = envelope(
+      "*** Delete File: gone.mthds\n*** Move from: old.mthds\n*** Update File: code.py\n",
+    );
+    expect(paths(stdin)).toEqual([]);
+  });
+
+  it("keeps an absolute path as it is", () => {
+    expect(paths(envelope("*** Update File: /abs/a.mthds\n+x\n", { cwd: "/work" }))).toEqual([
+      "/abs/a.mthds",
+    ]);
+  });
+
+  it("anchors relative paths on the payload's cwd when it is absolute", () => {
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: "/session" }))).toEqual([
+      "/session/a.mthds",
+    ]);
+  });
+
+  it("falls back to the hook's working directory when cwd is missing or relative", () => {
+    expect(paths(envelope("*** Update File: a.mthds\n"))).toEqual(["/hook-cwd/a.mthds"]);
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: "session" }))).toEqual([
+      "/hook-cwd/a.mthds",
+    ]);
+    expect(paths(envelope("*** Update File: a.mthds\n", { cwd: 42 }))).toEqual([
+      "/hook-cwd/a.mthds",
+    ]);
   });
 
   it("returns empty on unparseable input or missing command", () => {
-    expect(extractCodexMthdsFiles("not json")).toEqual([]);
-    expect(extractCodexMthdsFiles(JSON.stringify({ tool_input: {} }))).toEqual([]);
+    expect(paths("not json")).toEqual([]);
+    expect(paths(JSON.stringify({ tool_input: {} }))).toEqual([]);
+  });
+
+  describe("a patch run through the shell", () => {
+    const PATCH = "*** Begin Patch\n*** Update File: broken.mthds\n@@\n+x\n*** End Patch";
+    const shell = (script: string) =>
+      JSON.stringify({ tool_name: "Bash", cwd: "/work", tool_input: { command: script } });
+
+    it("resolves a relative path against the directory the script moved to", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd sub && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result).toEqual({
+        fromShell: true,
+        targets: [
+          {
+            path: "/work/sub/broken.mthds",
+            writtenAs: "broken.mthds",
+            addedLines: [["x"]],
+            removedByPatch: false,
+            confirm: "carried",
+          },
+        ],
+        unplaced: [],
+      });
+    });
+
+    it("lists a relative path under an unknown directory as unplaced", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd "$DIR" && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result).toEqual({ fromShell: true, targets: [], unplaced: ["broken.mthds"] });
+    });
+
+    it("lists every relative path of a script it cannot read as unplaced", () => {
+      const result = extractCodexMthdsTargets(
+        shell(`cd 'sub && apply_patch <<'PATCH'\n${PATCH}\nPATCH\n`),
+        HOOK_CWD,
+      );
+      expect(result.unplaced).toEqual(["broken.mthds"]);
+      expect(result.targets).toEqual([]);
+    });
+
+    it("keeps an absolute path wherever the script ran", () => {
+      const result = extractCodexMthdsTargets(
+        shell(
+          `cd "$DIR" && apply_patch <<'PATCH'\n${PATCH.replace("broken.mthds", "/abs/broken.mthds")}\nPATCH\n`,
+        ),
+        HOOK_CWD,
+      );
+      expect(result.targets).toMatchObject([{ path: "/abs/broken.mthds", confirm: "unrefuted" }]);
+      expect(result.unplaced).toEqual([]);
+    });
+
+    const DELETE = "*** Begin Patch\n*** Delete File: broken.mthds\n*** End Patch";
+
+    it("keeps a file one patch edits and another deletes, compared by resolved path", () => {
+      const script =
+        `cd sub && apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `cd .. && apply_patch <<'P2'\n${DELETE.replace("broken", "sub/broken")}\nP2\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/sub/broken.mthds", removedByPatch: true },
+      ]);
+    });
+
+    it("keeps an edit when a patch in another unknown directory deletes the same name", () => {
+      const script =
+        `cd "$A" && apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `cd "$B" && apply_patch <<'P2'\n${DELETE}\nP2\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({
+        fromShell: true,
+        targets: [],
+        unplaced: ["broken.mthds"],
+      });
+    });
+
+    it("keeps an edit made in one branch and deleted in the other", () => {
+      const script =
+        `if test -f x; then apply_patch <<'P1'\n${PATCH}\nP1\n` +
+        `else apply_patch <<'P2'\n${DELETE}\nP2\nfi\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/broken.mthds", addedLines: [["x"]], removedByPatch: true },
+      ]);
+    });
+
+    it("confirms an absolute path that no patch command reads against its added lines", () => {
+      const absolute = PATCH.replace("broken.mthds", "/abs/broken.mthds");
+      const staged = `cat > /tmp/p <<'EOF'\n${absolute}\nEOF\n`;
+      expect(extractCodexMthdsTargets(shell(staged), HOOK_CWD).targets).toMatchObject([
+        { path: "/abs/broken.mthds", confirm: "carried" },
+      ]);
+      const unparsed = `cd 'sub && apply_patch <<'EOF'\n${absolute}\nEOF\n`;
+      expect(extractCodexMthdsTargets(shell(unparsed), HOOK_CWD).targets).toMatchObject([
+        { path: "/abs/broken.mthds", confirm: "carried" },
+      ]);
+    });
+
+    it("asks an absolute path a patch command reads not to lack its lines, in any branch", () => {
+      const absolute = PATCH.replace("broken.mthds", "/abs/broken.mthds");
+      for (const script of [
+        `apply_patch <<'EOF'\n${absolute}\nEOF\n`,
+        `if false; then apply_patch <<'EOF'\n${absolute}\nEOF\nfi\n`,
+        `f() { apply_patch <<'EOF'\n${absolute}\nEOF\n}\n`,
+      ]) {
+        expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+          { path: "/abs/broken.mthds", confirm: "unrefuted" },
+        ]);
+      }
+    });
+
+    it("keeps apart the patches passed as quoted arguments", () => {
+      const add = "*** Begin Patch\n*** Add File: a.mthds\n+x\n*** End Patch";
+      const remove = "*** Begin Patch\n*** Delete File: a.mthds\n*** End Patch";
+      const script = `cd sub\napply_patch '${add}'\nif false; then apply_patch '${remove}'; fi\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD).targets).toMatchObject([
+        { path: "/work/sub/a.mthds", addedLines: [["x"]], removedByPatch: true },
+      ]);
+    });
+
+    it("reads the added lines through the shell's quoting", () => {
+      const lines = '+domain = \\"d\\"\n+prompt = \\$text\n+now = $(date)\n+plain';
+      const quoted = PATCH.replace("+x", lines);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch "${quoted}"\n`), HOOK_CWD).targets[0]!
+          .addedLines,
+      ).toEqual([['domain = "d"', "prompt = $text", "plain"]]);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch <<EOF\n${quoted}\nEOF\n`), HOOK_CWD).targets[0]!
+          .addedLines,
+      ).toEqual([['domain = \\"d\\"', "prompt = $text", "plain"]]);
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch <<'EOF'\n${quoted}\nEOF\n`), HOOK_CWD)
+          .targets[0]!.addedLines,
+      ).toEqual([['domain = \\"d\\"', "prompt = \\$text", "now = $(date)", "plain"]]);
+    });
+
+    it("reads the added lines of a single-quoted patch through its apostrophes", () => {
+      const quoted = PATCH.replace("broken.mthds", "/abs/broken.mthds").replace(
+        "+x",
+        `+prompt = "Don'\\''t"`,
+      );
+      expect(
+        extractCodexMthdsTargets(shell(`apply_patch '${quoted}'\n`), HOOK_CWD).targets,
+      ).toMatchObject([{ path: "/abs/broken.mthds", addedLines: [[`prompt = "Don't"`]] }]);
+    });
+
+    it("lists a patch held in a variable and applied later as unplaced", () => {
+      const script = `PATCH=$(cat <<'EOF'\n${PATCH}\nEOF\n)\ncd sub && apply_patch "$PATCH"\n`;
+      expect(extractCodexMthdsTargets(shell(script), HOOK_CWD)).toEqual({
+        fromShell: true,
+        targets: [],
+        unplaced: ["broken.mthds"],
+      });
+    });
+
+    it("reads the apply_patch tool's patch as the session directory's, whatever it holds", () => {
+      const stdin = envelope(`cd sub\n${PATCH}\n`, { cwd: "/work" });
+      expect(extractCodexMthdsTargets(stdin, HOOK_CWD)).toEqual({
+        fromShell: false,
+        targets: [
+          {
+            path: "/work/broken.mthds",
+            writtenAs: "broken.mthds",
+            addedLines: [["x"]],
+            removedByPatch: false,
+            confirm: null,
+          },
+        ],
+        unplaced: [],
+      });
+    });
+
+    it("reads a payload with no tool_name as the apply_patch tool's", () => {
+      const stdin = JSON.stringify({ cwd: "/work", tool_input: { command: `cd sub\n${PATCH}` } });
+      expect(extractCodexMthdsTargets(stdin, HOOK_CWD).targets[0]!.path).toBe("/work/broken.mthds");
+    });
+  });
+});
+
+describe("carriesAddedLines", () => {
+  const CONTENT = 'domain = "demo"\n\n[pipe.a]\ntype = "PipeLLM"   \nprompt = "x"\n';
+
+  it("finds the added lines in order, with other lines between them", () => {
+    expect(carriesAddedLines(CONTENT, ['domain = "demo"', 'prompt = "x"'])).toBe(true);
+  });
+
+  it("refuses lines out of order, or one the file does not hold", () => {
+    expect(carriesAddedLines(CONTENT, ['prompt = "x"', 'domain = "demo"'])).toBe(false);
+    expect(carriesAddedLines(CONTENT, ['domain = "demo"', 'prompt = "y"'])).toBe(false);
+  });
+
+  it("ignores trailing whitespace on either side, and keeps leading whitespace", () => {
+    expect(carriesAddedLines(CONTENT, ['type = "PipeLLM"', 'prompt = "x"  '])).toBe(true);
+    expect(carriesAddedLines(CONTENT, ['  prompt = "x"'])).toBe(false);
+  });
+
+  it("skips blank added lines", () => {
+    expect(carriesAddedLines(CONTENT, ["", "[pipe.a]", "   ", 'prompt = "x"'])).toBe(true);
+  });
+
+  it("reads CRLF content", () => {
+    expect(carriesAddedLines(CONTENT.replaceAll("\n", "\r\n"), ["[pipe.a]", 'prompt = "x"'])).toBe(
+      true,
+    );
+  });
+
+  it("finds no evidence in a section that adds no line, or only blank ones", () => {
+    expect(carriesAddedLines(CONTENT, [])).toBe(false);
+    expect(carriesAddedLines(CONTENT, ["", "  "])).toBe(false);
+  });
+});
+
+describe("selectCodexTargets", () => {
+  const target = (overrides: Partial<CodexMthdsTarget> = {}): CodexMthdsTarget => ({
+    path: "/work/sub/a.mthds",
+    writtenAs: "a.mthds",
+    addedLines: [["added"]],
+    removedByPatch: false,
+    confirm: "carried",
+    ...overrides,
+  });
+  const select = (
+    targets: CodexMthdsTarget[],
+    files: Record<string, string>,
+    unplaced: string[] = [],
+  ) => selectCodexTargets({ fromShell: true, targets, unplaced }, (path) => files[path] ?? null);
+
+  it("checks a file that carries the patch's added lines", () => {
+    expect(select([target()], { "/work/sub/a.mthds": "x\nadded\n" })).toEqual({
+      targets: ["/work/sub/a.mthds"],
+      unchecked: [],
+    });
+  });
+
+  it("names a file that does not carry them, rather than checking it", () => {
+    expect(select([target()], { "/work/sub/a.mthds": "other\n" })).toEqual({
+      targets: [],
+      unchecked: ["a.mthds"],
+    });
+  });
+
+  it("names a missing file, unless the patch itself removed it", () => {
+    expect(select([target()], {}).unchecked).toEqual(["a.mthds"]);
+    expect(select([target({ removedByPatch: true })], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("names a file whose sections add no line, since nothing confirms it", () => {
+    const selected = select([target({ addedLines: [[]] })], { "/work/sub/a.mthds": "x\n" });
+    expect(selected).toEqual({ targets: [], unchecked: ["a.mthds"] });
+  });
+
+  it("checks a file that carries the lines of any envelope that wrote it", () => {
+    const selected = select([target({ addedLines: [["first"], ["second"]] })], {
+      "/work/sub/a.mthds": "second\n",
+    });
+    expect(selected.targets).toHaveLength(1);
+  });
+
+  it("checks a target that needs no confirming whenever its file exists", () => {
+    const unconfirmed = target({ confirm: null, addedLines: [[]] });
+    expect(select([unconfirmed], { "/work/sub/a.mthds": "x\n" }).targets).toHaveLength(1);
+    expect(select([unconfirmed], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("drops an absolute path it could not confirm without naming it", () => {
+    const absolute = target({ path: "/abs/a.mthds", writtenAs: "/abs/a.mthds" });
+    expect(select([absolute], { "/abs/a.mthds": "other\n" })).toEqual({
+      targets: [],
+      unchecked: [],
+    });
+    expect(select([absolute], {})).toEqual({ targets: [], unchecked: [] });
+    expect(select([absolute], { "/abs/a.mthds": "added\n" }).targets).toHaveLength(1);
+  });
+
+  it("checks an absolute path a patch command reads unless its file lacks the added lines", () => {
+    const absolute = (addedLines: string[][]) =>
+      target({ path: "/abs/a.mthds", writtenAs: "/abs/a.mthds", confirm: "unrefuted", addedLines });
+    const lacking = { "/abs/a.mthds": "other\n" };
+    expect(select([absolute([["added"]])], lacking)).toEqual({ targets: [], unchecked: [] });
+    expect(select([absolute([["added"]])], { "/abs/a.mthds": "added\n" }).targets).toHaveLength(1);
+    expect(select([absolute([[]])], lacking).targets).toHaveLength(1);
+    expect(select([absolute([["added"], [""]])], lacking).targets).toHaveLength(1);
+    expect(select([absolute([["added"]])], {})).toEqual({ targets: [], unchecked: [] });
+  });
+
+  it("names the unplaced paths too, each once", () => {
+    const selected = select([target()], {}, ["a.mthds", "b.mthds"]);
+    expect(selected.unchecked).toEqual(["a.mthds", "b.mthds"]);
+  });
+});
+
+describe("uncheckedShellPatchNote", () => {
+  it("names one file", () => {
+    expect(uncheckedShellPatchNote(["broken.mthds"])).toEqual({
+      kind: "context",
+      context:
+        "The .mthds hook did not check `broken.mthds`: it could not confirm which file this " +
+        "shell command patched. Name the file by its absolute path, or edit it with the " +
+        "apply_patch tool, and the hook will check it.",
+    });
+  });
+
+  it("names several files", () => {
+    const note = uncheckedShellPatchNote(["a.mthds", "b.mthds", "c.mthds"]);
+    expect(note).toEqual({
+      kind: "context",
+      context:
+        "The .mthds hook did not check `a.mthds`, `b.mthds` and `c.mthds`: it could not " +
+        "confirm which files this shell command patched. Name the files by their absolute " +
+        "paths, or edit them with the apply_patch tool, and the hook will check them.",
+    });
+  });
+
+  it("gives way to a block from another file, and joins another file's context", () => {
+    const note = uncheckedShellPatchNote(["a.mthds"]);
+    expect(mergeOutcomes([note, { kind: "block", reason: "lint failed" }])).toEqual({
+      kind: "block",
+      reason: "lint failed",
+    });
+    const merged = mergeOutcomes([{ kind: "context", context: "pending signatures" }, note]);
+    expect(merged.kind).toBe("context");
+    expect(merged.kind === "context" && merged.context.startsWith("pending signatures\n\n")).toBe(
+      true,
+    );
   });
 });
 
