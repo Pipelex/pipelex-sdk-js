@@ -531,34 +531,6 @@ describe("pipelex api keys", () => {
   });
 });
 
-describe("gateway api key", () => {
-  it("POSTs /v1/gateway-api-key and ALWAYS sends a body even when promo_code is null", async () => {
-    const client = makeClient();
-    const spy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(jsonResponse(200, { gateway_api_key: "gw" }));
-
-    await client.createGatewayApiKey({ promo_code: null });
-
-    const [, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect(init.body).toBe(JSON.stringify({ promo_code: null }));
-    const headers = init.headers as Record<string, string>;
-    expect(headers["Content-Type"]).toBe("application/json");
-  });
-
-  it("GETs /v1/gateway-api-key status (null until provisioned)", async () => {
-    const client = makeClient();
-    const spy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(jsonResponse(200, { gateway_api_key: null }));
-
-    const result = await client.getGatewayApiKey();
-
-    expect(lastRequest(spy).url).toBe("http://localhost:8081/v1/gateway-api-key");
-    expect(result.gateway_api_key).toBeNull();
-  });
-});
-
 describe("onboarding", () => {
   it("POSTs /v1/onboarding/submit and tolerates an empty 2xx body", async () => {
     const client = makeClient();

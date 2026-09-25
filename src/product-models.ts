@@ -1,7 +1,7 @@
 /**
  * Pipelex-product wire models — the snake_case JSON shapes the hosted-product
  * routes (`/v1/me`, `/v1/methods`, `/v1/organizations`, `/v1/billing/*`,
- * `/v1/pipelex-api-keys`, `/v1/gateway-api-key`, `/v1/onboarding/submit`,
+ * `/v1/pipelex-api-keys`, `/v1/onboarding/submit`,
  * `/v1/resolve-storage-url`, `/v1/upload`, `/v1/upload/grant`, `/v1/runs`) speak.
  *
  * These are the management surface a consumer (today `pipelex-app`) hand-rolls.
@@ -227,18 +227,6 @@ export interface PipelexApiKeyCreated {
 
 export interface PipelexApiKeyList {
   keys: PipelexApiKey[];
-}
-
-// ── Gateway API key (`/v1/gateway-api-key`, Portkey/LLM inference key) ────
-
-export interface GatewayApiKey {
-  gateway_api_key: string;
-  budget_usd?: number;
-}
-
-export interface GatewayApiKeyStatus {
-  /** Null until a gateway key has been provisioned. */
-  gateway_api_key: string | null;
 }
 
 // ── Onboarding (`/v1/onboarding/submit`) ─────────────────────────────────

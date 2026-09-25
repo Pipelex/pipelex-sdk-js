@@ -185,8 +185,6 @@ export type {
   PipelexApiKey,
   PipelexApiKeyCreated,
   PipelexApiKeyList,
-  GatewayApiKey,
-  GatewayApiKeyStatus,
   OnboardingRole,
   OnboardingCurrentTool,
   OnboardingInputType,

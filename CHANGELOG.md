@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.25.0] - 2026-09-25
+
+### Fixed
+
+- **The `.mthds` check hook finds the file a Codex shell patch wrote**: for a patch Codex runs through the shell, the hook built by `npm run build:hook` follows the script's `cd`s, branches and scopes before resolving the patch's relative paths, where it used to read them against the session directory. It checks and formats such a file only when it holds the lines the patch added, as the shell passed them, so it no longer rewrites a same-named file the patch never touched, nor a file named by an absolute path in a patch the script only stored or never reached, and it names the files it could not check in a non-blocking note asking for an absolute path or the `apply_patch` tool. Relative paths now resolve against the payload's `cwd` rather than the hook's working directory.
+
+### Removed
+
+- **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
+
 ## [v0.24.0] - 2026-09-24
 
 ### Added

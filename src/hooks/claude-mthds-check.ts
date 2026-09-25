@@ -16,9 +16,17 @@
  * files — outcomes are merged, any block wins); Vibe reads the stable
  * `post_tool` payload (`tool_status` gate, path resolved against `cwd`).
  *
+ * A Codex patch run through the shell (`tool_name: "Bash"`) is placed by
+ * following the script's working directory. A file it names by a relative
+ * path, or by an absolute one no patch command reads, is checked only when it
+ * carries the patch's added lines, and one named by another absolute path
+ * only when it does not lack them. The relative paths it could not check are
+ * named in one non-blocking note, which a block from another file outranks
+ * (see docs/hook-bundle.md).
+ *
  * Failure posture (fail-open, per the networked-hook plan):
  * - no `.mthds` in the payload / unparseable stdin → pass silently
- * - WASM engine fails to load → whole hook unavailable → pass silently
+ * - WASM engine fails to load → no file is checked; the note above is still sent
  * - validate unavailable (no `PIPELEX_API_KEY`, network error, timeout, any
  *   non-2xx, bundle-gather overflow) → the local lint/format verdicts already
  *   applied; the validate stage passes silently
@@ -27,16 +35,18 @@
  * exit code.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import {
   decideAfterLint,
   decideAfterValidate,
   encodeOutcome,
-  extractCodexMthdsFiles,
+  extractCodexMthdsTargets,
   extractMthdsFilePath,
   extractVibeMthdsFilePath,
   mergeOutcomes,
+  selectCodexTargets,
+  uncheckedShellPatchNote,
   type HookOutcome,
   type HookPlatform,
   type LintStage,
@@ -70,8 +80,23 @@ function parsePlatform(argv: string[]): HookPlatform {
   return "claude";
 }
 
-/** The absolute paths of edited `.mthds` files that exist on disk, per platform. */
-function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
+/** A file's content, or null when there is no file to read. */
+function readFileOrNull(filePath: string): string | null {
+  try {
+    return readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The edited `.mthds` files to check, per platform, and the relative paths of
+ * a Codex shell patch the hook could not check.
+ */
+function resolveTargets(
+  platform: HookPlatform,
+  stdinJson: string,
+): { targets: string[]; unchecked: string[] } {
   let candidates: string[];
   switch (platform) {
     case "claude": {
@@ -79,10 +104,8 @@ function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
       candidates = filePath ? [filePath] : [];
       break;
     }
-    case "codex": {
-      candidates = extractCodexMthdsFiles(stdinJson).map((raw) => resolvePath(process.cwd(), raw));
-      break;
-    }
+    case "codex":
+      return selectCodexTargets(extractCodexMthdsTargets(stdinJson, process.cwd()), readFileOrNull);
     case "vibe": {
       const extracted = extractVibeMthdsFilePath(stdinJson);
       candidates = extracted
@@ -91,9 +114,7 @@ function resolveTargets(platform: HookPlatform, stdinJson: string): string[] {
       break;
     }
   }
-  // Deleted/renamed-away files have nothing to check (Codex envelopes list
-  // paths that may not survive the patch; Claude edits can race a delete).
-  return candidates.filter((filePath) => existsSync(filePath));
+  return { targets: candidates, unchecked: [] };
 }
 
 /**
@@ -176,13 +197,16 @@ function warn(message: string): void {
   writeFileSync(2, `[mthds-hook] ${message}\n`);
 }
 
-/** The full pipeline on one edited file: lint → format write-back → validate. */
+/**
+ * The full pipeline on one edited file: lint → format write-back → validate.
+ * The file is read here, when its turn comes, and no await separates the read
+ * from the write-back, so an edit made while an earlier file was validated is
+ * never overwritten with older content.
+ */
 async function checkOneFile(engine: ToolsWasmModule, filePath: string): Promise<HookOutcome> {
-  let content: string;
-  try {
-    content = readFileSync(filePath, "utf-8");
-  } catch {
-    return { kind: "pass" }; // file gone since the existence check — nothing to gate
+  const content = readFileOrNull(filePath);
+  if (content === null) {
+    return { kind: "pass" }; // a deleted file has nothing to check (an edit can race a delete)
   }
 
   // Stage 1 — local lint
@@ -212,21 +236,20 @@ async function checkOneFile(engine: ToolsWasmModule, filePath: string): Promise<
 
 async function main(): Promise<void> {
   const platform = parsePlatform(process.argv.slice(2));
-  const filePaths = resolveTargets(platform, await readStdin());
-  if (filePaths.length === 0) {
-    return;
-  }
-
-  let engine: ToolsWasmModule;
-  try {
-    engine = await loadEngine();
-  } catch {
-    return; // engine unavailable — whole hook fails open
-  }
+  const { targets, unchecked } = resolveTargets(platform, await readStdin());
 
   const outcomes: HookOutcome[] = [];
-  for (const filePath of filePaths) {
-    outcomes.push(await checkOneFile(engine, filePath));
+  if (targets.length > 0) {
+    // An engine that cannot load fails the checks open, and only them: the note needs none.
+    const engine = await loadEngine().catch(() => null);
+    if (engine) {
+      for (const target of targets) {
+        outcomes.push(await checkOneFile(engine, target));
+      }
+    }
+  }
+  if (unchecked.length > 0) {
+    outcomes.push(uncheckedShellPatchNote(unchecked));
   }
   emit(mergeOutcomes(outcomes), platform);
 }
