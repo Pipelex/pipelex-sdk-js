@@ -95,9 +95,9 @@ export interface MigrationErrorBlock {
  *
  * **Branch on `error_domain`, `type_uri` and `retryable`**, never on the wording of `message`.
  * `error_type` is the runner's open-ended exception class name: finer than `error_domain`,
- * useful in a support line, but not a closed set to match against. A run failure's report names
- * the root fault rather than the outermost wrapper, and its `message` names the failing pipe and
- * its path from the entry pipe before the fault's own message.
+ * useful in a support line, but not a closed set to match against. Which fault's identity a run
+ * failure's report carries, and how its `message` names the failing pipe, is the runner's to
+ * decide; read them as given.
  *
  * A report is `null` where the run has none — a cancelled, terminated or timed-out run, or one
  * the platform finalized itself — so the absence of a report says nothing about why.

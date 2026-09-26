@@ -1,15 +1,18 @@
 /**
  * A failed run's stored report and a problem document's members, carried whole.
  *
- * The bodies under `fixtures/problems/` are recorded, not hand-written:
+ * The bodies under `fixtures/problems/` are recorded rather than written by hand. The code that
+ * produced them ran in-process: pipelex-server's `platform` package behind a FastAPI
+ * `TestClient`, and `pipelex`'s own error classes. Only the fault itself was chosen, a model the
+ * inference gateway refuses.
  *
- * - `results-409-failed.json` and `results-409-cancelled.json` are what the platform's own error
- *   handler rendered for `RunFinishedWithoutResultError` (pipelex-server's `platform` package,
- *   run in-process through a FastAPI `TestClient`), the first carrying a runner's VERBOSE
- *   `ErrorReport` as it reads back from the run store — which is why its
- *   `provider_metadata.status_code` and `retry_after_seconds` are strings.
- * - `runner-500-model-unavailable.json` is `pipelex`'s `ErrorReport.to_problem_document` for an
- *   inference failure, the body a runner answers `/v1/execute` with.
+ * - `results-409-failed.json` and `results-409-cancelled.json` are what the platform's error
+ *   handler rendered for `RunFinishedWithoutResultError`. The first carries the VERBOSE report
+ *   `pipelex` builds for an `LLMCompletionError` (with its next step and provider metadata),
+ *   read back the way the run store hands it over, every number a `Decimal` — which is why its
+ *   `provider_metadata.status_code` and `retry_after_seconds` arrive as strings.
+ * - `runner-500-model-unavailable.json` is `ErrorReport.to_problem_document` for the same fault,
+ *   the body a runner answers `/v1/execute` with.
  * - `platform-422-field-errors.json` is the platform's request-validation `422`, with `errors[]`.
  */
 
@@ -82,7 +85,7 @@ describe("the results read's 409 — a failed run's report", () => {
   it("yields a failed arm carrying the whole report, typed, and the status from the body", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      problemResponse(409, FAILED_409, { "X-Request-ID": "2b33a25e1a8347229404aaeec813f915" }),
+      problemResponse(409, FAILED_409, { "X-Request-ID": String(FAILED_409.request_id) }),
     );
 
     const state = await client.getRunResult("run-1");
@@ -98,10 +101,15 @@ describe("the results read's 409 — a failed run's report", () => {
     expect(state.error?.retryable).toBe(false);
     expect(state.error?.user_action).toEqual({
       kind: "change_model",
-      detail: "Choose a model the gateway serves, e.g. one listed by `pipelex-agent models`.",
+      detail:
+        "This model is not enabled on the inference gateway; choose another model for the pipe.",
     });
-    expect(state.error?.type_uri).toBe("https://pipelex.com/errors/pipe-run-error");
-    expect(state.error?.provider_metadata?.status_code).toBe("404");
+    expect(state.error?.type_uri).toBe(
+      "https://docs.pipelex.com/latest/errors/llm-completion-error/",
+    );
+    expect(state.error?.model).toBe("claude-4.8-opus");
+    // The run store hands its numbers back as decimals, which the platform serves as strings.
+    expect(state.error?.provider_metadata?.status_code).toBe("412");
     expectTypeOf<
       Extract<RunResultState, { state: "failed" }>["error"]
     >().toEqualTypeOf<RunErrorReport | null>();
@@ -122,7 +130,7 @@ describe("the results read's 409 — a failed run's report", () => {
     });
   });
 
-  it("reads the status from `run_status`, never from the sentence", async () => {
+  it("reads the status from `run_status` first, and from the sentence only without it", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
@@ -132,27 +140,44 @@ describe("the results read's 409 — a failed run's report", () => {
           run_status: "TIMED_OUT",
         }),
       )
-      // A 409 with no `run_status` (a stored result the route refuses to read) reads as FAILED,
-      // whatever word its sentence happens to hold.
+      // What a platform that predates `run_status` answers for a terminated run.
+      .mockResolvedValueOnce(
+        problemResponse(409, {
+          type: "https://pipelex.com/errors/conflict",
+          title: "Conflict",
+          status: 409,
+          code: "conflict",
+          detail: "Run finished with status TERMINATED; no result available",
+          errors: [],
+        }),
+      )
+      // The 409 the route answers for a stored result it refuses to read names no status.
       .mockResolvedValueOnce(
         problemResponse(409, {
           type: "https://pipelex.com/errors/conflict",
           code: "conflict",
-          detail: "Run finished with status TERMINATED; no result available",
+          detail: "Conflict",
         }),
       );
 
     const fromMember = await client.getRunResult("run-1");
-    const withoutMember = await client.getRunResult("run-2");
+    const fromSentence = await client.getRunResult("run-2");
+    const fromNeither = await client.getRunResult("run-3");
 
     expect(fromMember).toMatchObject({ state: "failed", status: "TIMED_OUT", error: null });
-    expect(withoutMember).toMatchObject({ state: "failed", status: "FAILED", error: null });
+    expect(fromSentence).toMatchObject({ state: "failed", status: "TERMINATED", error: null });
+    expect(fromNeither).toMatchObject({ state: "failed", status: "FAILED", error: null });
   });
 
   it("reads an unknown status or a non-object report as absent", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      problemResponse(409, { ...FAILED_409, run_status: "EXPLODED", error: "not a report" }),
+      problemResponse(409, {
+        ...FAILED_409,
+        detail: "Run finished with status EXPLODED",
+        run_status: "EXPLODED",
+        error: "not a report",
+      }),
     );
 
     const state = await client.getRunResult("run-1");
@@ -276,10 +301,13 @@ describe("ApiResponseError — the problem document's members", () => {
     expect(e.retryable).toBe(false);
     expect(e.userAction).toEqual({
       kind: "change_model",
-      detail: "Pick a model your backend serves; `pipelex-agent models` lists them.",
+      detail:
+        "This model is not enabled on the inference gateway; choose another model for the pipe.",
     });
-    expect(e.model).toBe("gpt-6-astra");
-    expect(e.provider).toBe("openai");
+    expect(e.model).toBe("claude-4.8-opus");
+    expect(e.provider).toBe("pipelex_gateway");
+    // A runner renders the provider's numbers as numbers.
+    expect(e.providerMetadata?.status_code).toBe(412);
     expect(e.providerMetadata).toEqual(RUNNER_500.provider_metadata);
     expect(e.code).toBeUndefined();
     expect(e.errors).toBeUndefined();

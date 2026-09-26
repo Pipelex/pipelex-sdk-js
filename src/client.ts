@@ -1261,8 +1261,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * - HTTP 202 → `running` (with the `Retry-After` hint)
    * - HTTP 200 → `completed` (with the result artifacts)
    * - HTTP 409 → `failed` (terminal non-`COMPLETED`), carrying the problem's `detail` as
-   *   `message`, its `run_status` member as `status` and its `error` member, the run's
-   *   stored error report, typed as `error`
+   *   `message`, its `run_status` member as `status` (recovered from `detail` on a platform
+   *   that predates the member) and its `error` member, the run's stored error report, typed
+   *   as `error`
    * - HTTP 503 → `running` (Temporal degraded — retry, never fail a poller)
    *
    * Throws `RunLifecycleUnavailableError` when the lifecycle routes are absent
@@ -2173,27 +2174,35 @@ const REQUEST_ID_HEADER = "x-request-id";
  * or `...; no result available` when the run has no report) and two extension members:
  * `run_status`, the run's terminal status — named so because a problem's own `status` is the
  * HTTP status — and `error`, the run's stored error report or `null`. The status is read from
- * `run_status`, never parsed back out of the sentence. A `409` without that member (the one
- * this route answers for a stored result it refuses to read, or one from a platform that
- * predates the member) or with a status this SDK does not know reads as `FAILED`, and its
- * `detail` still says what happened. The report is relayed whole, as the runner wrote it: an
- * object is taken as the report, anything else reads as no report.
+ * `run_status`. A platform that predates the member sends only `detail`, whose leading
+ * `Run finished with status <STATUS>` the platform keeps for exactly this reader, so the status
+ * word is recovered from it then; a `409` that yields no known status either way (the one this
+ * route answers for a stored result it refuses to read) reads as `FAILED`, and its `detail`
+ * still says what happened. The report is relayed whole, as the runner wrote it: an object is
+ * taken as the report, anything else reads as no report.
  */
 function runResultFailed(runId: string, body: string): RunResultState {
   const { serverMessage, document } = parseErrorBody(body);
-  const rawStatus = document?.run_status;
-  const status =
-    typeof rawStatus === "string" && (KNOWN_RUN_STATUSES as readonly string[]).includes(rawStatus)
-      ? (rawStatus as RunStatus)
-      : "FAILED";
+  const message = serverMessage ?? "Run finished without a result.";
   const rawReport = document?.error;
   return {
     state: "failed",
     pipeline_run_id: runId,
-    status,
-    message: serverMessage ?? "Run finished without a result.",
+    status: knownRunStatus(document?.run_status) ?? statusFromDetail(message) ?? "FAILED",
+    message,
     error: isPlainObject(rawReport) ? (rawReport as RunErrorReport) : null,
   };
+}
+
+function knownRunStatus(value: unknown): RunStatus | undefined {
+  return typeof value === "string" && (KNOWN_RUN_STATUSES as readonly string[]).includes(value)
+    ? (value as RunStatus)
+    : undefined;
+}
+
+/** The status word of a `detail` reading `Run finished with status <STATUS>…`, for a platform without `run_status`. */
+function statusFromDetail(detail: string): RunStatus | undefined {
+  return knownRunStatus(/status\s+([A-Z_]+)/.exec(detail)?.[1]);
 }
 
 /**

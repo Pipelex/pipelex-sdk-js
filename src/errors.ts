@@ -347,7 +347,8 @@ export class PipelineExecuteTimeoutError extends PipelineRequestError {
  * download when the platform answers the results read with HTTP 409. (`getRunResult` returns
  * the same facts as its `failed` arm instead of throwing.)
  *
- * - `status` is the run's terminal status, read from the problem's `run_status` member.
+ * - `status` is the run's terminal status, read from the problem's `run_status` member, or from
+ *   its `detail` sentence on a platform that predates the member.
  * - `error` is the run's stored error report, typed whole as `RunErrorReport`: the runner's
  *   `error_type`, `message`, `title`, `type_uri`, `error_domain`, `error_category`,
  *   `retryable`, `user_action`, `model`, `provider`, `provider_metadata`, `validation_errors`

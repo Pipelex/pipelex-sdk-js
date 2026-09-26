@@ -65,11 +65,11 @@ export function isSuccessRunStatus(status: RunStatus): boolean {
 /**
  * A run record — the BASE shape of the run-lifecycle read surface.
  *
- * Only the base fields are declared. An implementation may return more
- * (identity, workflow ids, storage URLs, anything else) — those are
- * server-specific response fields, never named in this SDK; the index
- * signature keeps them accessible, mirroring the request-side `extra`
- * passthrough.
+ * The base fields are declared, and so is `error`, the stored report of a failed run, which
+ * is how a caller learns why a run failed. An implementation may return more (identity,
+ * workflow ids, storage URLs, anything else) — those are server-specific response fields,
+ * not named in this SDK; the index signature keeps them accessible, mirroring the
+ * request-side `extra` passthrough.
  */
 export interface RunPublic {
   pipeline_run_id: string;
@@ -282,9 +282,9 @@ export interface RunResults {
  * - `running`  — HTTP 202; poll again after `retry_after_seconds`.
  * - `completed` — HTTP 200; `result` carries the artifacts.
  * - `failed`   — HTTP 409; run reached a terminal non-`COMPLETED` status. `status` is the
- *   problem's `run_status` member, `message` its `detail` (`Run finished with status FAILED:
- *   <the report's message>`), and `error` the run's stored error report, typed, or `null` when
- *   the run ended without one.
+ *   problem's `run_status` member (recovered from `detail` on a platform that predates it),
+ *   `message` its `detail` (`Run finished with status FAILED: <the report's message>`), and
+ *   `error` the run's stored error report, typed, or `null` when the run ended without one.
  */
 export type RunResultState =
   | { state: "running"; pipeline_run_id: string; retry_after_seconds: number | null }

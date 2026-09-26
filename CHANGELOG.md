@@ -10,7 +10,7 @@
 
 ### Changed
 
-- **A failed run carries its report (Breaking)**: the `failed` arm of `getRunResult` gains `error`, the run's stored report or `null`, and `RunFailedError`, thrown by `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, gains the same `error`, so the reason, the next step and the retry advice reach the caller. Its `status` is now typed `RunStatus` and is read from the results read's `run_status` member rather than from the `detail` sentence; a `409` without that member reads as `FAILED`. Code that builds a `failed` state by hand now sets `error`.
+- **A failed run carries its report (Breaking)**: the `failed` arm of `getRunResult` gains `error`, the run's stored report or `null`, and `RunFailedError`, thrown by `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, gains the same `error`, so the reason, the next step and the retry advice reach the caller. Its `status` is now typed `RunStatus` and is read from the results read's `run_status` member, the `detail` sentence serving only for a platform that does not send it yet. Code that builds a `failed` state by hand now sets `error`.
 - **Branch on `errorDomain` and `type`**: the README and `docs/architecture.md` now point consumers at `errorDomain` and `type`, the hosted envelope's branch fields, rather than at the platform's native `code`, which stays on the error and is one-to-one with `type`.
 
 ## [v0.25.1] - 2026-09-25

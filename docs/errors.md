@@ -6,7 +6,7 @@ The shapes are not this SDK's invention. The report is the runner's `ErrorReport
 
 ## A failed run — `RunErrorReport`
 
-A run that ends without completing (`FAILED`, `CANCELLED`, `TERMINATED` or `TIMED_OUT`) has no result, and the results read answers `409`. The body of that `409` says why: its `detail` names the status and then the report's message, its `run_status` member holds the status, and its `error` member holds the run's stored error report, or `null` when the run has none. The SDK reads the status from `run_status` (never from the sentence) and types the report as `RunErrorReport`.
+A run that ends without completing (`FAILED`, `CANCELLED`, `TERMINATED` or `TIMED_OUT`) has no result, and the results read answers `409`. The body of that `409` says why: its `detail` names the status and then the report's message, its `run_status` member holds the status, and its `error` member holds the run's stored error report, or `null` when the run has none. The SDK reads the status from `run_status`, falling back to the status word of the `detail` sentence on a platform that does not send the member yet, and types the report as `RunErrorReport`.
 
 The report reaches you in four places, always the same object:
 
@@ -40,7 +40,7 @@ The report's fields, all optional because the runner owns the shape:
 
 | Field | Meaning |
 |---|---|
-| `message` | What went wrong. A run failure's message names the failing pipe and its path from the entry pipe, then the fault's own message. |
+| `message` | What went wrong, as the runner wrote it. For a run failure it is where the failing pipe is named. |
 | `error_domain` | Who can fix it: `input` (the caller — a malformed method, a bad input), `config` (a configuration change — a model the backend does not serve, a missing secret), `runtime` (nobody beforehand — a provider outage). **A branch field.** |
 | `type_uri` | The stable URI naming the error class, the same on every occurrence. **A branch field.** |
 | `retryable` | Whether running it again can succeed. Absent means unknown, which is not `false`. **A branch field.** |
