@@ -128,6 +128,8 @@ describe("an unknown model's refusal reaches the caller whole", () => {
   });
 
   it("keeps them on a run route's 422 problem document", async () => {
+    // The runner's `ValidateBundleError` rendered as a problem document: the shape a run
+    // route answers when the runner refuses the method for its validation errors.
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(422, {

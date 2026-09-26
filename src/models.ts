@@ -313,8 +313,10 @@ export type ValidationErrorCategory =
  * One structured bundle-validation error — mirror of pipelex's `ValidationErrorItem`.
  * Carried by `PipelexInvalidReport.validation_errors[]` on the **200** invalid arm of
  * `POST /v1/validate` (NOT a 422 — an invalid bundle is a produced verdict), by the
- * VALID arm's advisory `warnings[]`, by a run route's or a build route's 422 problem
- * body (`ApiResponseError.validationErrors`), and by a failed run's stored report.
+ * VALID arm's advisory `warnings[]`, by the build and crate routes' **200** invalid arm
+ * (`CrateInvalidReport.validation_errors[]`), by the 422 problem body a run route answers
+ * when the runner refuses the method for its validation errors
+ * (`ApiResponseError.validationErrors`), and by a failed run's stored report.
  *
  * **The shape is `mthds`'s.** The standard's client declares the same item, member for
  * member under the same names, and a consumer reads one vocabulary whichever client

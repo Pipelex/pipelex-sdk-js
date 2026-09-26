@@ -578,16 +578,16 @@ export class ApiResponseError extends PipelineRequestError {
   public readonly problemDocument: Record<string, unknown> | undefined;
   /**
    * Structured per-error diagnostics on a problem body that carries a top-level
-   * `validation_errors[]` — the **build routes** (`POST /v1/build/*`), which still
-   * reject an invalid bundle with a 422.
+   * `validation_errors[]` — the 422 a **run route** (`execute`, `start`) answers when the
+   * runner refuses the method for its validation errors.
    *
-   * `POST /v1/validate` no longer routes content errors here: an invalid bundle is
-   * a produced verdict (a **200** `PipelexInvalidReport` whose `validation_errors[]`
-   * the caller reads off the returned value), not an `ApiResponseError`. This field
-   * stays for the build-route 422s and is `undefined` for any error that carries no
-   * per-error list (auth, transport, a request-shape 422). A consumer must NOT
-   * assume a given `error_type` implies a populated list — fall back to
-   * `serverMessage` when this is empty.
+   * Everywhere else an invalid bundle is a produced verdict, not an `ApiResponseError`:
+   * `POST /v1/validate` answers it with a **200** `PipelexInvalidReport`, and the build
+   * and crate routes with a **200** `CrateInvalidReport`, whose `validation_errors[]` the
+   * caller reads off the returned value. This field is `undefined` for any error that
+   * carries no per-error list (auth, transport, a request-shape 422, a build route's 422
+   * for a pipe it cannot build). A consumer must NOT assume a given `error_type` implies a
+   * populated list — fall back to `serverMessage` when this is empty.
    */
   public readonly validationErrors: ValidationErrorItem[] | undefined;
 

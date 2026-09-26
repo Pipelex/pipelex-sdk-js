@@ -113,7 +113,7 @@ The members `mthds`'s own `ApiResponseError` carries (`type`, `title`, `instance
 
 ## A validation item — `ValidationErrorItem`
 
-A method refused for what it says, rather than for how its run went, comes back as a list of validation items. They ride the `/v1/validate` verdict's `validation_errors[]` (a `200`, since an invalid bundle is a produced verdict), a refused run's or build's `ApiResponseError.validationErrors` (a `422`), and a failed run's report as `validation_errors`. Each item has a `category` and a `message`; the other members locate the error and say what to do next, and each is present only when the runner knows it:
+A method refused for what it says, rather than for how its run went, comes back as a list of validation items. They ride the `/v1/validate` verdict (its invalid arm's `validation_errors[]`, and the advisory `warnings[]` of its valid arm) and the build and crate routes' invalid verdict (`CrateInvalidReport.validation_errors[]`), each a `200` because an invalid bundle is a produced verdict; the `422` a run route answers when the runner refuses the method for its validation errors, as `ApiResponseError.validationErrors`; and a failed run's report, as `validation_errors`. Each item has a `category` and a `message`; the other members locate the error and say what to do next, and each is present only when the runner knows it:
 
 | Member | Meaning |
 |---|---|
