@@ -65,7 +65,7 @@
     "vitest": "^4.0.18"
   },
   "dependencies": {
-    "mthds": "^0.25.0",
+    "mthds": "github:mthds-ai/mthds-js#d65d2e52070c6dac500a223c0fb3ba5377dfcd59",
     "smol-toml": "^1.6.0",
     "undici": "^7.29.1"
   }
