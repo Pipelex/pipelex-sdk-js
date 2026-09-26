@@ -13,12 +13,14 @@ The report reaches you in four places, always the same object:
 | Where | What you get |
 |---|---|
 | `getRunResult(runId)` | the `failed` arm: `{ state: "failed", pipeline_run_id, status, message, error }` |
-| `waitForResult`, `startAndWaitForResult`, `downloadArtifacts({ run_id })` | a thrown `RunFailedError` with `runId`, `status`, `message` and `error` |
+| `waitForResult`, `startAndWaitForResult` on the hosted API, `downloadArtifacts({ run_id })` | a thrown `RunFailedError` with `runId`, `status`, `message` and `error` |
 | `getRunStatus(runId)` | `RunRead.error` on the run record |
 | `listRuns`, `iterateRuns`, `getRunDetail` | `PipelineRun.error` on each run record |
 
+**A bare runner has no durable run, so its failure is a refused request.** Against a bare `pipelex-api` runner, `startAndWaitForResult` runs the method with the blocking `execute`, and a run that fails there answers a non-2xx problem document: the call throws an `ApiResponseError`, not a `RunFailedError`, and the same classification rides its members (`errorDomain`, `type`, `retryable`, `userAction`, `errorType`, `model`, …) as described [below](#a-refused-request--apiresponseerror). A caller that must work against both catches both, as the example does.
+
 ```ts
-import { RunFailedError } from "@pipelex/sdk";
+import { ApiResponseError, RunFailedError } from "@pipelex/sdk";
 
 try {
   const result = await client.startAndWaitForResult({ method_id: "mt_abc123", inputs });
@@ -30,6 +32,9 @@ try {
     if (report?.user_action) console.error(`Next step: ${report.user_action.detail}`);
     if (report?.retryable) console.error("A retry can succeed.");
     console.error(`Run id for support: ${err.runId}`);
+  } else if (err instanceof ApiResponseError) {
+    // A refused request — or, against a bare runner, a run that failed on the blocking path.
+    console.error(err.serverMessage, err.userAction?.detail, `request id ${err.requestId}`);
   } else {
     throw err;
   }

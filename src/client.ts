@@ -529,8 +529,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /**
    * Issue a Pipelex-product request (`/v1/me`, `/v1/methods`, `/v1/billing/*`,
    * …) and parse its JSON body, mapping a non-2xx response to the typed
-   * `ApiResponseError` so callers branch on the structured `code` discriminant,
-   * not the HTTP status. Empty-body tolerant — DELETE / onboarding / updateRun
+   * `ApiResponseError` so callers branch on its `errorDomain` and `type`, not the
+   * HTTP status. Empty-body tolerant — DELETE / onboarding / updateRun
    * answer 2xx with no body, returned as `undefined`. Uses the management-call
    * timeout, not the blocking-execute ceiling.
    */
@@ -1371,7 +1371,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // The hosted catalog/account routes the webapp drives. Every one rides the
   // same `{base}/v1/*` surface, `Authorization: Bearer`, org-from-JWT contract
   // as the protocol routes, and maps a non-2xx `problem+json` to a typed
-  // `ApiResponseError` (branch on `.code`, not the status).
+  // `ApiResponseError` (branch on `.errorDomain` and `.type`, not the status).
 
   /** The authenticated user's profile — `GET /v1/me`. */
   async getMe(): Promise<UserProfile> {
