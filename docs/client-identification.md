@@ -52,3 +52,24 @@ pipelex-mthds-check/0.21.0 pipelex-sdk-js/0.21.0 node/22.4.0 (darwin; arm64)
 ```
 
 A subclass of `PipelexApiClient`, such as the MCP server's size-guarded client, inherits the option through the constructor and passes its own `appInfo` the same way.
+
+## Building the header yourself
+
+A program that makes some of its requests to the API with its own `fetch` rather than through the client (a web app's hand-rolled routes, an MCP server's raw probe) should send the same `User-Agent` on them. The package entry exports the builder the client itself uses, so there is no format to re-implement:
+
+```ts
+import { buildUserAgent, validateAppInfo, MAX_USER_AGENT_LENGTH, type AppInfo } from "@pipelex/sdk";
+
+const appInfo: AppInfo = { name: "acme-invoicer", version: "1.4.0" };
+const userAgent = buildUserAgent(appInfo);
+// "acme-invoicer/1.4.0 pipelex-sdk-js/0.21.0 node/22.4.0 (darwin; arm64)", or undefined in a browser
+await fetch(url, { headers: userAgent ? { "User-Agent": userAgent } : {} });
+```
+
+| Export | Signature | Behaviour |
+| --- | --- | --- |
+| `buildUserAgent` | `(appInfo?: AppInfo, runtime?: RuntimeInfo) => string \| undefined` | Returns exactly the value a `PipelexApiClient` constructed with the same `appInfo` sends. Returns `undefined` in a browser, where no header may be set. Throws a `TypeError` for an invalid `appInfo` and a `RangeError` when the value would exceed `MAX_USER_AGENT_LENGTH`, in a browser as on a server. `runtime` defaults to the detected runtime and exists for tests; callers leave it out. |
+| `validateAppInfo` | `(appInfo: AppInfo) => void` | Throws the same `TypeError` the constructor throws when a field falls outside the grammar. It does not check the length, which depends on the rest of the header: call `buildUserAgent` to check both. |
+| `MAX_USER_AGENT_LENGTH` | `512` | The spec's ceiling on the whole header value. |
+
+Compute the value once per process and reuse it, as the client does. The same rules apply as for the client: set it only on requests to the Pipelex API, never on a request to a third party.

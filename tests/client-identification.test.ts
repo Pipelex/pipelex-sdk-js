@@ -150,3 +150,38 @@ describe("the mthds-check hook's identity", () => {
     expect(headersOf(spy)["Authorization"]).toBe("Bearer hook-key");
   });
 });
+
+describe("the public header builder exported from the package entry", () => {
+  it("builds the exact value the client sends, with and without appInfo", async () => {
+    const entry = await import("../src/index.js");
+    const appInfo = { name: "acme-invoicer", version: "1.4.0" };
+    expect(entry.buildUserAgent()).toBe(LIBRARY_UA);
+    expect(entry.buildUserAgent(appInfo)).toBe(`acme-invoicer/1.4.0 ${LIBRARY_UA}`);
+
+    const spy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { status: "ok" }));
+    await new entry.PipelexApiClient({ baseUrl: BASE_URL, apiKey: "k", appInfo }).health();
+    expect(headersOf(spy)["User-Agent"]).toBe(entry.buildUserAgent(appInfo));
+  });
+
+  it("returns undefined in a browser but still refuses an invalid appInfo there", async () => {
+    const entry = await import("../src/index.js");
+    vi.stubGlobal("window", { document: {} });
+    expect(entry.buildUserAgent({ name: "acme-invoicer" })).toBeUndefined();
+    expect(() => entry.buildUserAgent({ name: "bad name" })).toThrow(TypeError);
+  });
+
+  it("exports validateAppInfo and the length ceiling", async () => {
+    const entry = await import("../src/index.js");
+    expect(entry.MAX_USER_AGENT_LENGTH).toBe(512);
+    expect(() => entry.validateAppInfo({ name: "acme-invoicer", version: "1.4.0" })).not.toThrow();
+    expect(() => entry.validateAppInfo({ name: "acme/invoicer" })).toThrow(TypeError);
+    expect(() =>
+      entry.buildUserAgent({
+        name: "acme-invoicer",
+        details: ["x".repeat(entry.MAX_USER_AGENT_LENGTH)],
+      }),
+    ).toThrow(RangeError);
+  });
+});

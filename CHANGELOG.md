@@ -12,6 +12,14 @@
 
 - **The `.mthds` check hook finds the file a Codex shell patch wrote**: for a patch Codex runs through the shell, the hook built by `npm run build:hook` follows the script's `cd`s, branches and scopes before resolving the patch's relative paths, where it used to read them against the session directory. It checks and formats such a file only when it holds the lines the patch added, as the shell passed them, so it no longer rewrites a same-named file the patch never touched, nor a file named by an absolute path in a patch the script only stored or never reached, and it names the files it could not check in a non-blocking note asking for an absolute path or the `apply_patch` tool. Relative paths now resolve against the payload's `cwd` rather than the hook's working directory.
 
+### Added
+
+- **The `User-Agent` builder is public**: the package entry now exports `buildUserAgent(appInfo?)`, which returns exactly the value a `PipelexApiClient` constructed with that `appInfo` sends (or `undefined` in a browser), together with `validateAppInfo` and `MAX_USER_AGENT_LENGTH` (512) and the `RuntimeInfo` type. A program that makes some of its API requests with its own `fetch`, such as a web app's hand-rolled routes, now sends the same header and checks an `appInfo` against the grammar and the ceiling without re-implementing the format. Documented on `docs/client-identification.md`.
+
+### Changed
+
+- **The `mthds` range moves to `^0.27.0`**: the SDK now rests on `mthds` 0.27. Its one breaking change is in the `mthds-agent share` command, which this SDK does not use, so the protocol surface it re-exports is unchanged.
+
 ### Removed
 
 - **The Pipelex Gateway key surface (Breaking)**: `createGatewayApiKey`, `getGatewayApiKey` and the `GatewayApiKey` / `GatewayApiKeyStatus` types are gone, along with the `POST` and `GET /v1/gateway-api-key` routes behind them, which the hosted plane no longer serves. A consumer that provisioned an LLM inference key through the SDK now has the user bring their own provider keys, or call the hosted API with a Pipelex API key (`listPipelexApiKeys`, `createPipelexApiKey`, …), which is untouched.
