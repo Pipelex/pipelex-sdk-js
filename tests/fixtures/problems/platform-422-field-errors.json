@@ -1,0 +1,16 @@
+{
+  "type": "https://pipelex.com/errors/validation_failed",
+  "title": "Validation failed",
+  "status": 422,
+  "code": "validation_failed",
+  "detail": "Request body failed validation. See `errors` for the per-field breakdown.",
+  "instance": "urn:pipelex:request:a9a249b93c024bf08ac9a5fd0704ea92",
+  "request_id": "a9a249b93c024bf08ac9a5fd0704ea92",
+  "errors": [
+    {
+      "field": "label",
+      "code": "string_too_short",
+      "detail": "String should have at least 1 character"
+    }
+  ]
+}

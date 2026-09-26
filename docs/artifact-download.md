@@ -160,7 +160,7 @@ Per-item `error.code` is the fetch vocabulary above plus the download's own: `re
 
 **What it throws.** Only conditions with no verdict, all typed:
 
-- `RunStillRunningError` (with the retry hint) or `RunFailedError` — a `run_id` naming a run that has not completed;
+- `RunStillRunningError` (with the retry hint) or `RunFailedError` (with the run's status and its stored error report as `error`) — a `run_id` naming a run that has not completed;
 - `ScopeUnavailableError` — the requested scope's artifact is `null` or missing from the body (`scope` and `runId` on the error). Reading by `run_id`, a null `main_stuff` is already `MissingMainStuffError` from `getRunResult`;
 - `ArtifactAuthenticationError` — the resolve route refused the credential (`401` / `403`), on the first resolve or on a re-resolve part-way through. It carries `verdict`, the result as it stood: the refusal stops the workers taking new items but lets the fetches already running finish, since they are on presigned links that do not carry the credential, so every file saved is real and listed and the rest are marked `aborted` with a detail naming the credential failure;
 - `ArtifactOperationError` — outside Node, an unusable `dir`, both selectors or neither, an unknown `scope`, or nonsense bounds;

@@ -7,6 +7,15 @@
 import { PipelineRequestError } from "mthds/protocol";
 import type { ValidationErrorItem } from "./models.js";
 import type { ArtifactScope, DownloadArtifactsResult } from "./artifacts.js";
+import type {
+  FieldError,
+  MigrationErrorBlock,
+  ProblemDetails,
+  ProviderErrorMetadata,
+  RunErrorReport,
+  UserAction,
+} from "./error-models.js";
+import type { RunStatus } from "./runs.js";
 
 export { PipelineRequestError };
 
@@ -333,20 +342,43 @@ export class PipelineExecuteTimeoutError extends PipelineRequestError {
 }
 
 /**
- * Thrown when a run reaches a terminal state that is not `COMPLETED`
- * (`FAILED`, `CANCELLED`, `TERMINATED`, `TIMED_OUT`) — surfaced from
- * `waitForResult`/`getRunResult` when the server answers a result lookup with
- * HTTP 409. `runId` and `status` let callers report the outcome precisely.
+ * Thrown when a run reaches a terminal state that is not `COMPLETED` (`FAILED`, `CANCELLED`,
+ * `TERMINATED`, `TIMED_OUT`) — by `waitForResult`, `startAndWaitForResult` and the artifact
+ * download when the platform answers the results read with HTTP 409. (`getRunResult` returns
+ * the same facts as its `failed` arm instead of throwing.)
+ *
+ * - `status` is the run's terminal status, read from the problem's `run_status` member, or from
+ *   its `detail` sentence on a platform that predates the member.
+ * - `error` is the run's stored error report, typed whole as `RunErrorReport`: the runner's
+ *   `error_type`, `message`, `title`, `type_uri`, `error_domain`, `error_category`,
+ *   `retryable`, `user_action`, `model`, `provider`, `provider_metadata`, `validation_errors`
+ *   and anything newer through its index signature. Branch on `error.error_domain`,
+ *   `error.type_uri` and `error.retryable`; show `error.user_action` as the next step. It is
+ *   the runner's VERBOSE report, so `message` and `provider_metadata` can hold a provider's raw
+ *   text — deciding what a person sees is the consumer's. `null` when the run ended with no
+ *   stored report (a cancelled, terminated or timed-out run, or one the platform finalized
+ *   itself).
+ * - The error's own `message` is the problem's `detail`, which names the status and then the
+ *   report's message (`Run finished with status FAILED: <message>`), so printing the error
+ *   already tells the reason.
+ * - `runId` locates the run, for a status read or a support request.
  */
 export class RunFailedError extends PipelineRequestError {
   public readonly runId: string;
-  public readonly status: string;
+  public readonly status: RunStatus;
+  public readonly error: RunErrorReport | null;
 
-  constructor(message: string, runId: string, status: string, options?: { cause?: unknown }) {
-    super(message, options);
+  constructor(
+    message: string,
+    runId: string,
+    status: RunStatus,
+    options?: { cause?: unknown; error?: RunErrorReport | null },
+  ) {
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "RunFailedError";
     this.runId = runId;
     this.status = status;
+    this.error = options?.error ?? null;
   }
 }
 
@@ -437,15 +469,47 @@ export class RunLifecycleUnavailableError extends PipelineRequestError {
 }
 
 /**
- * A non-2xx response that DID come back from the API. Carries the parsed
- * RFC 7807 problem-details (`errorType`, `serverMessage`) and, for the build
- * routes' 422s, the structured `validation_errors[]` list.
+ * The last constructor argument of `ApiResponseError`: the error's `cause`, the problem
+ * document's typed members, and the decoded document whole. The same shape as `mthds`'s
+ * `ApiResponseErrorOptions`, plus `problemDocument`.
+ */
+export interface ApiResponseErrorOptions {
+  cause?: unknown;
+  problem?: ProblemDetails;
+  problemDocument?: Record<string, unknown>;
+}
+
+/**
+ * A non-2xx response that DID come back from the API, with its problem document parsed.
  *
- * `code` is the product routes' stable RFC 9457 `problem+json` discriminant
- * (`conflict`, `not_found`, `pipelex_api_key_limit_reached`,
- * `promo_code_invalid`, …) — the field a consumer branches on, decoupled from
- * the HTTP status. `undefined` for any error body that carries no `code`
- * (the protocol/build routes' `detail`-shaped problems, auth, transport).
+ * Every error the hosted API answers is an RFC 9457 `application/problem+json` document, and
+ * this error carries its members as typed fields, each `undefined` when the document did not
+ * carry it (a member of the wrong type reads as absent rather than as a wrong value):
+ *
+ * - **The branch fields.** `errorDomain` says who can fix the failure — `input` (the caller),
+ *   `config` (a configuration change), `runtime` (nobody beforehand) — and `type` is the stable
+ *   URI naming the error class. `retryable` says whether a retry can succeed, `undefined`
+ *   meaning unknown. Branch on these, never on the HTTP status or on the wording of a message.
+ * - **The native codes.** `code` is the platform's own closed code (`conflict`, `not_found`,
+ *   `pipelex_api_key_limit_reached`, …) and `errorType` the runner's open exception class
+ *   name. Each is finer than `errorDomain` and specific to the surface that emits it; the
+ *   platform's `type` is one-to-one with its `code` (`https://pipelex.com/errors/<code>`).
+ * - **For a person.** `title` is the stable label of the error class, `serverMessage` the
+ *   per-occurrence `detail`, `userAction` the advised next step, and `errorCategory`, `model`,
+ *   `provider` and `providerMetadata` describe an inference failure.
+ * - **For support.** `requestId` correlates the response with the server's logs; it is read
+ *   from the body, or from the `X-Request-ID` response header when the body has none.
+ *   `instance` is the occurrence's URN or request path.
+ * - **Per-item failures.** `errors` is the platform's field-level list (`field`, `code`,
+ *   `detail`), and `validationErrors` the structured diagnostics of a bundle that failed
+ *   validation.
+ *
+ * `problemDocument` is the decoded document whole, so a member this SDK does not name stays
+ * reachable without re-parsing `responseBody`, which is the raw text; it is `undefined` when
+ * the body was not a JSON object. The members `mthds`'s own `ApiResponseError` carries have the
+ * same names and types here, and the rest (`code`, `errorCategory`, `model`, `provider`,
+ * `providerMetadata`, `migration`, `errors`) are the Pipelex members the standard's client
+ * leaves to this SDK.
  */
 export class ApiResponseError extends PipelineRequestError {
   public readonly apiUrl: string;
@@ -454,7 +518,64 @@ export class ApiResponseError extends PipelineRequestError {
   public readonly responseBody: string;
   public readonly errorType: string | undefined;
   public readonly serverMessage: string | undefined;
+  /**
+   * The platform's native code — a closed set (`conflict`, `not_found`, `run_not_found`,
+   * `pipelex_api_key_limit_reached`, …), one-to-one with `type`. Finer than `errorDomain` and
+   * specific to the platform: a runner's problem carries `errorType` instead. `undefined` for a
+   * body that carries no `code`.
+   */
   public readonly code: string | undefined;
+  /**
+   * RFC 9457 `type`: the stable URI naming the error class. With `errorDomain`, the field a
+   * machine consumer branches on — the same class carries the same URI on every occurrence.
+   */
+  public readonly type: string | undefined;
+  /** RFC 9457 `title`: the short human label of the error class. */
+  public readonly title: string | undefined;
+  /** RFC 9457 `instance`: the occurrence — the request path, or a request URN. */
+  public readonly instance: string | undefined;
+  /**
+   * The request's correlation id — the body's `request_id`, or the `X-Request-ID` response
+   * header when the body carries none. The id to hand to support: it finds the server's log
+   * lines for this request.
+   */
+  public readonly requestId: string | undefined;
+  /**
+   * The body's `error_domain`: who can fix the failure. `input` — the caller (a malformed
+   * bundle, a bad argument, a missing input); `config` — a configuration change (a missing
+   * secret, a model the backend does not serve); `runtime` — nobody beforehand (a provider
+   * outage during execution). Typed open, as the server owns the vocabulary; `undefined` when
+   * the server did not classify it.
+   */
+  public readonly errorDomain: string | undefined;
+  /**
+   * The body's `error_category`: the finer classification of an inference failure — known
+   * values `transient`, `configuration`, `content`, `capacity`, `ambiguous`, `unknown`.
+   */
+  public readonly errorCategory: string | undefined;
+  /**
+   * The body's `retryable`: whether retrying the same request can plausibly succeed.
+   * `undefined` means unknown, which is not the same as `false`.
+   */
+  public readonly retryable: boolean | undefined;
+  /** The body's `user_action`: what the caller should do next, when the server can say. */
+  public readonly userAction: UserAction | undefined;
+  /** The body's `model`: the model an inference failure used. */
+  public readonly model: string | undefined;
+  /** The body's `provider`: the provider an inference failure reached. */
+  public readonly provider: string | undefined;
+  /** The body's `provider_metadata`: what the provider's SDK said, raw text included. */
+  public readonly providerMetadata: ProviderErrorMetadata | undefined;
+  /** The body's `migration`: a pending configuration migration that explains the failure. */
+  public readonly migration: MigrationErrorBlock | undefined;
+  /** The platform's field-level `errors[]` — one item per offending request field. */
+  public readonly errors: FieldError[] | undefined;
+  /**
+   * The decoded problem document whole — every member, named or not, such as a failed run's
+   * `run_status` and `error` or a member a newer server adds. `undefined` when the body was not
+   * a JSON object.
+   */
+  public readonly problemDocument: Record<string, unknown> | undefined;
   /**
    * Structured per-error diagnostics on a problem body that carries a top-level
    * `validation_errors[]` — the **build routes** (`POST /v1/build/*`), which still
@@ -480,9 +601,9 @@ export class ApiResponseError extends PipelineRequestError {
     serverMessage: string | undefined,
     validationErrors: ValidationErrorItem[] | undefined,
     code: string | undefined,
-    options?: { cause?: unknown },
+    options?: ApiResponseErrorOptions,
   ) {
-    super(message, options);
+    super(message, options?.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ApiResponseError";
     this.apiUrl = apiUrl;
     this.status = status;
@@ -492,5 +613,20 @@ export class ApiResponseError extends PipelineRequestError {
     this.serverMessage = serverMessage;
     this.validationErrors = validationErrors;
     this.code = code;
+    const problem = options?.problem;
+    this.type = problem?.type;
+    this.title = problem?.title;
+    this.instance = problem?.instance;
+    this.requestId = problem?.requestId;
+    this.errorDomain = problem?.errorDomain;
+    this.errorCategory = problem?.errorCategory;
+    this.retryable = problem?.retryable;
+    this.userAction = problem?.userAction;
+    this.model = problem?.model;
+    this.provider = problem?.provider;
+    this.providerMetadata = problem?.providerMetadata;
+    this.migration = problem?.migration;
+    this.errors = problem?.errors;
+    this.problemDocument = options?.problemDocument;
   }
 }

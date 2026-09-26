@@ -1143,7 +1143,7 @@ async function readCompletedResults(
     );
   }
   if (state.state === "failed") {
-    throw new RunFailedError(state.message, runId, state.status);
+    throw new RunFailedError(state.message, runId, state.status, { error: state.error });
   }
   return state.result;
 }

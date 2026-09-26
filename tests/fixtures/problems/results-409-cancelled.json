@@ -1,0 +1,12 @@
+{
+  "type": "https://pipelex.com/errors/conflict",
+  "title": "Conflict",
+  "status": 409,
+  "code": "conflict",
+  "detail": "Run finished with status CANCELLED; no result available",
+  "instance": "urn:pipelex:request:78b4b52e32d04ecf84642d7413b963cd",
+  "request_id": "78b4b52e32d04ecf84642d7413b963cd",
+  "errors": [],
+  "run_status": "CANCELLED",
+  "error": null
+}
