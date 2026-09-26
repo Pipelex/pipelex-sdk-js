@@ -106,6 +106,7 @@ export type {
   FixOpKind,
   TomlScalar,
   TomlValue,
+  FixValue,
   SetKeyOp,
   EnsureTableOp,
   DeleteKeyOp,
