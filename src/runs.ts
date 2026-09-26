@@ -2,6 +2,7 @@ import type { InputForm, OutputForm, PipeIOContracts } from "mthds/protocol";
 
 import { RunFailedError, RunTimeoutError } from "./errors.js";
 import { MAX_TIMER_DELAY_MS } from "./timers.js";
+import type { RunErrorReport } from "./error-models.js";
 import type { DictPipeOutput, DictWorkingMemory } from "./models.js";
 
 /**
@@ -76,6 +77,14 @@ export interface RunPublic {
   status: RunStatus;
   created_at: string;
   finished_at?: string | null;
+  /**
+   * Why the run failed: the runner's stored error report, typed whole (see `RunErrorReport`).
+   * `null` on a completed run and on a run that ended without a report — a cancelled,
+   * terminated or timed-out run, or one the platform finalized itself; absent on a server that
+   * does not serve it. The results read of the same run carries the same object in its `409`,
+   * which is where `getRunResult`'s failed arm and `RunFailedError` take it from.
+   */
+  error?: RunErrorReport | null;
   /** Server-specific response fields (defined by the server you call). */
   [extension: string]: unknown;
 }
@@ -272,12 +281,21 @@ export interface RunResults {
  * Single-shot result lookup outcome, discriminated on `state`:
  * - `running`  — HTTP 202; poll again after `retry_after_seconds`.
  * - `completed` — HTTP 200; `result` carries the artifacts.
- * - `failed`   — HTTP 409; run reached a terminal non-`COMPLETED` status.
+ * - `failed`   — HTTP 409; run reached a terminal non-`COMPLETED` status. `status` is the
+ *   problem's `run_status` member, `message` its `detail` (`Run finished with status FAILED:
+ *   <the report's message>`), and `error` the run's stored error report, typed, or `null` when
+ *   the run ended without one.
  */
 export type RunResultState =
   | { state: "running"; pipeline_run_id: string; retry_after_seconds: number | null }
   | { state: "completed"; pipeline_run_id: string; result: RunResults }
-  | { state: "failed"; pipeline_run_id: string; status: RunStatus; message: string };
+  | {
+      state: "failed";
+      pipeline_run_id: string;
+      status: RunStatus;
+      message: string;
+      error: RunErrorReport | null;
+    };
 
 // ── Polling options ─────────────────────────────────────────────────
 
@@ -327,8 +345,9 @@ export function assertWaitOptions(options: WaitForResultOptions = {}): void {
 /**
  * Poll a single-shot result lookup (`fetchOnce`) until the run reaches a
  * terminal state. Returns the artifacts on `COMPLETED`, throws `RunFailedError`
- * on any other terminal status, and throws `RunTimeoutError` if `timeoutMs`
- * elapses first (the run keeps executing server-side — re-poll by id later).
+ * on any other terminal status — carrying the run's status and its stored error
+ * report — and throws `RunTimeoutError` if `timeoutMs` elapses first (the run
+ * keeps executing server-side — re-poll by id later).
  *
  * The single owner of the wait/poll/Retry-After/abort logic — `PipelexApiClient.waitForResult`
  * delegates here, so the behavior can never drift.
@@ -365,7 +384,7 @@ export async function pollUntilResult(
       return state.result;
     }
     if (state.state === "failed") {
-      throw new RunFailedError(state.message, runId, state.status);
+      throw new RunFailedError(state.message, runId, state.status, { error: state.error });
     }
 
     attempt += 1;

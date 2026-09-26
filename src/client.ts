@@ -93,6 +93,14 @@ import {
   RunLifecycleUnavailableError,
   RunStillRunningError,
 } from "./errors.js";
+import type {
+  FieldError,
+  MigrationErrorBlock,
+  ProblemDetails,
+  ProviderErrorMetadata,
+  RunErrorReport,
+  UserAction,
+} from "./error-models.js";
 import { methodSourceToContents } from "./method-source.js";
 import { buildUserAgent } from "./user-agent.js";
 import type { AppInfo } from "./user-agent.js";
@@ -544,7 +552,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   private throwApiResponseError(method: HttpMethod, endpoint: string, res: RawResponse): never {
-    const { errorType, serverMessage, validationErrors, code } = parseErrorBody(res.body);
+    const { errorType, serverMessage, validationErrors, code, problem, document } = parseErrorBody(
+      res.body,
+    );
+    // The body's `request_id` wins; the header is the fallback for a response whose body
+    // carries none (a gateway error page, a non-problem body).
+    const requestId = problem.requestId ?? nonEmptyHeader(res.headers, REQUEST_ID_HEADER);
     throw new ApiResponseError(
       `API ${method} /${API_PREFIX}/${endpoint} failed (${res.status}): ${serverMessage ?? (res.body || res.statusText)}`,
       this.baseUrl,
@@ -555,6 +568,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       serverMessage,
       validationErrors,
       code,
+      { problem: { ...problem, requestId }, problemDocument: document },
     );
   }
 
@@ -1246,7 +1260,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Maps the server's poll semantics to a discriminated union:
    * - HTTP 202 → `running` (with the `Retry-After` hint)
    * - HTTP 200 → `completed` (with the result artifacts)
-   * - HTTP 409 → `failed` (terminal non-`COMPLETED`)
+   * - HTTP 409 → `failed` (terminal non-`COMPLETED`), carrying the problem's `detail` as
+   *   `message`, its `run_status` member as `status` and its `error` member, the run's
+   *   stored error report, typed as `error`
    * - HTTP 503 → `running` (Temporal degraded — retry, never fail a poller)
    *
    * Throws `RunLifecycleUnavailableError` when the lifecycle routes are absent
@@ -1271,14 +1287,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       };
     }
     if (res.status === 409) {
-      const { serverMessage } = parseErrorBody(res.body);
-      const message = serverMessage ?? "Run finished without a result.";
-      return {
-        state: "failed",
-        pipeline_run_id: runId,
-        status: extractRunStatusFromMessage(message),
-        message,
-      };
+      return runResultFailed(runId, res.body);
     }
     this.throwIfLifecycleUnavailable(res, url);
     if (res.status < 200 || res.status >= 300) {
@@ -2154,38 +2163,70 @@ const KNOWN_RUN_STATUSES: readonly RunStatus[] = [
   "TIMED_OUT",
 ];
 
+/** The response header the platform and the runner stamp the request's correlation id on. */
+const REQUEST_ID_HEADER = "x-request-id";
+
 /**
- * The 409 detail reads "Run finished with status FAILED; no result available".
- * Pull the status word out; default to FAILED if the shape ever changes.
+ * Build the failed arm from the results read's `409` problem document.
+ *
+ * The platform's document carries `detail` (`Run finished with status <STATUS>: <message>`,
+ * or `...; no result available` when the run has no report) and two extension members:
+ * `run_status`, the run's terminal status — named so because a problem's own `status` is the
+ * HTTP status — and `error`, the run's stored error report or `null`. The status is read from
+ * `run_status`, never parsed back out of the sentence. A `409` without that member (the one
+ * this route answers for a stored result it refuses to read, or one from a platform that
+ * predates the member) or with a status this SDK does not know reads as `FAILED`, and its
+ * `detail` still says what happened. The report is relayed whole, as the runner wrote it: an
+ * object is taken as the report, anything else reads as no report.
  */
-function extractRunStatusFromMessage(message: string): RunStatus {
-  const match = message.match(/status\s+([A-Z_]+)/);
-  const candidate = match?.[1];
-  if (candidate && (KNOWN_RUN_STATUSES as readonly string[]).includes(candidate)) {
-    return candidate as RunStatus;
-  }
-  return "FAILED";
+function runResultFailed(runId: string, body: string): RunResultState {
+  const { serverMessage, document } = parseErrorBody(body);
+  const rawStatus = document?.run_status;
+  const status =
+    typeof rawStatus === "string" && (KNOWN_RUN_STATUSES as readonly string[]).includes(rawStatus)
+      ? (rawStatus as RunStatus)
+      : "FAILED";
+  const rawReport = document?.error;
+  return {
+    state: "failed",
+    pipeline_run_id: runId,
+    status,
+    message: serverMessage ?? "Run finished without a result.",
+    error: isPlainObject(rawReport) ? (rawReport as RunErrorReport) : null,
+  };
 }
 
 /**
- * The API serializes errors as `{"detail": {"error_type": ..., "message": ...}}`
- * (HTTPException with dict detail) or `{"detail": "..."}` (auth 401s and RFC
- * 7807 problems). Both shapes are extracted here. An invalid-bundle 422 problem
- * additionally carries a top-level `validation_errors[]` list (the
- * `ValidateBundleError` extension projected onto the envelope). Falls through
- * silently on non-JSON bodies.
+ * Extract the members of an error body.
+ *
+ * The API serializes errors as RFC 9457 problem documents — the platform's (`type`, `title`,
+ * `status`, `code`, `detail`, `instance`, `request_id`, `errors[]`, plus an extension member
+ * such as a failed run's `run_status` and `error`) and the runner's (the same standard slots
+ * plus `error_type`, `error_domain`, `error_category`, `retryable`, `user_action`, `model`,
+ * `provider`, `provider_metadata`, `validation_errors`, `migration`) — and, on older routes, as
+ * `{"detail": {"error_type": ..., "message": ...}}` (HTTPException with dict detail). Both
+ * shapes are handled, with top-level `error_type` / `message` fallbacks. Falls through to empty
+ * on a non-JSON or non-object body.
+ *
+ * Each typed member is kept only when it has the type the problem document gives it, so a
+ * malformed member reads as absent rather than as a wrong value; `document` keeps the decoded
+ * object whole, members named or not.
  */
 function parseErrorBody(body: string): {
   errorType: string | undefined;
   serverMessage: string | undefined;
   validationErrors: ValidationErrorItem[] | undefined;
   code: string | undefined;
+  problem: ProblemDetails;
+  document: Record<string, unknown> | undefined;
 } {
   const empty = {
     errorType: undefined,
     serverMessage: undefined,
     validationErrors: undefined,
     code: undefined,
+    problem: {},
+    document: undefined,
   };
   if (!body) return empty;
   let parsed: unknown;
@@ -2194,10 +2235,10 @@ function parseErrorBody(body: string): {
   } catch {
     return empty;
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!isPlainObject(parsed)) {
     return empty;
   }
-  const root = parsed as Record<string, unknown>;
+  const root = parsed;
   const detail = root.detail;
   let errorType: string | undefined;
   let serverMessage: string | undefined;
@@ -2217,9 +2258,50 @@ function parseErrorBody(body: string): {
   const validationErrors = Array.isArray(root.validation_errors)
     ? (root.validation_errors as ValidationErrorItem[])
     : undefined;
-  // The product routes' RFC 9457 `problem+json` carries a stable top-level
-  // `code` discriminant (`conflict`, `not_found`, …) — the field consumers
-  // branch on, decoupled from the HTTP status.
+  // The platform's closed native code (`conflict`, `not_found`, …), one-to-one with `type`.
   const code = typeof root.code === "string" ? root.code : undefined;
-  return { errorType, serverMessage, validationErrors, code };
+  const problem: ProblemDetails = {
+    type: stringMember(root.type),
+    title: stringMember(root.title),
+    instance: stringMember(root.instance),
+    requestId: stringMember(root.request_id),
+    errorDomain: stringMember(root.error_domain),
+    errorCategory: stringMember(root.error_category),
+    retryable: typeof root.retryable === "boolean" ? root.retryable : undefined,
+    userAction: parseUserAction(root.user_action),
+    model: stringMember(root.model),
+    provider: stringMember(root.provider),
+    providerMetadata: isPlainObject(root.provider_metadata)
+      ? (root.provider_metadata as ProviderErrorMetadata)
+      : undefined,
+    migration: isPlainObject(root.migration) ? (root.migration as MigrationErrorBlock) : undefined,
+    errors: Array.isArray(root.errors)
+      ? ((root.errors as unknown[]).filter(isPlainObject) as FieldError[])
+      : undefined,
+  };
+  return { errorType, serverMessage, validationErrors, code, problem, document: root };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A problem member kept only when it is a non-empty string. */
+function stringMember(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A `user_action` member is kept only whole: an object with a string `kind` and a non-empty `detail`. */
+function parseUserAction(value: unknown): UserAction | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const { kind, detail } = value;
+  if (typeof kind !== "string" || typeof detail !== "string" || detail.length === 0) {
+    return undefined;
+  }
+  return { kind, detail };
+}
+
+function nonEmptyHeader(headers: Headers, name: string): string | undefined {
+  const value = headers.get(name)?.trim();
+  return value ? value : undefined;
 }

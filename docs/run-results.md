@@ -65,12 +65,14 @@ switch (state.state) {
     console.log(`not finished — poll again in ${state.retry_after_seconds ?? 2}s`);
     break;
   case "failed":
+    // `message` already names the reason; `error` is the run's stored report, or null.
     console.error(`run ended as ${state.status}: ${state.message}`);
+    if (state.error?.user_action) console.error(`next step: ${state.error.user_action.detail}`);
     break;
 }
 ```
 
-`getRunResult` is the single-shot lookup and returns that discriminated state. `waitForResult(runId)` drives the same lookup in a loop, honouring the server's `Retry-After`, and returns the `RunResults` directly — throwing `RunFailedError` on a terminal non-completed status and `RunTimeoutError` when the budget runs out.
+`getRunResult` is the single-shot lookup and returns that discriminated state. `waitForResult(runId)` drives the same lookup in a loop, honouring the server's `Retry-After`, and returns the `RunResults` directly — throwing `RunFailedError` on a terminal non-completed status and `RunTimeoutError` when the budget runs out. The `failed` arm and `RunFailedError` carry the same facts: the run's `status`, the `message` naming the reason, and `error`, the run's stored error report, typed as `RunErrorReport` and `null` when the run ended without one. [`errors.md`](./errors.md#a-failed-run--runerrorreport) describes the report field by field.
 
 ## `working_memory` — every named stuff of the run
 
