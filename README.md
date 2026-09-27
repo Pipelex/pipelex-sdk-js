@@ -51,7 +51,7 @@ console.log(ack.method_provenance); // { address, tag, commit_sha }
 
 ### Product routes
 
-The hosted management surface (catalog, account, billing) hangs off the same client. Every product route maps a non-2xx `problem+json` to a typed `ApiResponseError` — branch on the structured `code`, not the HTTP status:
+The hosted management surface (catalog, account, billing) hangs off the same client. Every route maps a non-2xx `problem+json` to a typed `ApiResponseError` (see [Errors](#errors) for how to branch on it):
 
 ```ts
 import { PipelexApiClient, ApiResponseError } from "@pipelex/sdk";
@@ -69,11 +69,32 @@ try {
   const { portal_url } = await client.getBillingPortal();
   // open portal_url ...
 } catch (err) {
-  if (err instanceof ApiResponseError && err.code === "conflict") {
+  if (err instanceof ApiResponseError && err.type === "https://pipelex.com/errors/conflict") {
     // no subscription yet — start one via createCheckout(...)
   }
 }
 ```
+
+### Errors
+
+A refused request throws an `ApiResponseError` carrying every member of the server's RFC 9457 problem document. **Branch on `errorDomain` and `type`**, as the hosted-envelope spec says, never on the HTTP status or the message: `errorDomain` says who can fix the failure (`input` for the caller, `config` for a configuration change, `runtime` for nobody beforehand) and `type` is the stable URI of the error class, the same on every occurrence. `retryable` says whether a retry can succeed, `userAction` gives the next step, and `requestId` — from the body, or the `X-Request-ID` header — is the id to hand to support. `code` (the platform's native code, one-to-one with `type`) and `errorType` (the runner's exception class name) stay available as each surface's finer code, and `errors` carries the platform's field-level failures.
+
+On the hosted API, a run that ends without completing throws a `RunFailedError` from `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, and comes back as the `failed` arm of `getRunResult`. (Against a bare `pipelex-api` runner, `startAndWaitForResult` runs the method with the blocking `execute`, so a failed run there throws the runner's `ApiResponseError`, whose problem members carry the same classification.) Its `status` is the run's terminal status and its `error` is the run's stored error report, typed whole as `RunErrorReport`: the reason in `message`, `error_domain`, `type_uri` and `retryable` to branch on, `user_action` as the next step, and the inference details. It is `null` when the run ended without a report. The report is the runner's VERBOSE one, provider text included, so what a person sees is your presentation:
+
+```ts
+import { RunFailedError } from "@pipelex/sdk";
+
+try {
+  await client.waitForResult(runId);
+} catch (err) {
+  if (err instanceof RunFailedError) {
+    console.error(err.message); // "Run finished with status FAILED: <the reason>"
+    console.error(err.error?.user_action?.detail ?? "No next step was given.");
+  }
+}
+```
+
+[`docs/errors.md`](./docs/errors.md) lists every field of both.
 
 ### Client identification
 
@@ -117,6 +138,7 @@ These pages ship inside the published package, so a reader who has only installe
 | [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
 | [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
 | [`docs/client-identification.md`](./docs/client-identification.md) | The `User-Agent` every API request carries, and `appInfo`, the option that puts your program's name in front of it |
+| [`docs/errors.md`](./docs/errors.md) | A failed run's stored error report on `RunFailedError` and `RunRead`, and every member of a refused request's `ApiResponseError`, with the fields to branch on |
 
 ## Develop
 

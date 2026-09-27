@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`ApiResponseError` carries every member of the problem document**: `type`, `title`, `instance`, `requestId` (the body's `request_id`, else the `X-Request-ID` header), `errorDomain`, `errorCategory`, `retryable`, `userAction`, `model`, `provider`, `providerMetadata`, `migration`, the platform's field-level `errors[]`, and the decoded document whole as `problemDocument`, beside the fields it kept. A member of the wrong type reads as absent. The members `mthds`'s `ApiResponseError` carries have the same names and types here, and the types `ProblemDetails`, `FieldError`, `UserAction` and `ApiResponseErrorOptions` are exported.
+- **A failed run's stored error report, typed whole**: `RunErrorReport` now declares every field of the runner's report (`error_type`, `message`, `title`, `type_uri`, `error_domain`, `error_category`, `retryable`, `user_action`, `model`, `provider`, `provider_metadata`, `validation_errors`, `migration`), all optional, and `RunRead` declares it as `error`. `ProviderErrorMetadata` and `MigrationErrorBlock` are exported with it.
+- **`docs/errors.md`**: a reference page for a failed run's report and a refused request's `ApiResponseError`, with the fields to branch on.
+
+### Changed
+
+- **A failed run carries its report (Breaking)**: the `failed` arm of `getRunResult` gains `error`, the run's stored report or `null`, and `RunFailedError`, thrown by `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, gains the same `error`, so the reason, the next step and the retry advice reach the caller. Its `status` is now typed `RunStatus` and is read from the results read's `run_status` member, the `detail` sentence serving only for a platform that does not send it yet. Code that builds a `failed` state by hand now sets `error`.
+- **Branch on `errorDomain` and `type`**: the README and `docs/architecture.md` now point consumers at `errorDomain` and `type`, the hosted envelope's branch fields, rather than at the platform's native `code`, which stays on the error and is one-to-one with `type`.
+
 ## [v0.25.1] - 2026-09-25
 
 ### Fixed

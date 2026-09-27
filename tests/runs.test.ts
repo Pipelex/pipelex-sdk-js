@@ -270,14 +270,15 @@ describe("PipelexApiClient.getRunResult", () => {
     }
   });
 
-  it("maps 409 to a failed state and extracts the status from the message", async () => {
+  it("maps 409 to a failed state, with the status from its `run_status` member", async () => {
     const client = makeClient();
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse(409, {
-        detail: {
-          error_type: "ConflictError",
-          message: "Run finished with status TIMED_OUT; no result available",
-        },
+        type: "https://pipelex.com/errors/conflict",
+        code: "conflict",
+        detail: "Run finished with status TIMED_OUT; no result available",
+        run_status: "TIMED_OUT",
+        error: null,
       }),
     );
     const state = await client.getRunResult("run-1");
@@ -285,6 +286,7 @@ describe("PipelexApiClient.getRunResult", () => {
     if (state.state === "failed") {
       expect(state.status).toBe("TIMED_OUT");
       expect(state.message).toContain("TIMED_OUT");
+      expect(state.error).toBeNull();
     }
   });
 
@@ -341,10 +343,11 @@ describe("PipelexApiClient.waitForResult", () => {
       .mockResolvedValueOnce(emptyResponse(202, { "Retry-After": "0" }))
       .mockResolvedValueOnce(
         jsonResponse(409, {
-          detail: {
-            error_type: "ConflictError",
-            message: "Run finished with status FAILED; no result available",
-          },
+          type: "https://pipelex.com/errors/conflict",
+          code: "conflict",
+          detail: "Run finished with status FAILED; no result available",
+          run_status: "FAILED",
+          error: null,
         }),
       );
 

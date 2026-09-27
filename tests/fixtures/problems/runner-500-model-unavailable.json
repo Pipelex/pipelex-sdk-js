@@ -1,0 +1,25 @@
+{
+  "type": "https://docs.pipelex.com/latest/errors/llm-completion-error/",
+  "title": "LLM completion",
+  "status": 500,
+  "detail": "openai inference failed for model 'claude-4.8-opus' (HTTP 412): Error code: 412 - {'error': {'message': 'Model global.anthropic.claude-opus-4-8 is not allowed for this integration'}}",
+  "instance": "/v1/execute",
+  "request_id": "9f2c1ab3-5d1e-4c2a-9a41-0c7f3e2b8d10",
+  "error_type": "LLMCompletionError",
+  "error_category": "configuration",
+  "error_domain": "config",
+  "retryable": false,
+  "user_action": {
+    "kind": "change_model",
+    "detail": "This model is not enabled on the inference gateway; choose another model for the pipe."
+  },
+  "model": "claude-4.8-opus",
+  "provider": "pipelex_gateway",
+  "provider_metadata": {
+    "provider": "openai",
+    "sdk_exception_type": "APIStatusError",
+    "message": "Error code: 412 - {'error': {'message': 'Model global.anthropic.claude-opus-4-8 is not allowed for this integration'}}",
+    "status_code": 412,
+    "request_id": "req_gw_5f1c"
+  }
+}
