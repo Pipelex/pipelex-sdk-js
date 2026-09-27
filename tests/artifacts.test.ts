@@ -843,15 +843,27 @@ describe("downloadArtifacts", () => {
     await expect(failure).rejects.toMatchObject({ runId: RUN_ID, retryAfterSeconds: 7 });
   });
 
-  it("throws RunFailedError for a run that ended without a result", async () => {
+  it("throws RunFailedError, with the run's report, for a run that ended without a result", async () => {
+    const report = {
+      error_type: "PipeRunError",
+      message: "Pipe 'summarize' failed: boom",
+      error_domain: "runtime",
+      retryable: true,
+    };
     const client = makeClient({
-      state: { state: "failed", pipeline_run_id: RUN_ID, status: "FAILED", message: "boom" },
+      state: {
+        state: "failed",
+        pipeline_run_id: RUN_ID,
+        status: "FAILED",
+        message: "Run finished with status FAILED: Pipe 'summarize' failed: boom",
+        error: report,
+      },
     });
 
     const failure = downloadArtifacts(client, { run_id: RUN_ID, dir: "x" });
 
     await expect(failure).rejects.toBeInstanceOf(RunFailedError);
-    await expect(failure).rejects.toMatchObject({ runId: RUN_ID, status: "FAILED" });
+    await expect(failure).rejects.toMatchObject({ runId: RUN_ID, status: "FAILED", error: report });
   });
 
   it("throws ScopeUnavailableError when the scope's artifact is null or missing", async () => {

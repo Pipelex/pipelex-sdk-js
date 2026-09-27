@@ -106,6 +106,7 @@ export type {
   FixOpKind,
   TomlScalar,
   TomlValue,
+  FixValue,
   SetKeyOp,
   EnsureTableOp,
   DeleteKeyOp,
@@ -199,7 +200,6 @@ export type {
   ListRunsQuery,
   PipelineRun,
   RunDetail,
-  RunErrorReport,
   RunPage,
   UpdateRunInput,
 } from "./product-models.js";
@@ -249,4 +249,14 @@ export {
   ArtifactFetchError,
   ScopeUnavailableError,
 } from "./errors.js";
-export type { RejectedAssetCode, UploadTransportCode } from "./errors.js";
+export type { ApiResponseErrorOptions, RejectedAssetCode, UploadTransportCode } from "./errors.js";
+
+// ── Error reports (a failed run's stored report, a problem document's typed members) ──
+export type {
+  FieldError,
+  MigrationErrorBlock,
+  ProblemDetails,
+  ProviderErrorMetadata,
+  RunErrorReport,
+  UserAction,
+} from "./error-models.js";

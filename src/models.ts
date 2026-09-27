@@ -313,19 +313,35 @@ export type ValidationErrorCategory =
  * One structured bundle-validation error — mirror of pipelex's `ValidationErrorItem`.
  * Carried by `PipelexInvalidReport.validation_errors[]` on the **200** invalid arm of
  * `POST /v1/validate` (NOT a 422 — an invalid bundle is a produced verdict), by the
- * VALID arm's advisory `warnings[]`, and by the build routes' 422 problem bodies
- * (`ApiResponseError.validationErrors`).
+ * VALID arm's advisory `warnings[]`, by the build and crate routes' **200** invalid arm
+ * (`CrateInvalidReport.validation_errors[]`), by the 422 problem body a run route answers
+ * when the runner refuses the method for its validation errors
+ * (`ApiResponseError.validationErrors`), and by a failed run's stored report.
+ *
+ * **The shape is `mthds`'s.** The standard's client declares the same item, member for
+ * member under the same names, and a consumer reads one vocabulary whichever client
+ * handed it the item. It is restated here rather than imported because `mthds` exports it
+ * only from its package root, which this SDK does not import (it takes `mthds` through
+ * `mthds/protocol` alone, the rule `.dependency-cruiser.cjs` enforces); a type-level test
+ * (`tests/validation-items.test.ts`) pins this declaration and `SuggestedFix`'s to the
+ * standard's, so a member added on one side and not the other fails the typecheck.
  *
  * Only `category` and `message` are always present; the rest are populated per
- * `category`. Every other member is `?: T | null` because the two channels serialize
- * an unset locator differently: the invalid arm and the crate routes drop the key
- * (`exclude_none` server-side) while the valid arm — which carries `warnings[]` — does
- * not, so the same item arrives with explicit `null`s there. A truthiness check reads
- * both; an `=== undefined` check would be wrong on one of them.
+ * `category`. Every other member is `?: T | null` — the one way this declaration
+ * differs from `mthds`'s — because the two channels serialize an unset locator
+ * differently: the invalid arm and the crate routes drop the key (`exclude_none`
+ * server-side) while the valid arm — which carries `warnings[]` — does not, so the same
+ * item arrives with explicit `null`s there. A truthiness check reads both; an
+ * `=== undefined` check would be wrong on one of them.
  *
  * `source` is the declaring file path (CLI) or the per-content `mthds_sources` name
  * the API threads onto the in-memory load path — the owning file for cross-file
  * diagnostics.
+ *
+ * An `unknown_model` item (a model reference the runner's model deck does not know)
+ * carries the reference as written, the kind of model the field takes and the close
+ * matches, and, when there is exactly one close match, a `suggested_fix` that remaps
+ * the reference to it.
  */
 export interface ValidationErrorItem {
   category: ValidationErrorCategory;
@@ -339,8 +355,21 @@ export interface ValidationErrorItem {
   field_name?: string | null;
   variable_names?: string[] | null;
   missing_concept_code?: string | null;
+  /** The pipe a reference names that the bundle does not declare. */
   missing_pipe_code?: string | null;
   declared_concepts?: string[] | null;
+  /**
+   * On an `unknown_model` item: the model reference exactly as the author wrote it
+   * (`gpt-5.1`, `@best-sonet`, `$writting-factual`).
+   */
+  model_reference?: string | null;
+  /** On an `unknown_model` item: the kind of model the field takes (`llm`, `img_gen`, …). */
+  model_type?: string | null;
+  /**
+   * On an `unknown_model` item: the close matches of the same kind, each spelled as a
+   * reference the field accepts.
+   */
+  suggestions?: string[] | null;
   /** The server's deterministic repair proposal for this error, when it has one. */
   suggested_fix?: SuggestedFix | null;
 }
@@ -367,6 +396,9 @@ export type TomlScalar = string | number | boolean;
  * the server does not emit it.
  */
 export type TomlValue = TomlScalar | Record<string, TomlScalar>;
+
+/** `TomlValue` under the name `mthds` gives it, so either client's vocabulary reads here. */
+export type FixValue = TomlValue;
 
 /**
  * What every fix op carries: the table it acts in. `table_path` addresses the containing
@@ -419,7 +451,11 @@ export interface MoveKeyOp extends FixOpBase {
   new_key: string;
 }
 
-/** Rewrite `key`'s value through `mapping`, leaving an unmapped value untouched. */
+/**
+ * Rewrite `key`'s value through `mapping`, leaving an unmapped value untouched. The
+ * unknown-model fix is one: it maps the reference as written to its one close match, so
+ * it changes nothing once the author has edited the field.
+ */
 export interface RemapValueOp extends FixOpBase {
   kind: "remap_value";
   key: string;
@@ -440,6 +476,10 @@ export type FixOp =
  * A deterministic fix for one validation error, ready for a style-preserving applier —
  * mirror of pipelex's `SuggestedFix`. The ops are semantic patches over the `.mthds`
  * document, not a text diff, so an applier keeps the author's formatting.
+ *
+ * The shape is `mthds`'s `SuggestedFix`, its op vocabulary included (this SDK's
+ * `TomlValue` is the standard's `FixValue`), restated and pinned for the reason
+ * `ValidationErrorItem` gives; `source` alone is widened to `| null`.
  */
 export interface SuggestedFix {
   /** The kebab-case rule id, e.g. `"match-sequence-output"`. */
