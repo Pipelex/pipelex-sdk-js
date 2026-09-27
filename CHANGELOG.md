@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v0.26.0] - 2026-09-27
 
 ### Added
 
@@ -13,6 +13,7 @@
 
 - **A failed run carries its report (Breaking)**: the `failed` arm of `getRunResult` gains `error`, the run's stored report or `null`, and `RunFailedError`, thrown by `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, gains the same `error`, so the reason, the next step and the retry advice reach the caller. Its `status` is now typed `RunStatus` and is read from the results read's `run_status` member, the `detail` sentence serving only for a platform that does not send it yet. Code that builds a `failed` state by hand now sets `error`.
 - **Branch on `errorDomain` and `type`**: the README and `docs/architecture.md` now point consumers at `errorDomain` and `type`, the hosted envelope's branch fields, rather than at the platform's native `code`, which stays on the error and is one-to-one with `type`.
+- **The `mthds` floor moves from `^0.25.0` to `^0.28.0`**: `mthds` 0.28.0 is the release whose `ApiResponseError` carries the problem members and whose `ValidationErrorItem` carries `model_reference`, `model_type` and `suggestions`, the declarations this SDK's error and validation-item types are pinned to.
 
 ## [v0.25.1] - 2026-09-25
 
