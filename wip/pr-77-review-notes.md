@@ -8,6 +8,8 @@
 
 `RunErrorReport.message` and `error_type` were typed `string` (optional) and are now `string | null` (optional), like every field of the report. The type reaches `PipelineRun.error` on `listRuns`, `iterateRuns` and `getRunDetail`, so code such as `const m: string | undefined = run.error?.message` stops compiling under strict TypeScript. The changelog lists the reshaped report under `### Added` without the `(Breaking)` marker the workspace's changelog rule asks for; the Python twin files the same reshaping under `### Changed` as Breaking. The fix is to move the report bullet under `### Changed` with `(Breaking)`, saying that its fields now admit `null`.
 
+**Answered in the v0.26.0 release commit.** The report bullet moved under `### Changed` as `(Breaking)`: it says every field admits `null`, that `message` and `error_type` changed from `string` to `string | null` so code under `strictNullChecks` now handles `null`, and it names `caller_facing_message` among the fields.
+
 ## Deferred, unverified: "the same names and types as `mthds`" is too broad for `validationErrors`
 
 **Reporter:** cubic (P3), on `src/errors.ts`.
