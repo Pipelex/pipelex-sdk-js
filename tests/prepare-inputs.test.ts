@@ -1,6 +1,6 @@
 /**
  * `prepareInputs` — signature-driven input preparation. Cases derive from the
- * shared behavior matrix (`wip/upload/behavior-matrix.md`), re-expressed on the
+ * behavior both SDKs share (`docs/input-preparation.md`), re-expressed on the
  * artifact that now classifies: the **input-form descriptor** on the validate
  * report. A `document` / `image` node marks a file position at any depth, assets
  * are uploaded and rewritten to `pipelex-storage://` in `url`, http(s)/storage

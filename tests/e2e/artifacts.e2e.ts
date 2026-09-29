@@ -12,7 +12,7 @@
  * produces. Every mock agrees with the client about the field names; only a live
  * exchange settles whether the platform does.
  *
- * The leg is the design's: `prepareInputs` a small file, run a pass-through with no
+ * The leg: `prepareInputs` a small file, run a pass-through with no
  * inference, `downloadArtifacts` over `working_memory`, and read the bytes back
  * equal. A bare runner cannot run it (no upload, no run store, no resolve route) and
  * fails it honestly rather than skipping.

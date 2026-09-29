@@ -168,7 +168,7 @@ client.buildInputs({ files: await client.getMethodClosure("mt_…"), pipe_ref?, 
 methodSourceToContents(mthds: string) → string[]
 ```
 
-A stored method's `mthds` field is **polymorphic**: it is either the raw single-bundle source, or a JSON array of `{ name, content }` file entries (a multi-file closure). `methodSourceToContents` is the one canonical parser that turns either shape into a flat list of file contents — a verbatim port of the platform's `_method_source_to_contents`, so the SDK and the runtime read a stored source identically. It is exported from the barrel for consumers (e.g. `pipelex-mcp`) that need the parse without the fetch. Blank entries are dropped; a source that parses to no non-blank content yields `[]`, which is what `getMethodClosure` turns into `EmptyMethodSourceError`.
+A stored method's `mthds` field is **polymorphic**: it is either the raw single-bundle source, or a JSON array of `{ name, content }` file entries (a multi-file closure). `methodSourceToContents` is the one canonical parser that turns either shape into a flat list of file contents — a verbatim port of the platform's `method_source_to_contents`, so the SDK and the runtime read a stored source identically. It is exported from the barrel for consumers (e.g. `pipelex-mcp`) that need the parse without the fetch. Blank entries are dropped; a source that parses to no non-blank content yields `[]`, which is what `getMethodClosure` turns into `EmptyMethodSourceError`.
 
 ## Compact or explicit-envelope inputs
 
