@@ -25,8 +25,8 @@
  * passes through. That is what makes an OPTIONAL nested file field prepare like
  * a required one, and a `text` field merely *named* `url` stay untouched: both
  * were misread while the signature came from the rendered inputs template, whose
- * file signal was a `url`-bearing dict. See `docs/input-preparation.md` and the
- * shared behavior matrix (`wip/upload/behavior-matrix.md`).
+ * file signal was a `url`-bearing dict. See `docs/input-preparation.md`, which
+ * `pipelex-sdk-python` mirrors case for case.
  */
 
 import type {

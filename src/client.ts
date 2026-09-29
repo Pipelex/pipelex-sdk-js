@@ -945,7 +945,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // published package's documented fallback against a runner. The crate
   // routes (`resolve`/`codegen`) shared this gap and are now exposed everywhere;
   // these two were not included, a known non-critical item on the platform's list.
-  // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
+  // Tracked in L-260929-b58f26.
 
   /**
    * Lint one `.mthds` file against the embedded MTHDS schema — `POST /v1/lint`.

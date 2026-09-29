@@ -1,7 +1,7 @@
 /**
  * The shell reading behind a Codex `Bash` patch: for each patch header in a
  * script, the directory the command holding it runs in. One row per construct
- * of the design's table (wip/follow-cd-before-resolving/design.md, Decision 3).
+ * of the table in `docs/hook-bundle.md`, "How the directory is followed".
  */
 
 import { describe, expect, it } from "vitest";
