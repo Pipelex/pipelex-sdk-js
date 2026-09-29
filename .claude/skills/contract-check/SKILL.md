@@ -83,11 +83,12 @@ Produce a **self-contained** report (readable by an agent in another repo). Star
 
 ## Step 6 — File the Actionable Findings as Ledger Items
 
-The report is printed, never saved to a file: a saved report is the ad hoc follow-up list the workspace ledger replaced. Each discrepancy or unmatched addition that somebody must act on becomes one workspace ledger item, owned by the repo that fixes it; a spec edit is owned by `workspace`, since `docs/specs/` lives in the meta-repo. Aligned changes stay in the printed report.
+The report is printed, never saved to a file: a saved report is the ad hoc follow-up list the workspace ledger replaced. Each discrepancy or unmatched addition that somebody must act on becomes one workspace ledger item. Aligned changes stay in the printed report.
 
-- **Fix in place what belongs here.** A finding whose fix is a small, obvious change in this repo is made in this session, after asking the user; it is filed only when it is genuinely out of scope.
+- **Ask which side moves before filing.** This skill does not decide whether the code or the spec is wrong, so the owner comes from the user's answer: a code fix is owned by `pipelex-sdk-js`, a spec edit by `workspace`, since `docs/specs/` lives in the meta-repo. A finding the user leaves undecided is filed as a `decision` owned by `workspace`, its body naming both sides.
+- **Fix in place what belongs here, except under a release.** A finding whose fix is a small, obvious change in this repo is made in this session, after asking the user; it is filed only when it is genuinely out of scope. When `/release` runs this skill, nothing is fixed in place: the release commit stages only its own files by name, so a fix made in the release worktree would stay uncommitted or ride into `main` without a topic branch and its `/rev`. File it instead.
 - **Check for an existing item first**, since this check runs before every release and the same drift resurfaces: `ledger list --ref skill:contract-check --status open`. When an open item covers the finding, record the sighting on it (`ledger note <id> "Still open at baseline <baseline> → HEAD <short-sha>."`) and name the id in the report.
-- **File the rest** with `ledger new --owner <repo> --type bug|spec|task --title "…" --gist "…" --ref skill:contract-check`, the body carrying the report's evidence for that finding (file:line, spec section, conformance status), so an agent in `docs` or `conformance` can act without this repo. The `/ledger` skill has the full command reference.
+- **File the rest** with `ledger new --owner <repo> --type bug|spec|task|decision --title "…" --gist "…" --ref skill:contract-check`, the body carrying the report's evidence for that finding (file:line, spec section, conformance status), so an agent in `docs` or `conformance` can act without this repo. The `/ledger` skill has the full command reference.
 
 ## Notes
 
