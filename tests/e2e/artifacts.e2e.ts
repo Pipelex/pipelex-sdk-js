@@ -12,7 +12,7 @@
  * produces. Every mock agrees with the client about the field names; only a live
  * exchange settles whether the platform does.
  *
- * The leg is the design's: `prepareInputs` a small file, run a pass-through with no
+ * The leg: `prepareInputs` a small file, run a pass-through with no
  * inference, `downloadArtifacts` over `working_memory`, and read the bytes back
  * equal. A bare runner cannot run it (no upload, no run store, no resolve route) and
  * fails it honestly rather than skipping.
@@ -27,7 +27,13 @@ import { artifactFilename, collectArtifacts } from "../../src/artifacts.js";
 
 const BASE_URL = process.env.PIPELEX_E2E_BASE_URL ?? "http://localhost:8081";
 
-/** One domain, one main pipe, a Document input beside the Text it echoes — no inference. */
+/**
+ * One domain, one main pipe, a Document input beside the Text it echoes — no inference.
+ * The template reads `doc` in an empty conditional: pipelex refuses a declared input the
+ * template never reads, and the conditional reads it while the output stays the note
+ * alone. The Document rides through working memory either way, which is what the round
+ * trip downloads.
+ */
 const PASS_THROUGH_BUNDLE = `domain = "smoke_artifacts"
 main_pipe = "echo_note"
 
@@ -36,7 +42,7 @@ type = "PipeCompose"
 description = "Echo the note beside a document, with no inference"
 inputs = { doc = "Document", note = "Text" }
 output = "Text"
-template = "$note"
+template = "{% if doc %}{% endif %}$note"
 `;
 
 /** A minimal PDF, with a few bytes of its own so a swapped file could not pass. Nothing in the run reads it. */
