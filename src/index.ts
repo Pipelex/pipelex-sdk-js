@@ -145,6 +145,9 @@ export type {
   CodegenRequest,
   CodegenValidReport,
   CodegenResponse,
+  PipeIORequest,
+  PipeIOValidReport,
+  PipeIOResponse,
 } from "./models.js";
 
 // ── Offline codegen drift check (pure — no filesystem, no network, no key) ──
