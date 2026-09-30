@@ -7,10 +7,10 @@
  *     PIPELEX_E2E_BASE_URL=http://localhost:8081 npm run test:e2e
  *
  * The `pipeIo` block needs a runner serving `POST /v1/pipe-io`, and its selection
- * refusal case needs the typed `EntryPipeNotFoundError` on that route's `422`. Its
- * `method_id` case runs only when `PIPELEX_E2E_METHOD_ID` names a stored method the
- * key's organization owns, which only a hosted origin can resolve; it is skipped
- * otherwise.
+ * refusal case needs the typed `EntryPipeNotFoundError` on that route's `422`, which
+ * pipelex-api sends from v0.33.1. Its `method_id` case runs only when
+ * `PIPELEX_E2E_METHOD_ID` names a stored method the key's organization owns, which only
+ * a hosted origin can resolve; it is skipped otherwise.
  *
  * These are the tests the unit suite cannot write. Every mock in the repo agrees with
  * the client about the field names, so a typo in the request body (`kind`/`target`

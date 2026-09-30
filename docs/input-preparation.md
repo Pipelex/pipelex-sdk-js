@@ -127,7 +127,7 @@ The route resolves the closure, **selects the pipe**, and answers with that pipe
 
 A `method_ref` makes the server clone a repository first, so the call gets the crate routes' fetch-sized budget. On the hosted API the gateway caps a request at about 30 seconds whatever the client allows, so a cold clone can answer a `502` `ApiResponseError`; a retry clears it once the runner has cached the clone.
 
-`prepareInputs` needs an API that serves `POST /v1/pipe-io`. Against one that does not, the route's `404` (a runner) or `403` (a hosted origin whose gateway does not list it yet) propagates as an `ApiResponseError`. It also needs the route's pipe-selection refusals typed, as step 3 of "Pipe selection" below describes: `pipelex-api` v0.33.0, the release that added the route, still types them as the generic `ValidationError`, so against it a refused selection reaches the caller as that `ApiResponseError` rather than an `InputPreparationError`.
+`prepareInputs` needs an API that serves `POST /v1/pipe-io`. Against one that does not, the route's `404` (a runner) or `403` (a hosted origin whose gateway does not list it yet) propagates as an `ApiResponseError`. It also needs the route's pipe-selection refusals typed, as step 3 of "Pipe selection" below describes, which `pipelex-api` does from v0.33.1: v0.33.0, the release that added the route, typed them as the generic `ValidationError`, so against it a refused selection reaches the caller as that `ApiResponseError` rather than an `InputPreparationError`.
 
 #### Pipe selection
 

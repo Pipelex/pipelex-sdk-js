@@ -3,7 +3,8 @@
  *
  * Run with `make test-e2e` (or `npm run test:e2e`) against a runner that serves
  * `POST /v1/pipe-io`, which `prepareInputs` reads its pipe and its signature from. The
- * two refusal cases also need the route's selection `422`s typed `EntryPipeNotFoundError`:
+ * two refusal cases also need the route's selection `422`s typed `EntryPipeNotFoundError`,
+ * which pipelex-api does from v0.33.1:
  *
  *     PIPELEX_E2E_BASE_URL=https://api-dev.pipelex.com npm run test:e2e
  *

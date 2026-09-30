@@ -1083,9 +1083,9 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // serves both, verdict discipline intact (200 `is_valid:false`, 501, 422);
   // api-dev.pipelex.com has since 2026-08-13. `lint`/`format` are the two still
   // unexposed — see their section above for why that blocks nothing. `pipe-io` is
-  // newer: a runner serves it from `pipelex-api` v0.33.0, which still types its
-  // selection refusals `ValidationError` (a later release types them
-  // `EntryPipeNotFoundError` / `EntryPipeAmbiguousError`), and a hosted origin
+  // newer: a runner serves it from `pipelex-api` v0.33.0, and types its selection
+  // refusals `EntryPipeNotFoundError` / `EntryPipeAmbiguousError` from v0.33.1
+  // (v0.33.0 typed them `ValidationError`), and a hosted origin
   // serves it once the platform's proxy and the gateway list it (see
   // `docs/crate-routes.md`).
   //
