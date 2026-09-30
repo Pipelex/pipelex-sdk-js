@@ -100,7 +100,7 @@ prompt = "@text"
 const METHOD_REF = "github.com/Pipelex/methods/documents";
 
 /** A stored method the key's organization owns — hosted origins only. */
-const METHOD_ID = process.env.PIPELEX_E2E_METHOD_ID;
+const METHOD_ID = process.env.PIPELEX_E2E_METHOD_ID || undefined;
 
 // ── Suite ────────────────────────────────────────────────────────────────
 

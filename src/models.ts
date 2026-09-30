@@ -603,7 +603,7 @@ export interface BuildRequestBase extends CrateRequestBase {
   pipe_ref?: string;
   /**
    * The `/v1/build/*` projections take NO `method_id` — the hosted platform's
-   * tooling selector covers `validate`/`resolve`/`codegen` only, and the build
+   * tooling selector covers `validate`/`resolve`/`codegen`/`pipe-io` only, and the build
    * routes are deliberately excluded (they are frozen, being replaced by the
    * codegen surface). Pinned to `never` so a stored-method caller reaches for
    * `getMethodClosure` instead of a field no server resolves.

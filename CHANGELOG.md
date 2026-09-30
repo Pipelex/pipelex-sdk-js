@@ -8,7 +8,7 @@
 
 ### Changed
 
-- **`prepareInputs` reads `POST /v1/pipe-io`, and the route selects the pipe (Breaking)**: preparation calls `pipeIo` instead of `validate`, so it runs no dry run and needs an API that serves the route; against one that does not, the route's `404` or `403` propagates as an `ApiResponseError`. The route's entry pipe replaces the helper's own default chain and its blueprint and single-pipe fallbacks, so a method whose domains declare several `main_pipe`s now needs `pipe_ref` where the first declaration used to be taken, and a selection the route refuses (a `422` typed `EntryPipeNotFoundError` or `EntryPipeAmbiguousError`) is an `InputPreparationError` carrying the server's detail instead of a list of candidates the client built.
+- **`prepareInputs` reads `POST /v1/pipe-io`, and the route selects the pipe (Breaking)**: preparation calls `pipeIo` instead of `validate`, so it runs no dry run and needs an API that serves the route with its selection refusals typed, which `pipelex-api` v0.33.0 does not yet do; against one that does not serve it, the route's `404` or `403` propagates as an `ApiResponseError`. The route's entry pipe replaces the helper's own default chain and its blueprint and single-pipe fallbacks, so a method whose domains declare several `main_pipe`s now needs `pipe_ref` where the first declaration used to be taken, and a selection the route refuses (a `422` typed `EntryPipeNotFoundError` or `EntryPipeAmbiguousError`) is an `InputPreparationError` carrying the server's detail instead of a list of candidates the client built.
 
 ## [v0.26.0] - 2026-09-27
 
