@@ -880,8 +880,12 @@ export interface PipeIORequest extends CrateRequestBase, PipelexHostedToolingExt
   /**
    * The pipe to describe, as a QUALIFIED `domain.pipe_code` ref. Omit it and the
    * server's selection chain decides: a fetched package's manifest `main_pipe`, else
-   * the closure's single `main_pipe` declaration. A ref that names no pipe, and (without
-   * `all_pipes`) a chain that finds no entry pipe or several, are request-shape `422`s.
+   * the closure's single `main_pipe` declaration. A selection the server refuses is a
+   * `422` typed by what went wrong, with `error_domain: "input"` and the candidates, where
+   * there are some, in its `detail`: `EntryPipeNotFoundError` for a ref that names no pipe
+   * or (without `all_pipes`) a method with no entry pipe, `EntryPipeAmbiguousError` for a
+   * code that matches pipes in several domains or (without `all_pipes`) several `main_pipe`
+   * declarations. A malformed request stays a `ValidationError` `422`.
    *
    * The server does not refuse a bare code yet: a bare ref that matches one pipe is
    * resolved across domains, and the valid arm reports the qualified ref.

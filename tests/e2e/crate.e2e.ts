@@ -284,20 +284,23 @@ describe("e2e pipe-io (/v1/pipe-io)", () => {
     expect(report.files).toEqual(files);
   });
 
-  it("describes every pipe of a method with no entry pipe under all_pipes, pipe_ref null", async () => {
+  it("describes every pipe of a method with no entry pipe under all_pipes, pipe_ref null, files echoed", async () => {
+    const noMainFiles = [{ content: NO_MAIN_BUNDLE, source: "smoke_no_main.mthds" }];
     const result = await client.pipeIo({
-      files: [{ content: NO_MAIN_BUNDLE, source: "smoke_no_main.mthds" }],
+      files: noMainFiles,
       all_pipes: true,
+      include_files: true,
     });
 
     expect(result.is_valid).toBe(true);
     const report = result as PipeIOValidReport;
     expect(report.pipe_ref).toBeNull();
     expect(report.default_pipe_ref).toBeNull();
-    expect(Object.keys(report.input_form).sort()).toEqual([
-      "smoke_no_main.first",
-      "smoke_no_main.second",
-    ]);
+    const refs = ["smoke_no_main.first", "smoke_no_main.second"];
+    expect(Object.keys(report.pipe_io_contracts).sort()).toEqual(refs);
+    expect(Object.keys(report.input_form).sort()).toEqual(refs);
+    expect(Object.keys(report.output_form).sort()).toEqual(refs);
+    expect(report.files).toEqual(noMainFiles);
   });
 
   it("resolves a method_ref package's manifest entry pipe, echoing its package-relative files", async () => {
@@ -313,12 +316,43 @@ describe("e2e pipe-io (/v1/pipe-io)", () => {
     for (const file of report.files!) expect(file.source).toMatch(/\.mthds$/);
   });
 
-  it.skipIf(METHOD_ID === undefined)("resolves a hosted method_id", async () => {
-    const result = await client.pipeIo({ method_id: METHOD_ID, all_pipes: true });
+  it("describes every pipe of a method_ref package under all_pipes, the entry pipe still resolved", async () => {
+    const result = await client.pipeIo({
+      method_ref: METHOD_REF,
+      all_pipes: true,
+      include_files: true,
+    });
 
     expect(result.is_valid).toBe(true);
-    expect(Object.keys((result as PipeIOValidReport).input_form).length).toBeGreaterThan(0);
+    const report = result as PipeIOValidReport;
+    // Under `all_pipes` with no `pipe_ref`, the answer's ref is the chain's: the manifest's.
+    expect(report.pipe_ref).toBe(report.default_pipe_ref);
+    const refs = Object.keys(report.input_form);
+    expect(refs.length).toBeGreaterThan(1);
+    expect(refs).toContain(report.pipe_ref);
+    expect(Object.keys(report.pipe_io_contracts).sort()).toEqual([...refs].sort());
+    expect(report.files!.length).toBeGreaterThan(0);
   });
+
+  it.skipIf(METHOD_ID === undefined)(
+    "resolves a hosted method_id under all_pipes, echoing the stored files",
+    async () => {
+      const result = await client.pipeIo({
+        method_id: METHOD_ID,
+        all_pipes: true,
+        include_files: true,
+      });
+
+      expect(result.is_valid).toBe(true);
+      const report = result as PipeIOValidReport;
+      const refs = Object.keys(report.input_form);
+      expect(refs.length).toBeGreaterThan(0);
+      if (report.pipe_ref !== null) expect(refs).toContain(report.pipe_ref);
+      // The platform forwards the stored files under their stored names.
+      expect(report.files!.length).toBeGreaterThan(0);
+      for (const file of report.files!) expect(file.content.length).toBeGreaterThan(0);
+    },
+  );
 
   it("returns an unresolvable closure as a 200 verdict carrying no files, whatever include_files says", async () => {
     const result = await client.pipeIo({

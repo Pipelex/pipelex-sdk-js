@@ -1161,10 +1161,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *
    * Same 200-verdict discipline and same three-form closure selector as {@link resolve}
    * (the request is posted verbatim, and the selector XOR is the server's to enforce).
-   * Only a no-verdict condition throws `ApiResponseError`: a malformed selector, an
-   * over-limit file, and a selection the route refuses (an unknown `pipe_ref`, no entry
-   * pipe, several) are `422`s; a registry-form `method_ref` is a `501`; a pipe whose
-   * artifacts cannot be derived is a `500`.
+   * Only a no-verdict condition throws `ApiResponseError`: a malformed selector and an
+   * over-limit file are `ValidationError` `422`s; a selection the route refuses is a
+   * `422` whose `errorType` is `EntryPipeNotFoundError` (an unknown `pipe_ref`, no entry
+   * pipe) or `EntryPipeAmbiguousError` (an ambiguous code, several entry pipes), the
+   * candidates in its `serverMessage`; a registry-form `method_ref` is a `501`; a pipe
+   * whose artifacts cannot be derived is a `500`.
    *
    * A `method_ref` gets the fetch-sized budget, as on the other crate routes. On the
    * hosted API the gateway caps a request at about 30 seconds whatever the client

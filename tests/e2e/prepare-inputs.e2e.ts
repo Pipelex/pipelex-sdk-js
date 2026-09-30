@@ -20,7 +20,7 @@
  * route's pipe selection, the descriptor, and the walk.
  *
  * The `method_id` case runs only when `PIPELEX_E2E_METHOD_ID` names a stored method the
- * key's organization owns, with a pipe that takes a `document` input as its entry pipe:
+ * key's organization owns whose entry pipe takes a `document` input, whatever it is named:
  * a catalog id is resolved by the hosted platform against an org's own methods, so there
  * is no id a fresh checkout could name, and a bare runner has no catalog. It is skipped
  * otherwise; the unit suite pins that the id reaches the wire as a pass-through selector.
@@ -29,6 +29,7 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { PipelexApiClient } from "../../src/client.js";
 import { InputPreparationError } from "../../src/errors.js";
+import type { PipeIOValidReport } from "../../src/models.js";
 
 const BASE_URL = process.env.PIPELEX_E2E_BASE_URL ?? "http://localhost:8081";
 
@@ -141,12 +142,22 @@ describe("prepareInputs against a live runner", () => {
   });
 
   it.skipIf(METHOD_ID === undefined)("prepares from a hosted method_id", async () => {
+    // The stored method is the caller's own, so its document input's name is read off the
+    // route rather than assumed: the entry pipe's first `document` field.
+    const described = await client.pipeIo({ method_id: METHOD_ID });
+    expect(described.is_valid).toBe(true);
+    const report = described as PipeIOValidReport;
+    const field = report.input_form[report.pipe_ref!]!.fields.find(
+      (candidate) => candidate.kind === "document",
+    );
+    expect(field).toBeDefined();
+
     const prepared = await client.prepareInputs({
       method_id: METHOD_ID!,
-      inputs: { document: REMOTE_DOC },
+      inputs: { [field!.name]: REMOTE_DOC },
     });
 
-    expect(prepared.inputs).toEqual({ document: { url: REMOTE_DOC } });
+    expect(prepared.inputs).toEqual({ [field!.name]: { url: REMOTE_DOC } });
     expect(prepared.uploads).toHaveLength(0);
   });
 });
