@@ -1,15 +1,17 @@
 /**
- * `prepareInputs` — signature-driven input preparation. Resolves the target
- * pipe's declared inputs from the **input-form descriptor** on the validate
- * report, interprets the caller's inputs top-down against it, uploads the
- * file-bearing values, and returns rewritten inputs (canonical content carrying
+ * `prepareInputs` — signature-driven input preparation. Reads the target pipe's
+ * declared inputs from the **input-form descriptor** `POST /v1/pipe-io` returns,
+ * interprets the caller's inputs top-down against it, uploads the file-bearing
+ * values, and returns rewritten inputs (canonical content carrying
  * `pipelex-storage://` in `url`) plus one upload record per prepared asset.
  *
  * The method is named the same three ways every other method-taking operation
  * takes it — inline `files`, a `method_ref` address, or a stored `method_id` —
- * exactly one per call. All three are pass-throughs to `POST /v1/validate`,
- * which resolves an address on the runner and an id on the platform, so nothing
- * is expanded client-side.
+ * exactly one per call. All three are pass-throughs to `POST /v1/pipe-io`, which
+ * resolves an address on the runner and an id on the platform, so nothing is
+ * expanded client-side. The route also SELECTS the pipe: the caller's qualified
+ * `pipe_ref`, else the method's own entry pipe, and the ref it answers with is
+ * the one prepared. It runs no dry run, so preparing inputs costs one static load.
  *
  * Per input, the caller may submit EITHER the **compact** value (a bare source /
  * canonical `{url}` content) OR the explicit `{ concept, content }` envelope —
@@ -19,14 +21,14 @@
  * `input_normalizer.py`).
  *
  * **The descriptor is the classifier, never the value's shape.** `input_form`
- * (the MTHDS standard's artifact, opted into with `views: ["input_form"]`)
- * states the kind at every depth — `document` / `image` mark a file position,
- * `object` recurses through `fields`, `list` through `item`, everything else
- * passes through. That is what makes an OPTIONAL nested file field prepare like
- * a required one, and a `text` field merely *named* `url` stay untouched: both
- * were misread while the signature came from the rendered inputs template, whose
- * file signal was a `url`-bearing dict. See `docs/input-preparation.md`, which
- * `pipelex-sdk-python` mirrors case for case.
+ * (the MTHDS standard's artifact) states the kind at every depth — `document` /
+ * `image` mark a file position, `object` recurses through `fields`, `list`
+ * through `item`, everything else passes through. That is what makes an
+ * OPTIONAL nested file field prepare like a required one, and a `text` field
+ * merely *named* `url` stay untouched: both were misread while the signature
+ * came from the rendered inputs template, whose file signal was a `url`-bearing
+ * dict. See `docs/input-preparation.md`, which `pipelex-sdk-python` mirrors case
+ * for case.
  */
 
 import type {
@@ -35,28 +37,39 @@ import type {
   InputFormTopLevelField,
   PipeInputFormDescriptor,
 } from "mthds/protocol";
-import { InputPreparationError } from "./errors.js";
-import type {
-  MthdsFileItem,
-  PipelexValidationReport,
-  PipelexValidationResult,
-  ValidateMethodSelector,
-} from "./models.js";
+import { ApiResponseError, InputPreparationError } from "./errors.js";
+import type { MthdsFileItem, PipeIORequest, PipeIOResponse, PipeIOValidReport } from "./models.js";
 import type { UploadCapableClient, UploadRecord } from "./upload.js";
 import { uploadFile } from "./upload.js";
 
 const PIPELEX_STORAGE_SCHEME = "pipelex-storage://";
 const HTTP_URL_RE = /^https?:\/\//i;
 
+/**
+ * The `error_type`s of the route's pipe-selection refusals — the only `422`s
+ * `prepareInputs` turns into an `InputPreparationError`. They are the runtime's
+ * entry-lookup classes, the vocabulary the run routes speak too: a ref that names
+ * no pipe, or no entry pipe at all, is `EntryPipeNotFoundError`; a code that
+ * matches pipes in several domains, or several `main_pipe` declarations, is
+ * `EntryPipeAmbiguousError`. Every other `422` (a malformed body, an over-limit
+ * file, a fetched package with no `.mthds` file, a stored method with no source)
+ * shares the generic `ValidationError` type and stays an `ApiResponseError`.
+ */
+const PIPE_SELECTION_ERROR_TYPES: ReadonlySet<string> = new Set([
+  "EntryPipeNotFoundError",
+  "EntryPipeAmbiguousError",
+]);
+
 /** The shared half of the request: the target pipe and the caller's inputs. */
 export interface PrepareInputsBase {
   /**
    * The pipe to prepare inputs for, as a QUALIFIED `domain.pipe_code` ref. Omit
-   * it to default — see "Pipe selection" in `docs/input-preparation.md`. A bare
-   * `pipe_code` is refused: the descriptor is keyed by qualified refs, and search
-   * is a run-route affordance this helper deliberately does not grow. So is an
+   * it and the server picks the method's own entry pipe — see "Pipe selection" in
+   * `docs/input-preparation.md`. A bare `pipe_code` is refused before any request:
+   * a request names a pipe by its qualified ref, and search is a run-route
+   * affordance this helper deliberately does not grow. So is an
    * `alias->domain.pipe_code` ref: the alias names a dependency package's pipe,
-   * which the descriptor does not describe (it covers the method's own pipes).
+   * and preparation covers the method's own pipes.
    */
   pipe_ref?: string;
   /** The caller's inputs (variable name → value), compact or explicit-envelope per input. */
@@ -66,7 +79,7 @@ export interface PrepareInputsBase {
 /**
  * How the method is named — exactly one of the three selectors, each pinning the
  * other two to `never` so a second one is a compile error (the same XOR
- * `ValidateMethodSelector` states for the tooling routes). All three reach the
+ * `ValidateMethodSelector` states for `validate`). All three reach the
  * server as-is: `files` inline, `method_ref` resolved by the runner, `method_id`
  * resolved by the platform.
  */
@@ -87,19 +100,12 @@ export interface PreparedInputs {
 }
 
 /**
- * The client surface `prepareInputs` needs: raw `upload`, and `validate` as the
- * signature source. Typed as the client's own `validate` signature so
+ * The client surface `prepareInputs` needs: raw `upload`, and `pipeIo` as the
+ * signature source. Typed as the client's own `pipeIo` signature so
  * `PipelexApiClient` satisfies it structurally.
  */
 export interface PrepareCapableClient extends UploadCapableClient {
-  validate(
-    source: string[] | ValidateMethodSelector,
-    allowSignatures?: boolean,
-    mthdsSources?: string[],
-    render?: string[],
-    views?: string[],
-    options?: { timeoutMs?: number; signal?: AbortSignal },
-  ): Promise<PipelexValidationResult>;
+  pipeIo(request: PipeIORequest): Promise<PipeIOResponse>;
 }
 
 /** Mutable state threaded through one preparation walk. */
@@ -291,7 +297,7 @@ type ResolvedSelector = { files: MthdsFileItem[] } | { method_ref: string } | { 
  * Normalize and check the three selectors. Empty is absent (`files: []`,
  * `method_ref: ""`, `method_id: "  "`), mirroring the run options' rule and the
  * Python `CrateRequestBase` normalisers, and exactly one must remain — the check
- * lives here because this helper is the one that composes the `validate` call.
+ * lives here because this helper is the one that composes the `pipeIo` call.
  * The illegal shapes are compile errors for typed callers; this backs them up for
  * untyped (JS) ones with a typed `InputPreparationError`.
  */
@@ -318,7 +324,8 @@ function resolveSelector(request: PrepareInputsRequest): ResolvedSelector {
   }
   if (given.length > 1) {
     throw new InputPreparationError(
-      `Cannot prepare inputs: ${given.join(" and ")} were both given. Supply exactly one method ` +
+      `Cannot prepare inputs: ${given.join(" and ")} were ${given.length === 2 ? "both" : "all"} ` +
+        "given. Supply exactly one method " +
         "selector — `files`, `method_ref` or `method_id`.",
     );
   }
@@ -328,31 +335,70 @@ function resolveSelector(request: PrepareInputsRequest): ResolvedSelector {
 }
 
 /**
- * Ask `validate` for the signature, whatever the selector, and hand back the
- * valid report.
+ * Normalize the caller's `pipe_ref` and refuse, before any request, the two
+ * spellings preparation cannot honour. Empty is absent, so the route's selection
+ * chain decides.
  *
- * `allowSignatures: true` on purpose: preparation needs a pipe's DECLARED inputs,
- * and a bundle mid-authoring with an unresolved signature elsewhere must not be
- * refused inputs for a pipe whose inputs are declared. Whether the bundle runs is
- * the run's verdict, not preparation's. The `is_valid: false` arm still means the
- * closure does not load, which is a preparation failure.
+ * - A **bare** `pipe_code` is refused because a request names a pipe by its
+ *   qualified ref. The route will refuse it too once the runner's shared
+ *   selection enforces that rule; until then it would resolve a bare code across
+ *   domains, and preparation does not lean on that fallback.
+ * - An **`alias->domain.pipe_code`** ref is refused because the alias names a
+ *   dependency package's pipe, and preparation covers the method's own pipes: the
+ *   crate routes do not load an address-based dependency at all. The run route
+ *   takes such a ref; preparation refuses it, and that asymmetry is deliberate.
+ */
+function normalizePipeRef(raw: unknown): string | undefined {
+  const pipeRef = nonEmptyString(raw);
+  if (pipeRef === undefined) return undefined;
+  if (pipeRef.includes("->")) {
+    throw new InputPreparationError(
+      `Cannot prepare inputs: \`pipe_ref\` "${pipeRef}" names a dependency package's pipe. ` +
+        "Preparation covers the method's own pipes: name one as `domain.pipe_code`.",
+    );
+  }
+  if (!pipeRef.includes(".")) {
+    throw new InputPreparationError(
+      `Cannot prepare inputs: \`pipe_ref\` must be qualified (\`domain.pipe_code\`), got the bare ` +
+        `"${pipeRef}".`,
+    );
+  }
+  return pipeRef;
+}
+
+/**
+ * Ask `POST /v1/pipe-io` for the pipe and its signature, whatever the selector,
+ * and hand back the valid report.
+ *
+ * The route runs no dry run and does not refuse a method with pending
+ * signatures elsewhere: preparation needs a pipe's DECLARED inputs, and whether
+ * the method runs is the run's verdict, not preparation's. The `is_valid: false`
+ * arm means the closure does not load, which is a preparation failure. So is a
+ * selection the route refuses — an unknown `pipe_ref`, no entry pipe, several —
+ * which it answers with a `422` typed by one of {@link PIPE_SELECTION_ERROR_TYPES};
+ * every other failure is re-thrown unchanged.
  */
 async function fetchSignature(
   client: PrepareCapableClient,
   selector: ResolvedSelector,
-): Promise<PipelexValidationReport> {
-  let result: PipelexValidationResult;
-  if ("files" in selector) {
-    const contents = selector.files.map((file) => file.content);
-    // `validateFiles`' rule: label every content once any file names a source, so
-    // the server never sees a length-mismatched `mthds_sources` array.
-    const hasAnySource = selector.files.some((file) => file.source !== undefined);
-    const sources = hasAnySource
-      ? selector.files.map((file, index) => file.source ?? `inline://file-${index + 1}.mthds`)
-      : undefined;
-    result = await client.validate(contents, true, sources, undefined, ["input_form"]);
-  } else {
-    result = await client.validate(selector, true, undefined, undefined, ["input_form"]);
+  pipeRef: string | undefined,
+): Promise<PipeIOValidReport> {
+  const request: PipeIORequest =
+    pipeRef === undefined ? { ...selector } : { ...selector, pipe_ref: pipeRef };
+  let result: PipeIOResponse;
+  try {
+    result = await client.pipeIo(request);
+  } catch (error) {
+    if (
+      error instanceof ApiResponseError &&
+      error.status === 422 &&
+      error.errorType !== undefined &&
+      PIPE_SELECTION_ERROR_TYPES.has(error.errorType)
+    ) {
+      const detail = error.serverMessage ?? error.message;
+      throw new InputPreparationError(`Cannot prepare inputs: ${detail}`, { cause: error });
+    }
+    throw error;
   }
 
   if (!result.is_valid) {
@@ -365,97 +411,24 @@ async function fetchSignature(
 }
 
 /**
- * Pick the pipe whose descriptor guides the walk, in the order
- * `docs/input-preparation.md` documents: an explicit qualified `pipe_ref`, then
- * the report's resolved default — read on the field's PRESENCE, never on its
- * truthiness — and, behind an ABSENT field only, the bundle's declared
- * `main_pipe` then the single pipe.
- *
- * `default_pipe_ref` answers the very question this function asks: the qualified
- * ref of the pipe a selector-less run of THIS request would execute. A stated
- * `null` is that answer too — the server determined no entry pipe, and such a run
- * is refused by the run route — so reading it as silence and falling through would
- * prepare a pipe the run will not execute. Only a field the report does not carry
- * at all (a runner predating it) leaves the blueprint and single-pipe arms
- * standing. A JSON body cannot carry an own property holding `undefined`, and the
- * parsed body is handed through untouched, so strict `=== undefined` is the whole
- * absence test.
+ * The descriptor of the pipe the route selected. The route answers a
+ * single-pipe request with `input_form` keyed by exactly the `pipe_ref` it
+ * resolved, so a missing ref or a missing key is the answer contradicting itself
+ * — preparing any other pipe would silently walk the wrong signature.
  */
-function selectPipeRef(
-  report: PipelexValidationReport,
-  inputForm: InputForm,
-  requested: string | undefined,
-): string {
-  const refs = Object.keys(inputForm);
-  const candidates = refs.length > 0 ? refs.join(", ") : "(none — the closure declares no pipes)";
-
-  if (requested !== undefined) {
-    if (!requested.includes(".")) {
-      throw new InputPreparationError(
-        `Cannot prepare inputs: \`pipe_ref\` must be qualified (\`domain.pipe_code\`), got the bare ` +
-          `"${requested}". The method declares: ${candidates}.`,
-      );
-    }
-    if (!(requested in inputForm)) {
-      throw new InputPreparationError(
-        `Cannot prepare inputs: the method declares no pipe "${requested}". It declares: ${candidates}.`,
-      );
-    }
-    return requested;
+function selectedDescriptor(report: PipeIOValidReport): PipeInputFormDescriptor {
+  const pipeRef = nonEmptyString(report.pipe_ref);
+  const inputForm: unknown = report.input_form;
+  if (pipeRef === undefined || !isPlainObject(inputForm) || !Object.hasOwn(inputForm, pipeRef)) {
+    const described = isPlainObject(inputForm)
+      ? Object.keys(inputForm).join(", ") || "none"
+      : "none";
+    throw new InputPreparationError(
+      `Cannot prepare inputs: the pipe I/O answer selected ${pipeRef === undefined ? "no pipe" : `"${pipeRef}"`}, ` +
+        `but its \`input_form\` does not describe it (it describes: ${described}).`,
+    );
   }
-
-  // The resolved default, when the runner serves the field at all (manifest-aware
-  // for a `method_ref` package, which is why it outranks the blueprint read below).
-  if (report.default_pipe_ref !== undefined) {
-    const statedDefault = nonEmptyString(report.default_pipe_ref);
-    if (statedDefault === undefined) {
-      // A stated `null` — or anything else that is not a non-empty string — is the
-      // server's verdict, not a gap: no entry pipe was determined, so a run naming
-      // no pipe would not resolve one either. Neither fallback stands behind it.
-      throw new InputPreparationError(
-        `Cannot prepare inputs: the server determined no entry pipe for this method, so a run that ` +
-          `names no pipe would not resolve one (no \`main_pipe\` is declared, or the package manifest ` +
-          `names a pipe the closure does not declare or declares in several domains). Pass ` +
-          `\`pipe_ref\`. It declares: ${candidates}.`,
-      );
-    }
-    if (!(statedDefault in inputForm)) {
-      // The default and the descriptor come from one report keyed by one pipe set, so
-      // a miss is the report contradicting itself — falling through would silently
-      // prepare a different pipe than the one the run would execute.
-      throw new InputPreparationError(
-        `Cannot prepare inputs: the validate report names "${statedDefault}" as the default pipe, but ` +
-          `its \`input_form\` descriptor does not describe it. Pass \`pipe_ref\`. It declares: ${candidates}.`,
-      );
-    }
-    return statedDefault;
-  }
-
-  // Behind an ABSENT field only. `bundle_blueprint` is opaque transport in this SDK
-  // on purpose, so read it defensively and fall through rather than trust it.
-  const blueprintDefault = readBlueprintMainPipeRef(report.bundle_blueprint);
-  if (blueprintDefault !== undefined && blueprintDefault in inputForm) return blueprintDefault;
-
-  if (refs.length === 1) return refs[0] as string;
-
-  throw new InputPreparationError(
-    `Cannot prepare inputs: the method declares no single default pipe, so \`pipe_ref\` is required. ` +
-      `It declares: ${candidates}.`,
-  );
-}
-
-/**
- * The bundle blueprint's declared `main_pipe`, qualified by its `domain` when it
- * is authored bare. Every read is defensive: the blueprint is typed
- * `Record<string, unknown>` because its schema is the runtime's, not this SDK's.
- */
-function readBlueprintMainPipeRef(blueprint: unknown): string | undefined {
-  if (!isPlainObject(blueprint)) return undefined;
-  const mainPipe = nonEmptyString(blueprint["main_pipe"]);
-  if (mainPipe === undefined) return undefined;
-  if (mainPipe.includes(".")) return mainPipe;
-  const domain = nonEmptyString(blueprint["domain"]);
-  return domain === undefined ? undefined : `${domain}.${mainPipe}`;
+  return (inputForm as InputForm)[pipeRef] as PipeInputFormDescriptor;
 }
 
 /**
@@ -464,32 +437,23 @@ function readBlueprintMainPipeRef(blueprint: unknown): string | undefined {
  * records. HTTP(S) URLs and existing `pipelex-storage://` URIs pass through
  * unchanged. All failures are raised before any run is created.
  *
- * The signature comes from one `POST /v1/validate` with `views: ["input_form"]`,
- * whatever the selector — inline `files`, a `method_ref` the runner resolves, or
- * a `method_id` the platform resolves. A closure that does not load, an unknown
- * `pipe_ref`, no default pipe, or a report with no descriptor throw
- * {@link InputPreparationError}; a no-verdict condition from the route (a
- * malformed selector, an unknown or foreign-org id, no package at the address,
- * auth, a server fault) surfaces as `ApiResponseError`, unchanged.
+ * The pipe and its signature come from one `POST /v1/pipe-io`, whatever the
+ * selector — inline `files`, a `method_ref` the runner resolves, or a
+ * `method_id` the platform resolves. A bare or alias-qualified `pipe_ref`, a
+ * closure that does not load, and a selection the route refuses (an unknown
+ * `pipe_ref`, no entry pipe, several) throw {@link InputPreparationError}; any
+ * other failure from the route (a malformed selector, an unknown or foreign-org
+ * id, no package at the address, auth, a server fault, a deployment that does not
+ * serve the route) surfaces as `ApiResponseError`, unchanged.
  */
 export async function prepareInputs(
   client: PrepareCapableClient,
   request: PrepareInputsRequest,
 ): Promise<PreparedInputs> {
   const selector = resolveSelector(request);
-  const report = await fetchSignature(client, selector);
-  const inputForm = report.input_form;
-  if (inputForm === undefined) {
-    // Never a silent degrade to "no uploads": without the descriptor there is no
-    // signature to prepare against.
-    throw new InputPreparationError(
-      "Cannot prepare inputs: the validate report carries no `input_form` descriptor — the signature " +
-        'preparation reads. The descriptor rides `views: ["input_form"]` on pipelex-api >= 0.18.0; ' +
-        "point the client at a runner that serves it.",
-    );
-  }
-  const pipeRef = selectPipeRef(report, inputForm, nonEmptyString(request.pipe_ref));
-  const descriptor = inputForm[pipeRef] as PipeInputFormDescriptor;
+  const pipeRef = normalizePipeRef(request.pipe_ref);
+  const report = await fetchSignature(client, selector, pipeRef);
+  const descriptor = selectedDescriptor(report);
 
   const declared = new Map<string, InputFormTopLevelField>(
     descriptor.fields.map((field) => [field.name, field]),

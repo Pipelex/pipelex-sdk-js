@@ -1,16 +1,18 @@
-# Crate routes (`/v1/resolve`, `/v1/codegen`)
+# Crate routes (`/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`)
 
-Two routes project a **closure** of MTHDS files into the artifacts downstream tooling actually consumes: `resolve` emits the **normalized library crate**, and `codegen` projects that crate into **stamped typed artifacts** plus their lock. Like the [build routes](./build-routes.md), they are Pipelex API extensions rather than MTHDS Protocol operations — but note the ownership split: the _crate_ is standard-owned (the MTHDS Library Crate Format), while the HTTP surface serving it, and every type projection on top of it, are ours.
+Three routes project a **closure** of MTHDS files into the artifacts downstream tooling actually consumes: `resolve` emits the **normalized library crate**, `codegen` projects that crate into **stamped typed artifacts** plus their lock, and `pipeIo` derives a method's **pipe I/O contracts, input form and output form** without a dry run. Like the [build routes](./build-routes.md), they are Pipelex API extensions rather than MTHDS Protocol operations — but note the ownership split: the _crate_ and the three I/O artifacts are standard-owned (the MTHDS Library Crate Format, and the standard's pipe I/O contracts and form descriptors), while the HTTP surface serving them, and every type projection on top of the crate, are ours.
 
-> **Both crate routes are served on every hosted origin, and by any `pipelex-api` runner.** On the hosted plane a route is reachable only when the gateway's API-key allowlist and the platform's tooling proxy both list its path — each enumerates routes explicitly, and an unlisted path answers a gateway `403 {"message":"Forbidden"}`, refused before any service sees the request, so not even an RFC 7807 problem body. `resolve` and `codegen` are listed by both.
+> **`resolve` and `codegen` are served on every hosted origin, and by any `pipelex-api` runner.** On the hosted plane a route is reachable only when the gateway's API-key allowlist and the platform's tooling proxy both list its path — each enumerates routes explicitly, and an unlisted path answers a gateway `403 {"message":"Forbidden"}`, refused before any service sees the request, so not even an RFC 7807 problem body. `resolve` and `codegen` are listed by both.
 >
 > Measured 2026-08-23 against `api.pipelex.com` (`pipelex-hosted@0.10.1`) with a real API key: an empty body to either route comes back as an RFC 7807 `422` naming the missing fields — a request-shape verdict only a route that reached the service can produce — and a real closure comes back as a `200` carrying the artifacts. `api-dev.pipelex.com` has served them since 2026-08-13. Use a key when re-measuring: unauthenticated, every path answers `401` whether or not it is allowlisted, so a keyless probe cannot tell the two states apart.
+>
+> **`pipe-io` is newer.** A runner serves it from the `pipelex-api` release that added it. A hosted origin serves it once the platform's tooling proxy and the gateway's allowlist both list it, and until then it answers the gateway's `403 {"message":"Forbidden"}`. `prepareInputs` reads this route, so it needs an origin that serves it.
 >
 > **`lint` / `format` are the exception and answer `403` on both origins.** That blocks nothing, because linting and formatting `.mthds` are toolchain capabilities rather than hosted ones: `plxt` carries both, and the post-edit hook this repo builds (`npm run build:hook`, vendored into `pipelex-plugins`) runs them offline through `@pipelex/tools-wasm` with no credentials — from the published package, `client.lint` / `client.format` are the documented fallback, against a runner. Exposing them on the hosted origins is a known, non-critical item on the platform's list, tracked in the workspace ledger as L-260929-b58f26.
 
 ## The shared envelope
 
-Both take the same closure selector — inline `files`, a `method_ref`, or a hosted `method_id`, exactly one (the strict tooling XOR):
+All three take the same closure selector — inline `files`, a `method_ref`, or a hosted `method_id`, exactly one (the strict tooling XOR):
 
 ```ts
 interface CrateRequestBase {
@@ -31,7 +33,9 @@ An **address-form** `method_ref` (`github.com/<owner>/<repo>[/<selector>][@<tag>
 
 Supplying **no** selector or **more than one** is a request-shape `422` — the tooling routes are stateless, so there is no linkage exception; a second selector could only be ignored, which is the worst contract of the three. The SDK does not model the XOR in the type system — the union would force the overwhelmingly common `{ files }` call site to pick a branch for no gain, and the server's answer is a typed `ApiResponseError` either way.
 
-The old advice to expand a stored method client-side (`resolve({ files: await client.getMethodClosure(methodId) })`) remains valid — `getMethodClosure` stays public as the local expansion utility, and it is what a caller uses against a bare runner or on the routes with no by-id form (`/v1/build/*`, `prepareInputs`).
+The old advice to expand a stored method client-side (`resolve({ files: await client.getMethodClosure(methodId) })`) remains valid — `getMethodClosure` stays public as the local expansion utility, and it is what a caller uses against a bare runner or on the routes with no by-id form (`/v1/build/*`).
+
+A `method_ref` makes the server fetch the repository before it answers, so the client gives a call carrying one a fetch-sized budget (three minutes) instead of the 30-second default. On the hosted API the gateway caps every request at about 30 seconds whatever the client allows, so a cold `method_ref` clone can answer a `502`; retrying clears it once the runner has cached the clone.
 
 ## `resolve` — the normalized crate
 
@@ -83,23 +87,56 @@ The SDK stays transport-only: it hands you the artifacts and does not write file
 
 `kind: "types"` is concept-set-wide, so passing `pipe_ref` alongside it is a request-shape **`422`**. Silently ignoring the selector would mislead a caller into believing the artifacts were narrowed to one pipe. The field exists on the request for the future per-pipe kinds.
 
+## `pipeIo` — a method's I/O artifacts, without a validation
+
+`pipeIo` resolves the closure the way `resolve` does, selects a pipe, and returns the method's three I/O artifacts — the standard's `PipeIOContracts`, `InputForm` and `OutputForm`, typed by importing them from `mthds/protocol` — with the selection and the runnability facts beside them. It runs **no dry-run sweep**, so it costs one load and one derivation where `validate` dry-runs every pipe. Read it to show a method, to prepare its inputs (`prepareInputs` does) or to generate types for it; stay on `validate` for the dry-run verdict or the dry-run graph.
+
+```ts
+const result = await client.pipeIo({ method_ref: "github.com/Pipelex/methods/documents" });
+if (!result.is_valid) return;
+
+const form = result.input_form[result.pipe_ref!]; // the entry pipe's input form
+```
+
+The request is the shared envelope plus three optional fields, posted verbatim:
+
+| Field           | Default | Meaning                                                                                                   |
+| --------------- | ------- | --------------------------------------------------------------------------------------------------------- |
+| `pipe_ref`      | none    | The qualified `domain.pipe_code` to describe. Omitted, the server's selection chain decides.              |
+| `all_pipes`     | `false` | Describe every pipe the closure loads instead of the selected one.                                        |
+| `include_files` | `false` | Echo the resolved closure's `.mthds` files as `files`, in the request's own `{ content, source? }` shape. |
+
+**Selection.** The request's `pipe_ref`; else a fetched package's manifest `main_pipe`; else the closure's `main_pipe`, when exactly one domain declares one. A `pipe_ref` that names no pipe, and — without `all_pipes` — a chain that finds no entry pipe or several, are refused with a `422` whose `errorType` names the refusal (see [What throws](#what-throws)). The server does not refuse a bare code yet: a bare ref that matches one pipe resolves across domains, and the answer reports the qualified ref. With `all_pipes: true` the route never refuses for want of an entry pipe, so a method that declares none is still describable.
+
+The valid arm (`PipeIOValidReport`):
+
+- `pipe_ref` — the qualified ref the selection resolved, read off the resolved pipe and never echoed from the request; `null` only under `all_pipes` when nothing resolves.
+- `pipe_io_contracts`, `input_form`, `output_form` — the three maps, sharing one key set: the resolved `pipe_ref` alone by default, every pipe under `all_pipes`. For a closure `validate` also accepts, each equals `validate`'s same-named field restricted to the same keys, null members such as a contract's `item_count: null` included.
+- `default_pipe_ref` — the method's own entry pipe, the selection chain without the request's `pipe_ref`, or `null` when that chain finds none or several. A request that omits `pipe_ref` always answers `pipe_ref === default_pipe_ref`. It is **not** `validate`'s field of the same name, which is the run default and names the first of several declaring domains where this route refuses to choose.
+- `pending_signatures`, `is_runnable` — what they mean on `validate`, read off the loaded library with no dry run, so a method whose dry run would fail is still reported runnable here.
+- `files` — present only with `include_files: true`: the request's files for inline `files`, the fetched package's `.mthds` files under their package-relative paths for a `method_ref`, the stored files under their stored names for a hosted `method_id`. Absent, not empty, otherwise.
+
+`is_valid: true` means what it means on `resolve`: the closure parsed, loaded and passed static validation. The invalid arm is the shared `CrateInvalidReport`, and it carries no artifacts, no selection and no files, whatever the request asked for.
+
 ## The response is a verdict, not a payload
 
-Both routes return a **discriminated 200**, the same discipline as `validate` and the build routes: an unresolvable closure is the _successful product_ of the call (the request was well-formed; the library was not), so it rides a 200 with `is_valid: false` and the shared `CrateInvalidReport` — the very same invalid arm the build routes return, carrying the same structured `validation_errors[]`.
+All three routes return a **discriminated 200**, the same discipline as `validate` and the build routes: an unresolvable closure is the _successful product_ of the call (the request was well-formed; the library was not), so it rides a 200 with `is_valid: false` and the shared `CrateInvalidReport` — the very same invalid arm the build routes return, carrying the same structured `validation_errors[]`.
 
 **Branch on `is_valid` before reading the arm.** A consumer that only catches throws will render a success over an unusable result, because nothing threw.
 
 ## What throws
 
-Only a **no-verdict** condition, as the typed `ApiResponseError` — branch on its `status`, never on its message:
+Only a **no-verdict** condition, as the typed `ApiResponseError` — branch on its `status` and `errorType`, never on its message:
 
 | Status        | Cause                                                                                                     |
 | ------------- | --------------------------------------------------------------------------------------------------------- |
-| `422`         | Request shape: no closure selector or more than one, an unknown `kind`/`target`, a `pipe_ref` on `kind: "types"`, a stored method with no MTHDS source. |
-| `404`         | Unknown or foreign-org `method_id` (indistinguishable by design).                                           |
+| `422`         | Request shape: no closure selector or more than one, an over-limit file, an unknown `kind`/`target`, a `pipe_ref` on `kind: "types"`, a fetched package with no `.mthds` file, a stored method with no MTHDS source. |
+| `422`         | On `pipeIo`, a pipe selection the route refuses: `errorType` `EntryPipeNotFoundError` for a `pipe_ref` that names no pipe or a method with no entry pipe, `EntryPipeAmbiguousError` for a code that matches pipes in several domains or several `main_pipe` declarations. The `serverMessage` names the candidates where there are some. |
+| `404`         | Unknown or foreign-org `method_id` (indistinguishable by design); no package at a `method_ref` address.     |
 | `501`         | Registry-form `method_ref` — reserved, not implemented (the address form resolves).                         |
-| `401` / `403` | Auth.                                                                                                       |
-| `5xx`         | Server fault.                                                                                               |
+| `401` / `403` | Auth, or on a hosted origin a route the gateway does not list yet (`403 {"message":"Forbidden"}`).          |
+| `502`         | On a hosted origin, a cold `method_ref` clone that outran the gateway's 30-second cap; a retry clears it.   |
+| `5xx`         | Server fault, including on `pipeIo` a pipe whose artifacts cannot be derived.                               |
 
 Note the split, same as the build routes: a bad **closure** is a 200 verdict; a bad **request** throws.
 

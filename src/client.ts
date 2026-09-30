@@ -35,6 +35,8 @@ import type {
   FormatResponse,
   LintResponse,
   MthdsFileItem,
+  PipeIORequest,
+  PipeIOResponse,
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexRunResultStart,
@@ -312,8 +314,9 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
- * - **crate extensions** (`/v1/resolve`, `/v1/codegen`) — the normalized library crate
- *   and the stamped typed artifacts projected from it.
+ * - **crate extensions** (`/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`) — the normalized
+ *   library crate, the stamped typed artifacts projected from it, and a method's three
+ *   I/O artifacts derived with no dry run.
  * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
  *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
@@ -991,13 +994,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /**
    * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`), the
-   * crate routes (`resolve`, `codegen`), and the build projections (`build/*`). Their
+   * crate routes (`resolve`, `codegen`, `pipe-io`), and the build projections (`build/*`). Their
    * non-2xx bodies are RFC 7807 problems, mapped to the typed `ApiResponseError` like
    * the product routes.
    *
    * The mapping is what makes their no-verdict arms usable: a crate-family route
    * answers `422` for a request it cannot act on (an unresolvable pipe selector on the
-   * build routes; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
+   * build routes and `pipe-io`; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
    * `types` kind, on `codegen`) and `501` for the reserved registry-form `method_ref`
    * (the address form is resolved server-side as of pipelex-api 0.21.0). A caller
    * branches on `ApiResponseError.status`, never on a message.
@@ -1067,7 +1070,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return JSON.parse(res.body) as VersionInfo;
   }
 
-  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
+  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`) ──
   //
   // Served by any `pipelex-api` runner AND on every hosted origin. On the hosted
   // plane a route is reachable only when the gateway's API-key allowlist and the
@@ -1079,11 +1082,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // Measured 2026-08-23 with a real key: api.pipelex.com (pipelex-hosted@0.10.1)
   // serves both, verdict discipline intact (200 `is_valid:false`, 501, 422);
   // api-dev.pipelex.com has since 2026-08-13. `lint`/`format` are the two still
-  // unexposed — see their section above for why that blocks nothing.
+  // unexposed — see their section above for why that blocks nothing. `pipe-io` is
+  // newer: a runner serves it from the `pipelex-api` release that added it, and a
+  // hosted origin once the platform's proxy and the gateway list it (see
+  // `docs/crate-routes.md`).
   //
-  // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
-  // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding
-  // one here.
+  // All three are STATIC routes (no dry-run sweep), so like every static sibling they
+  // take no `timeoutMs`/`signal` — see the policy note on `requestExtension` before
+  // adding one here.
 
   /**
    * Resolve a closure into its normalized library crate — `POST /v1/resolve`.
@@ -1135,6 +1141,40 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     });
   }
 
+  /**
+   * Read a method's three I/O artifacts — `POST /v1/pipe-io`.
+   *
+   * Resolves the closure exactly like {@link resolve}, selects a pipe, and returns its
+   * pipe I/O contracts, input form and output form — the MTHDS standard's artifacts,
+   * typed from `mthds/protocol` — beside the resolved `pipe_ref`, the method's own
+   * `default_pipe_ref`, and the runnability facts (`pending_signatures`, `is_runnable`).
+   * It runs NO dry-run sweep, so it costs one load and one derivation where `validate`
+   * dry-runs every pipe; a caller that shows a method, prepares its inputs or generates
+   * types for it reads this, and one that needs the dry-run verdict stays on `validate`.
+   *
+   * Selection: the request's qualified `pipe_ref`, else a fetched package's manifest
+   * `main_pipe`, else the closure's single `main_pipe` declaration. `all_pipes: true`
+   * describes every pipe instead, and never refuses for want of an entry pipe.
+   * `include_files: true` echoes the resolved closure's `.mthds` files as `files`.
+   *
+   * Same 200-verdict discipline and same three-form closure selector as {@link resolve}
+   * (the request is posted verbatim, and the selector XOR is the server's to enforce).
+   * Only a no-verdict condition throws `ApiResponseError`: a malformed selector, an
+   * over-limit file, and a selection the route refuses (an unknown `pipe_ref`, no entry
+   * pipe, several) are `422`s; a registry-form `method_ref` is a `501`; a pipe whose
+   * artifacts cannot be derived is a `500`.
+   *
+   * A `method_ref` gets the fetch-sized budget, as on the other crate routes. On the
+   * hosted API the gateway caps a request at about 30 seconds whatever the client
+   * allows, so a cold `method_ref` clone can answer a `502` that a retry clears once the
+   * runner has cached the clone.
+   */
+  async pipeIo(request: PipeIORequest): Promise<PipeIOResponse> {
+    return this.requestExtension("pipe-io", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
+  }
+
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
 
   /**
@@ -1153,14 +1193,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * model {@link BuildInputsRequest}; the address form is server-resolved, the
    * registry form `501`s) — exactly one of the two, like `buildOutput` /
    * `buildRunner`. There is NO by-id form: the build routes take no `method_id`
-   * (the hosted tooling selector covers `validate`/`resolve`/`codegen` only), so a
+   * (the hosted tooling selector covers `validate`/`resolve`/`codegen`/`pipe-io` only), so a
    * stored method is expanded first — `buildInputs({ files: await
    * client.getMethodClosure(methodId) })`. That expansion stays the answer here
    * because a `buildInputs` caller wants this route's template; it is not what
    * `prepareInputs` does any more.
    *
    * Nothing inside this SDK calls this route: `prepareInputs` reads its signature
-   * from the input-form descriptor on the validate report. It survives for the
+   * from the input-form descriptor `pipeIo` returns. It survives for the
    * consumers that still render a template over HTTP, and is retired with the rest
    * of `/v1/build/*` once they project it client-side.
    */
@@ -1492,8 +1532,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * This is the LOCAL expansion utility — for callers that want the files in
    * hand (to edit, to diff, to feed a route with no by-id form, the `/v1/build/*`
    * family being the last of those). The operations that accept `method_id`
-   * natively (`execute`/`start`, `validate`/`resolve`/`codegen`, and
-   * `prepareInputs`, which composes a `validate` of its own) take the id as a
+   * natively (`execute`/`start`, `validate`/`resolve`/`codegen`/`pipeIo`, and
+   * `prepareInputs`, which composes a `pipeIo` of its own) take the id as a
    * pass-through instead; nothing in this client expands an id behind your back.
    *
    * Requires an API key: the methods catalog is org-scoped to the key's org, so
@@ -1741,17 +1781,18 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * through unchanged; all failures are raised before any run is created.
    *
    * Name the method exactly one of three ways, all server-resolved through the
-   * one `validate` call this composes:
+   * one `pipeIo` call this composes:
    *
    * - `files` — the inline MTHDS closure;
    * - `method_ref` — a published method's address, fetched by the runner;
    * - `method_id` — a stored method's catalog id, resolved by the platform
    *   (hosted only; requires an API key).
    *
-   * The signature itself is the input-form descriptor on the validate report
-   * (`views: ["input_form", "output_form"]`), which states the kind of every input at every
-   * depth — so a file position is a fact of the method, never a guess from the
-   * value's shape. See `docs/input-preparation.md`.
+   * The route also selects the pipe — the caller's qualified `pipe_ref`, else the
+   * method's own entry pipe — and the signature is the input-form descriptor it
+   * answers with, which states the kind of every input at every depth, so a file
+   * position is a fact of the method, never a guess from the value's shape. It
+   * needs an API serving `POST /v1/pipe-io`. See `docs/input-preparation.md`.
    */
   async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
     return prepareInputsImpl(this, request);

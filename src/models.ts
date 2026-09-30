@@ -91,7 +91,7 @@ export interface PipelexRunResultStart extends RunResultStart {
 
 /**
  * The hosted tooling routes' own selector — the layer-3 extension the platform
- * adds on `POST /v1/validate`, `/v1/resolve`, and `/v1/codegen`: a stored
+ * adds on `POST /v1/validate`, `/v1/resolve`, `/v1/codegen`, and `/v1/pipe-io`: a stored
  * method's catalog id (`mt_…`), resolved server-side against the org's catalog
  * and injected as inline source before the runner sees the request. A **pass-
  * through to the hosted API**: nothing is expanded client-side, and it is
@@ -128,8 +128,9 @@ export interface PipelexHostedToolingExtensions {
  * exactly one of inline contents / `method_ref` / `method_id` per request.
  *
  * Lives here, beside the other wire shapes, rather than on the client: it is
- * the request's shape, and `prepareInputs` composes a `validate` call of its own
- * without importing the client back (which would close a module cycle).
+ * the request's shape, and a module that composes a `validate` call of its own
+ * can name it without importing the client back (which would close a module
+ * cycle).
  */
 export type ValidateMethodSelector =
   { method_ref: string; method_id?: never } | { method_id: string; method_ref?: never };
@@ -244,7 +245,9 @@ export interface PipelexValidationReport extends ValidationReport {
    * `null` is the server's verdict that there is none, and a consumer stops there
    * rather than deriving one of its own; an ABSENT field means the server predates
    * the field, and only then does a blueprint-derived default stand. That is the rule
-   * `prepareInputs` applies and the one `pipelex-mcp` states in its `SPEC.md`.
+   * `pipelex-mcp` states in its `SPEC.md`. It is NOT `/v1/pipe-io`'s field of the same
+   * name ({@link PipeIOValidReport.default_pipe_ref}), which refuses to choose among
+   * several declaring domains where this one names the first.
    */
   default_pipe_ref?: string | null;
   /** Best-effort execution graph of the main pipe; `null` with no `main_pipe` or on degrade. */
@@ -568,7 +571,7 @@ export interface MthdsFileItem {
 
 /**
  * The closure selector every crate-family route shares — `/v1/resolve`, `/v1/codegen`,
- * and `/v1/build/*` (mirror of the server's `MthdsFilesRequest`).
+ * `/v1/pipe-io`, and `/v1/build/*` (mirror of the server's `MthdsFilesRequest`).
  *
  * Supply the closure EITHER as inline `files` OR as a `method_ref` — never both, and
  * never neither (both arms are a request-shape `422`). An **address-form** `method_ref`
@@ -640,15 +643,16 @@ export interface PipeSpecRequest {
 
 /**
  * The `is_valid: false` arm shared by every crate-family route — `/v1/build/*`,
- * `/v1/resolve`, and `/v1/codegen` (mirror of the server's one `CrateInvalidReport`).
+ * `/v1/resolve`, `/v1/codegen`, and `/v1/pipe-io` (mirror of the server's one
+ * `CrateInvalidReport`).
  *
  * They all follow `/validate`'s discipline: an unresolvable closure is the
  * *successful product* of the call (the request was well-formed, the library was
  * not), so it rides a **200** discriminated on `is_valid` — never a 4xx. Only a
  * no-verdict condition throws `ApiResponseError`: a request the route cannot act on
- * (an unknown `pipe_ref` on the build routes, an unknown `kind`/`target` on codegen),
- * the reserved `method_ref`, auth, a server fault. Branch on `is_valid`, never on the
- * transport.
+ * (an unknown `pipe_ref` on the build routes and `pipe-io`, an unknown `kind`/`target`
+ * on codegen), the reserved `method_ref`, auth, a server fault. Branch on `is_valid`,
+ * never on the transport.
  */
 export interface CrateInvalidReport {
   is_valid: false;
@@ -758,14 +762,15 @@ export interface PipeSpecResponse {
   toml: string;
 }
 
-// ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ───────
+// ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`) ──
 //
 // The second crate-family surface: `/v1/resolve` emits the normalized library crate,
-// `/v1/codegen` projects that crate into stamped typed artifacts plus their lock.
-// Both are Pipelex API extensions (NOT `x-mthds-protocol`) over the standard-owned
-// artifact, so their wire fields stay brand-neutral. Same envelope and same verdict
-// discipline as the build routes: a produced verdict is a 200 discriminated on
-// `is_valid`, with `CrateInvalidReport` as the shared invalid arm.
+// `/v1/codegen` projects that crate into stamped typed artifacts plus their lock, and
+// `/v1/pipe-io` derives a method's three I/O artifacts with no dry run. All three are
+// Pipelex API extensions (NOT `x-mthds-protocol`) over standard-owned artifacts, so
+// their wire fields stay brand-neutral. Same envelope and same verdict discipline as
+// the build routes: a produced verdict is a 200 discriminated on `is_valid`, with
+// `CrateInvalidReport` as the shared invalid arm.
 
 /**
  * `POST /v1/resolve` request — the crate envelope (no projection axes) plus the
@@ -863,3 +868,88 @@ export interface CodegenValidReport {
 
 /** The `POST /v1/codegen` 200 response — pattern-match `is_valid` before reading the arm. */
 export type CodegenResponse = CodegenValidReport | CrateInvalidReport;
+
+/**
+ * `POST /v1/pipe-io` request — the crate envelope plus the hosted `method_id` selector
+ * (exactly one of `files` / `method_ref` / `method_id`; see
+ * {@link PipelexHostedToolingExtensions}), a pipe selector, and two opt-ins.
+ *
+ * There is no `views` field: the valid arm always carries all three artifacts.
+ */
+export interface PipeIORequest extends CrateRequestBase, PipelexHostedToolingExtensions {
+  /**
+   * The pipe to describe, as a QUALIFIED `domain.pipe_code` ref. Omit it and the
+   * server's selection chain decides: a fetched package's manifest `main_pipe`, else
+   * the closure's single `main_pipe` declaration. A ref that names no pipe, and (without
+   * `all_pipes`) a chain that finds no entry pipe or several, are request-shape `422`s.
+   *
+   * The server does not refuse a bare code yet: a bare ref that matches one pipe is
+   * resolved across domains, and the valid arm reports the qualified ref.
+   */
+  pipe_ref?: string;
+  /**
+   * Describe every pipe the closure loads instead of the selected one. The artifact maps
+   * are then keyed by every pipe, and the route never refuses for want of an entry pipe:
+   * the valid arm's `pipe_ref` is the requested ref, else the method's own entry pipe,
+   * else `null`. Defaults to `false` server-side.
+   */
+  all_pipes?: boolean;
+  /**
+   * Echo the resolved closure's `.mthds` files on the valid arm as `files`, in the
+   * request's own `files[]` shape. Defaults to `false` server-side, and the field is then
+   * absent from the answer.
+   */
+  include_files?: boolean;
+}
+
+/**
+ * The `/v1/pipe-io` valid arm — a method's three I/O artifacts, with the selection and
+ * the runnability facts beside them.
+ *
+ * The three artifacts are the MTHDS standard's own types, imported from `mthds/protocol`
+ * and never restated here. The maps share one key set: the resolved `pipe_ref` alone by
+ * default, every pipe the closure loads under `all_pipes`. For a closure `/v1/validate`
+ * also accepts, each map equals validate's same-named field restricted to the same keys.
+ *
+ * `is_valid: true` means what it means on `/v1/resolve`: the closure parsed, loaded and
+ * passed static validation. No dry run ran; that verdict stays `validate`'s.
+ */
+export interface PipeIOValidReport {
+  is_valid: true;
+  /**
+   * The qualified ref the selection resolved, read off the resolved pipe and never echoed
+   * from the request. `null` only under `all_pipes` when no pipe was requested and the
+   * method declares no single entry pipe.
+   */
+  pipe_ref: string | null;
+  /** The standard's pipe I/O contracts, keyed by qualified `pipe_ref`. */
+  pipe_io_contracts: PipeIOContracts;
+  /** The standard's input-form descriptors, keyed by qualified `pipe_ref`. */
+  input_form: InputForm;
+  /** The standard's output-form descriptors, keyed by qualified `pipe_ref`. */
+  output_form: OutputForm;
+  /**
+   * The method's own entry pipe: the selection chain without the request's `pipe_ref` —
+   * the fetched manifest's `main_pipe`, else the closure's single declaration. A request
+   * that omits `pipe_ref` always answers `pipe_ref === default_pipe_ref`. A stated `null`
+   * when the chain finds none or several.
+   *
+   * NOT `PipelexValidationReport.default_pipe_ref`, which is the run default and names
+   * the first of several declaring domains where this chain refuses to choose.
+   */
+  default_pipe_ref: string | null;
+  /** Qualified refs of every pipe of the closure still declared as a signature, as on `validate`. */
+  pending_signatures: string[];
+  /** `pending_signatures` is empty, as on `validate`. No dry run backs it. */
+  is_runnable: boolean;
+  /**
+   * The resolved closure's `.mthds` files, in the request's `files[]` shape. Present only
+   * when the request passed `include_files: true`: the request's files for inline
+   * `files`, the fetched package's `.mthds` files under their package-relative paths for
+   * a `method_ref`, the stored files under their stored names for a hosted `method_id`.
+   */
+  files?: MthdsFileItem[];
+}
+
+/** The `POST /v1/pipe-io` 200 response — pattern-match `is_valid` before reading the arm. */
+export type PipeIOResponse = PipeIOValidReport | CrateInvalidReport;

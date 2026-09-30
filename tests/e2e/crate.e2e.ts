@@ -1,10 +1,16 @@
 /**
- * E2E suite for the crate routes — `resolve` and `codegen` — exercised against a
- * LIVE pipelex-api server (no fetch mocks).
+ * E2E suite for the crate routes — `resolve`, `codegen` and `pipeIo` — exercised
+ * against a LIVE pipelex-api server (no fetch mocks).
  *
  * Run with `make test-e2e` (or `npm run test:e2e`) against a local runner:
  *
  *     PIPELEX_E2E_BASE_URL=http://localhost:8081 npm run test:e2e
+ *
+ * The `pipeIo` block needs a runner serving `POST /v1/pipe-io`, and its selection
+ * refusal case needs the typed `EntryPipeNotFoundError` on that route's `422`. Its
+ * `method_id` case runs only when `PIPELEX_E2E_METHOD_ID` names a stored method the
+ * key's organization owns, which only a hosted origin can resolve; it is skipped
+ * otherwise.
  *
  * These are the tests the unit suite cannot write. Every mock in the repo agrees with
  * the client about the field names, so a typo in the request body (`kind`/`target`
@@ -35,6 +41,8 @@ import type {
   CodegenTarget,
   CodegenValidReport,
   CrateInvalidReport,
+  PipeIOValidReport,
+  PipelexValidationReport,
   ResolveValidReport,
 } from "../../src/models.js";
 import { handEdit, regenerate } from "../helpers/codegen-stamp.js";
@@ -69,6 +77,30 @@ main_pipe = "Not A Valid Pipe Code!"
 [concept.Customer]
 description = "A customer"
 `;
+
+/** Two pipes and no `main_pipe` — describable whole, but no single-pipe answer without a `pipe_ref`. */
+const NO_MAIN_BUNDLE = `domain = "smoke_no_main"
+
+[pipe.first]
+type = "PipeLLM"
+description = "First"
+inputs = { doc = "Document" }
+output = "Text"
+prompt = "@doc"
+
+[pipe.second]
+type = "PipeLLM"
+description = "Second"
+inputs = { text = "Text" }
+output = "Text"
+prompt = "@text"
+`;
+
+/** A published package whose entry pipe is named in its METHODS.toml manifest alone. */
+const METHOD_REF = "github.com/Pipelex/methods/documents";
+
+/** A stored method the key's organization owns — hosted origins only. */
+const METHOD_ID = process.env.PIPELEX_E2E_METHOD_ID;
 
 // ── Suite ────────────────────────────────────────────────────────────────
 
@@ -207,6 +239,113 @@ describe("e2e codegen (/v1/codegen)", () => {
     });
     await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
     await expect(failure).rejects.toMatchObject({ status: 422 });
+  });
+});
+
+describe("e2e pipe-io (/v1/pipe-io)", () => {
+  const files = [{ content: VALID_BUNDLE, source: "smoke.mthds" }];
+
+  it("describes the entry pipe: the three artifacts under the resolved ref, and the runnability facts", async () => {
+    const result = await client.pipeIo({ files });
+
+    expect(result.is_valid).toBe(true);
+    const report = result as PipeIOValidReport;
+    expect(report.pipe_ref).toBe("smoke.echo");
+    expect(report.default_pipe_ref).toBe("smoke.echo");
+    // One key set across the three maps: the resolved ref alone.
+    expect(Object.keys(report.pipe_io_contracts)).toEqual(["smoke.echo"]);
+    expect(Object.keys(report.input_form)).toEqual(["smoke.echo"]);
+    expect(Object.keys(report.output_form)).toEqual(["smoke.echo"]);
+    expect(report.input_form["smoke.echo"]!.fields.map((field) => field.name)).toEqual(["text"]);
+    expect(report.pending_signatures).toEqual([]);
+    expect(report.is_runnable).toBe(true);
+    // Absent, not empty, without `include_files`.
+    expect("files" in report).toBe(false);
+  });
+
+  it("answers artifacts equal to validate's views for the same closure and pipe", async () => {
+    const piped = (await client.pipeIo({ files })) as PipeIOValidReport;
+    const validated = await client.validateFiles(
+      files.map((file) => ({ content: file.content, uri: file.source })),
+      { views: ["input_form", "output_form"] },
+    );
+
+    expect(validated.is_valid).toBe(true);
+    const report = validated as PipelexValidationReport;
+    // Both routes derive the maps with one builder; restricted to the same key they match.
+    expect(piped.pipe_io_contracts["smoke.echo"]).toEqual(report.pipe_io_contracts["smoke.echo"]);
+    expect(piped.input_form["smoke.echo"]).toEqual(report.input_form?.["smoke.echo"]);
+    expect(piped.output_form["smoke.echo"]).toEqual(report.output_form?.["smoke.echo"]);
+  });
+
+  it("echoes the closure with include_files, in the request's own shape", async () => {
+    const report = (await client.pipeIo({ files, include_files: true })) as PipeIOValidReport;
+
+    expect(report.files).toEqual(files);
+  });
+
+  it("describes every pipe of a method with no entry pipe under all_pipes, pipe_ref null", async () => {
+    const result = await client.pipeIo({
+      files: [{ content: NO_MAIN_BUNDLE, source: "smoke_no_main.mthds" }],
+      all_pipes: true,
+    });
+
+    expect(result.is_valid).toBe(true);
+    const report = result as PipeIOValidReport;
+    expect(report.pipe_ref).toBeNull();
+    expect(report.default_pipe_ref).toBeNull();
+    expect(Object.keys(report.input_form).sort()).toEqual([
+      "smoke_no_main.first",
+      "smoke_no_main.second",
+    ]);
+  });
+
+  it("resolves a method_ref package's manifest entry pipe, echoing its package-relative files", async () => {
+    const result = await client.pipeIo({ method_ref: METHOD_REF, include_files: true });
+
+    expect(result.is_valid).toBe(true);
+    const report = result as PipeIOValidReport;
+    // A request with no `pipe_ref` always answers the method's own entry pipe.
+    expect(report.pipe_ref).toEqual(expect.stringMatching(/^documents\./));
+    expect(report.pipe_ref).toBe(report.default_pipe_ref);
+    expect(Object.keys(report.input_form)).toEqual([report.pipe_ref]);
+    expect(report.files!.length).toBeGreaterThan(0);
+    for (const file of report.files!) expect(file.source).toMatch(/\.mthds$/);
+  });
+
+  it.skipIf(METHOD_ID === undefined)("resolves a hosted method_id", async () => {
+    const result = await client.pipeIo({ method_id: METHOD_ID, all_pipes: true });
+
+    expect(result.is_valid).toBe(true);
+    expect(Object.keys((result as PipeIOValidReport).input_form).length).toBeGreaterThan(0);
+  });
+
+  it("returns an unresolvable closure as a 200 verdict carrying no files, whatever include_files says", async () => {
+    const result = await client.pipeIo({
+      files: [{ content: INVALID_BUNDLE, source: "broken.mthds" }],
+      include_files: true,
+    });
+
+    expect(result.is_valid).toBe(false);
+    const report = result as CrateInvalidReport;
+    expect(report.validation_errors.length).toBeGreaterThan(0);
+    expect("files" in report).toBe(false);
+  });
+
+  it("refuses an unknown pipe_ref with a 422 typed as a selection refusal", async () => {
+    const failure = client.pipeIo({ files, pipe_ref: "smoke.absent" });
+
+    await expect(failure).rejects.toBeInstanceOf(ApiResponseError);
+    await expect(failure).rejects.toMatchObject({
+      status: 422,
+      errorType: "EntryPipeNotFoundError",
+    });
+  });
+
+  it("answers 501 for the reserved registry-form method_ref", async () => {
+    await expect(client.pipeIo({ method_ref: "acme/method@1" })).rejects.toMatchObject({
+      status: 501,
+    });
   });
 });
 

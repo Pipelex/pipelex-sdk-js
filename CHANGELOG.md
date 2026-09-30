@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`pipeIo()` and its types**: `client.pipeIo(request)` calls `POST /v1/pipe-io`, which returns a method's pipe I/O contracts, input form and output form with no dry run, beside the resolved `pipe_ref`, the method's own `default_pipe_ref`, `pending_signatures` and `is_runnable`, and the closure's `.mthds` files when `include_files: true` is passed. It takes the crate routes' `files`, `method_ref` or hosted `method_id` selector with an optional qualified `pipe_ref` and `all_pipes`, and `PipeIORequest`, `PipeIOValidReport` and `PipeIOResponse` are exported, the three artifacts typed from `mthds/protocol`.
+
+### Changed
+
+- **`prepareInputs` reads `POST /v1/pipe-io`, and the route selects the pipe (Breaking)**: preparation calls `pipeIo` instead of `validate`, so it runs no dry run and needs an API that serves the route; against one that does not, the route's `404` or `403` propagates as an `ApiResponseError`. The route's entry pipe replaces the helper's own default chain and its blueprint and single-pipe fallbacks, so a method whose domains declare several `main_pipe`s now needs `pipe_ref` where the first declaration used to be taken, and a selection the route refuses (a `422` typed `EntryPipeNotFoundError` or `EntryPipeAmbiguousError`) is an `InputPreparationError` carrying the server's detail instead of a list of candidates the client built.
+
 ## [v0.26.0] - 2026-09-27
 
 ### Added

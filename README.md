@@ -6,7 +6,7 @@ TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage 
 
 ## Status
 
-Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the crate routes (`resolve` / `codegen`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, onboarding, storage, runs list/update).
+Early. `PipelexApiClient` implements the MTHDS protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the build helpers (`/v1/build/*`), the crate routes (`resolve` / `codegen` / `pipeIo`), the durable run lifecycle (`start` → poll → result), and the Pipelex product routes (user profile, methods catalog, organizations, billing, API keys, onboarding, storage, runs list/update).
 
 Besides the client, the package exports `runCodegenCheck` — a **pure** offline check that verifies a committed `codegen()` tree still matches its `codegen.lock`. It needs no server, no key, and no client instance, so it fits a CI job. See [`docs/crate-routes.md`](./docs/crate-routes.md#the-offline-check--runcodegencheck).
 
@@ -135,7 +135,7 @@ These pages ship inside the published package, so a reader who has only installe
 | [`docs/run-usage.md`](./docs/run-usage.md) | What a run consumed, record by record, and `summarizeUsage` which folds them into one reading |
 | [`docs/artifact-download.md`](./docs/artifact-download.md) | Turning the `pipelex-storage://` references a run produced back into bytes: `locateArtifacts`, `collectArtifacts`, `resolveArtifacts`, `fetchArtifact`, `downloadArtifacts`, and how a saved file is named after the field it fills |
 | [`docs/input-preparation.md`](./docs/input-preparation.md) | The other direction — `uploadFile` and `prepareInputs`, which turn local files into references a run can take, and the upload grant a browser page sends a file with |
-| [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve` and `codegen`, and the offline `runCodegenCheck` that guards a committed tree |
+| [`docs/crate-routes.md`](./docs/crate-routes.md) | `resolve`, `codegen` and `pipeIo` — the normalized crate, the stamped types, and a method's I/O artifacts without a validation — and the offline `runCodegenCheck` that guards a committed tree |
 | [`docs/build-routes.md`](./docs/build-routes.md) | The `/v1/build/*` projections: `buildInputs`, `buildOutput`, `buildRunner` |
 | [`docs/client-identification.md`](./docs/client-identification.md) | The `User-Agent` every API request carries, and `appInfo`, the option that puts your program's name in front of it |
 | [`docs/errors.md`](./docs/errors.md) | A failed run's stored error report on `RunFailedError` and `RunRead`, and every member of a refused request's `ApiResponseError`, with the fields to branch on |
