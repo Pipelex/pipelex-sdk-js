@@ -17,7 +17,7 @@ console.log(results.main_stuff, summarizeUsage(results).total_cost_usd);
 | field | type | hosted (durable) path | bare-runner (blocking) path |
 |---|---|---|---|
 | `pipeline_run_id` | `string` | the run store's id | the runner's own id for the call |
-| `main_stuff` | `unknown` | the `main_stuff.json` artifact | resolved out of the returned working memory |
+| `main_stuff` | `unknown` (optional) | the `main_stuff.json` artifact | resolved out of the returned working memory |
 | `working_memory` | `DictWorkingMemory \| null` | the `working_memory.json` artifact | lifted off `pipe_output` |
 | `graph_spec` | `unknown` | the `graphspec.json` artifact | lifted off `pipe_output` |
 | `graph_assembly_error` | `string \| null \| undefined` | absent until the platform relays it | lifted off `pipe_output` |
@@ -28,6 +28,19 @@ console.log(results.main_stuff, summarizeUsage(results).total_cost_usd);
 | `tokens_usages` | `TokensUsageRecord[] \| null` | the `tokens_usages.json` artifact | lifted off `pipe_output` |
 | `usage_assembly_error` | `string \| null` | relayed | lifted off `pipe_output` |
 | `pipe_output` | `DictPipeOutput \| null \| undefined` | absent | the runner's whole native output |
+
+## Reading only some artifacts — `artifacts`
+
+A results read on the hosted path fetches every artifact from storage and re-signs every link inside them, which is wasted work for a caller that wants one of them, such as a history view showing a run's output or a usage panel. `getRunResult(runId, { artifacts })` narrows the read: the SDK sends the names as one comma-separated `?artifacts=` parameter and the platform reads, re-signs and returns only those. The names are `RUN_RESULT_ARTIFACTS` — `graph_spec`, `pipe_io_contracts`, `input_form`, `output_form`, `main_stuff`, `working_memory` and `tokens_usages` — typed as `RunResultArtifact`, and `tokens_usages` brings `usage_assembly_error` with it. Without the option every artifact is read.
+
+```ts
+const state = await client.getRunResult(runId, { artifacts: ["main_stuff", "tokens_usages"] });
+const results = await client.waitForResult(runId, { artifacts: ["working_memory"] });
+```
+
+**Absent versus null.** With a selection, an artifact the caller did not name is absent from the result, reading `undefined`, while one it named that the run never wrote is `null`. So `undefined` means "not asked for" and `null` means "asked for, not there". That is also why `main_stuff` is declared optional: it is never null on a completed run, but it is absent from a read that left it out, and `MissingMainStuffError` is thrown only by a read that asked for it — one with no selection, or one naming `main_stuff`.
+
+An empty selection or a name outside the list is a `RangeError` thrown before any request, the same refusal the platform would answer with a `400`. `waitForResult` and `startAndWaitForResult` take the same `artifacts` in their poll options and send it on every poll; `startAndWaitForResult` refuses a bad selection before it starts the run. Against a bare runner the selection has nothing to narrow: the blocking fallback returns every artifact the runner sent. `downloadArtifacts` given a `run_id` asks for its scope's artifact alone.
 
 ## `pipeline_run_id` — the durable handle
 
@@ -45,7 +58,7 @@ Against a bare runner the id identifies the call the runner just answered, but t
 
 ## `main_stuff` — the output
 
-`main_stuff` is the resolved content of the run's main output and is always present for a completed run. On the hosted path it is the `main_stuff.json` artifact; on the blocking path the SDK resolves it out of the returned working memory through the response's `main_stuff_name`. Both deliver the same content shape, so there is no shape-guessing and no path-dependent branch to write. A completed run that cannot deliver one throws `MissingMainStuffError` rather than handing back a half-filled result.
+`main_stuff` is the resolved content of the run's main output and is always present for a completed run, unless the read's `artifacts` selection left it out. On the hosted path it is the `main_stuff.json` artifact; on the blocking path the SDK resolves it out of the returned working memory through the response's `main_stuff_name`. Both deliver the same content shape, so there is no shape-guessing and no path-dependent branch to write. A completed run that cannot deliver one throws `MissingMainStuffError` rather than handing back a half-filled result.
 
 It is typed `unknown` because the content is polymorphic: a structured output arrives as an object of the concept's fields, and a multiple output as the envelope `{ items: [...] }` that the runtime's `ListContent` serialises to. Every content type serialises to an object, natives included — a text output is `{ "text": "…" }` and a number `{ "number": 0 }` — so a guard written for a bare `""` or `0` never fires, and an empty multiple output is `{ "items": [] }` rather than `[]`. Narrow it where you read it, ideally through the types generated for the method rather than a hand-written cast.
 

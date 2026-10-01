@@ -47,8 +47,11 @@ import type {
   ValidationErrorItem,
 } from "./models.js";
 import {
+  assertArtifactSelection,
   assertWaitOptions,
   pollUntilResult,
+  selectionIncludesMainStuff,
+  type GetRunResultOptions,
   type RunRead,
   type RunResults,
   type RunResultState,
@@ -72,7 +75,7 @@ import type {
   PipelexApiKeyCreated,
   PipelexApiKeyList,
   ListRunsQuery,
-  PipelineRun,
+  RunHistoryItem,
   RunDetail,
   RunPage,
   PlanView,
@@ -1310,14 +1313,26 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    *   as `error`
    * - HTTP 503 → `running` (Temporal degraded — retry, never fail a poller)
    *
+   * `options.artifacts` narrows the read to the named artifacts, sent as one
+   * comma-separated `?artifacts=` parameter: only those are read, and an
+   * unselected artifact is absent from the result (`undefined`) while a
+   * selected one the run never wrote is `null`. Omitted, every artifact is
+   * read. An empty selection or an unknown name throws a `RangeError` before
+   * any request. `MissingMainStuffError` is thrown only for a read that asked
+   * for `main_stuff` — no selection, or one naming it.
+   *
    * Throws `RunLifecycleUnavailableError` when the lifecycle routes are absent
    * (a bare runner).
    */
-  async getRunResult(
-    runId: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<RunResultState> {
-    const endpoint = `${RUNS}/${encodeURIComponent(runId)}/results`;
+  async getRunResult(runId: string, options: GetRunResultOptions = {}): Promise<RunResultState> {
+    assertArtifactSelection(options.artifacts);
+    const base = `${RUNS}/${encodeURIComponent(runId)}/results`;
+    // Deduplicated, in the caller's order; the platform reads `a,b` as the set {a, b}. The names
+    // are the validated vocabulary above, so they need no escaping and the comma stays literal.
+    const endpoint =
+      options.artifacts === undefined
+        ? base
+        : `${base}?artifacts=${[...new Set(options.artifacts)].join(",")}`;
     const url = this.url(endpoint);
     const res = await this.requestRaw("GET", url, {
       timeoutMs: POLL_REQUEST_TIMEOUT_MS,
@@ -1339,7 +1354,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       this.throwApiResponseError("GET", endpoint, res);
     }
     const result = JSON.parse(res.body) as RunResults;
-    if (result.main_stuff == null) {
+    if (selectionIncludesMainStuff(options.artifacts) && result.main_stuff == null) {
       throw new MissingMainStuffError(
         `Completed run '${runId}' returned no main stuff — a completed run always delivers a main stuff.`,
         runId,
@@ -1816,6 +1831,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * either read `page.items` (accepting the first page) or follow the cursor.
    * `iterateRuns` does the latter for you.
    *
+   * Each item is a `RunHistoryItem` — the id, status, timestamps, pipe and,
+   * for a failed run, its error report. The run's organization, creator,
+   * method and workflow id are not on the list; `getRunDetail` returns them.
+   *
    * `createdFrom` / `createdTo` are applied server-side as index key
    * conditions, so a bounded page genuinely reads less. They are INSTANTS,
    * not days — see `ListRunsQuery`.
@@ -1831,7 +1850,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (query.createdTo !== undefined) params.set("created_to", query.createdTo);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
     if (query.cursor !== undefined) params.set("cursor", query.cursor);
-    const page = await this.requestProduct<{ items: PipelineRun[]; next_cursor: string | null }>(
+    const page = await this.requestProduct<{ items: RunHistoryItem[]; next_cursor: string | null }>(
       "GET",
       `runs?${params.toString()}`,
     );
@@ -1850,7 +1869,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * **Prefer `listRuns`** for anything user-facing: this is O(history) by
    * construction and makes as many round trips as the data demands.
    *
-   * An iterator rather than a `listAllRuns(): Promise<PipelineRun[]>`, and that
+   * An iterator rather than a `listAllRuns(): Promise<RunHistoryItem[]>`, and that
    * is not stylistic. An all-at-once helper needs a page cap so a misbehaving
    * server cannot spin it forever — and a cap means it returns a TRUNCATED list
    * with no error and no flag, a method with 6,000 runs quietly yielding 5,000.
@@ -1863,7 +1882,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   async *iterateRuns(
     methodId: string,
     query: Omit<ListRunsQuery, "cursor"> = {},
-  ): AsyncGenerator<PipelineRun, void, undefined> {
+  ): AsyncGenerator<RunHistoryItem, void, undefined> {
     let cursor: string | undefined;
     for (;;) {
       const page: RunPage = await this.listRuns(methodId, { ...query, cursor });

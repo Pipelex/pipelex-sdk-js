@@ -1,5 +1,16 @@
 # Changelog
 
+## [v0.28.0] - 2026-10-01
+
+### Added
+
+- **`getRunResult`'s `artifacts` option, with `RUN_RESULT_ARTIFACTS` and `RunResultArtifact`**: `getRunResult(runId, { artifacts })` reads only the named result artifacts (`graph_spec`, `pipe_io_contracts`, `input_form`, `output_form`, `main_stuff`, `working_memory`, `tokens_usages`, the last bringing `usage_assembly_error`), sent as one comma-separated `?artifacts=` parameter; an unselected artifact is absent from the result and a selected one the run never wrote is `null`. `waitForResult` and `startAndWaitForResult` take the same option in their poll options, `downloadArtifacts` given a `run_id` now asks for its scope's artifact alone, and an empty selection or an unknown name is a `RangeError` before any request. It needs a platform serving `?artifacts=`, and `GetRunResultOptions` is exported.
+
+### Changed
+
+- **`listRuns` and `iterateRuns` return `RunHistoryItem` rows (Breaking)**: a run-history row is now exactly `pipeline_run_id`, `status`, `created_at`, `finished_at`, `pipe_code` and `error`, matching the platform's slimmed `GET /v1/runs`, and `RunPage.items` is `RunHistoryItem[]` instead of `PipelineRun[]`. Code that read `org_id`, `created_by_user_id`, `method_id`, `workflow_id` or `result_url` off a history row now reads them from `getRunDetail(runId)`, which still returns the whole `PipelineRun` record.
+- **`RunResults.main_stuff` is optional, and `MissingMainStuffError` fires only when it was asked for (Breaking)**: a results read whose `artifacts` selection leaves `main_stuff` out returns no main stuff and throws nothing, while a read with no selection, or one naming `main_stuff`, still throws `MissingMainStuffError` when the main stuff comes back null.
+
 ## [v0.27.0] - 2026-09-30
 
 ### Added
