@@ -137,6 +137,17 @@ describe("buildUserAgent", () => {
     expect(buildUserAgent(undefined, { kind: "server" })).toBe(`pipelex-sdk-js/${SDK_VERSION}`);
   });
 
+  it("omits the runtime token when its name or version is not a token", () => {
+    for (const name of ["my runtime", "a/b", "x (evil)", "café"]) {
+      expect(buildUserAgent(undefined, { kind: "server", name, version: "1", os: "linux" })).toBe(
+        `pipelex-sdk-js/${SDK_VERSION}`,
+      );
+    }
+    expect(
+      buildUserAgent(undefined, { kind: "server", name: "node", version: "bad version" }),
+    ).toBe(`pipelex-sdk-js/${SDK_VERSION}`);
+  });
+
   it("omits the platform comment when os and arch are unknown", () => {
     expect(buildUserAgent(undefined, { kind: "server", name: "node", version: "22.4.0" })).toBe(
       `pipelex-sdk-js/${SDK_VERSION} node/22.4.0`,

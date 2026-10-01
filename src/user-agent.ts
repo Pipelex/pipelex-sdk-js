@@ -169,7 +169,8 @@ export function detectRuntime(scope: Record<string, unknown> = globalThis): Runt
 }
 
 function renderRuntime(runtime: Extract<RuntimeInfo, { kind: "server" }>): string | undefined {
-  if (!runtime.name || !runtime.version || !isToken(runtime.version)) return undefined;
+  if (!runtime.name || !isToken(runtime.name)) return undefined;
+  if (!runtime.version || !isToken(runtime.version)) return undefined;
   const token = `${runtime.name}/${runtime.version}`;
   const platform = [runtime.os, runtime.arch].filter(
     (part): part is string => typeof part === "string" && isToken(part),

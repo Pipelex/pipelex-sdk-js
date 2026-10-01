@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **The `User-Agent` builder is public**: the package entry now exports `buildUserAgent(appInfo?)`, which returns exactly the value a `PipelexApiClient` constructed with that `appInfo` sends (or `undefined` in a browser), together with `validateAppInfo` and `MAX_USER_AGENT_LENGTH` (512) and the `RuntimeInfo` type. A program that makes some of its API requests with its own `fetch`, such as a web app's hand-rolled routes, now sends the same header and checks an `appInfo` against the grammar and the ceiling without re-implementing the format. Documented on `docs/client-identification.md`.
+
 ## [v0.28.0] - 2026-10-01
 
 ### Added
