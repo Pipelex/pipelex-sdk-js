@@ -38,7 +38,7 @@ import {
   RunStillRunningError,
   ScopeUnavailableError,
 } from "../src/errors.js";
-import type { RunResults, RunResultState } from "../src/runs.js";
+import type { GetRunResultOptions, RunResults, RunResultState } from "../src/runs.js";
 
 const RUN_ID = "01JRUN0000000000000000TEST";
 const PICTURE_URI = "pipelex-storage://org/runs/01JRUN/outputs/illustration.png";
@@ -95,6 +95,8 @@ interface ResolveCall {
 interface FakeClient extends ArtifactCapableClient {
   resolveCalls: ResolveCall[];
   resultCalls: string[];
+  /** The options each result lookup was called with, in order. */
+  resultOptions: (GetRunResultOptions | undefined)[];
 }
 
 /**
@@ -113,9 +115,11 @@ function makeClient(
 ): FakeClient {
   const resolveCalls: ResolveCall[] = [];
   const resultCalls: string[] = [];
+  const resultOptions: (GetRunResultOptions | undefined)[] = [];
   return {
     resolveCalls,
     resultCalls,
+    resultOptions,
     async resolveStorageUrls(input, callOptions) {
       resolveCalls.push({ input, signal: callOptions?.signal });
       let answers: Record<string, ResolvedArtifact | Error> = options.answers ?? {};
@@ -131,8 +135,9 @@ function makeClient(
       });
       return { items } satisfies BulkResolvedStorageUrls;
     },
-    async getRunResult(runId) {
+    async getRunResult(runId, callOptions) {
       resultCalls.push(runId);
+      resultOptions.push(callOptions);
       return options.state ?? completed({ main_stuff: { url: PICTURE_URI } });
     },
   };
@@ -923,6 +928,8 @@ describe("downloadArtifacts", () => {
     const verdict = await downloadArtifacts(client, { run_id: RUN_ID, dir });
 
     expect(client.resultCalls).toEqual([RUN_ID]);
+    // Only the walked scope's artifact is read: the platform re-signs nothing else.
+    expect(client.resultOptions[0]!.artifacts).toEqual(["main_stuff"]);
     expect(client.resolveCalls).toHaveLength(1);
     expect(client.resolveCalls[0]!.input).toEqual({ uris: [PICTURE_URI, REPORT_URI] });
     // The embedded public_url is never fetched: every link comes from the resolve.
@@ -992,6 +999,8 @@ describe("downloadArtifacts", () => {
     });
 
     expect(verdict.scope).toBe("working_memory");
+    // The re-read asks for the working memory alone, so no main stuff comes back — and none is owed.
+    expect(client.resultOptions[0]!.artifacts).toEqual(["working_memory"]);
     expect(verdict.artifacts.map((artifact) => artifact.uri)).toEqual([INPUT_URI, PICTURE_URI]);
     expect(verdict.artifacts.map((artifact) => artifact.found_at)).toEqual([
       ["$.root.brief.content.url"],

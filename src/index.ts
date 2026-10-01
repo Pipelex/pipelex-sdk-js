@@ -203,13 +203,16 @@ export type {
   ListRunsQuery,
   PipelineRun,
   RunDetail,
+  RunHistoryItem,
   RunPage,
   UpdateRunInput,
 } from "./product-models.js";
 
 // ── Run lifecycle (hosted extension — NOT part of the protocol) ──────
-export { isTerminalRunStatus, isSuccessRunStatus } from "./runs.js";
+export { isTerminalRunStatus, isSuccessRunStatus, RUN_RESULT_ARTIFACTS } from "./runs.js";
 export type {
+  GetRunResultOptions,
+  RunResultArtifact,
   RunStatus,
   RunPublic,
   RunRead,

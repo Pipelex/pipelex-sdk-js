@@ -15,7 +15,8 @@ The report reaches you in four places, always the same object:
 | `getRunResult(runId)` | the `failed` arm: `{ state: "failed", pipeline_run_id, status, message, error }` |
 | `waitForResult`, `startAndWaitForResult` on the hosted API, `downloadArtifacts({ run_id })` | a thrown `RunFailedError` with `runId`, `status`, `message` and `error` |
 | `getRunStatus(runId)` | `RunRead.error` on the run record |
-| `listRuns`, `iterateRuns`, `getRunDetail` | `PipelineRun.error` on each run record |
+| `listRuns`, `iterateRuns` | `RunHistoryItem.error` on each history row |
+| `getRunDetail` | `PipelineRun.error` on the run record |
 
 **A bare runner has no durable run, so its failure is a refused request.** Against a bare `pipelex-api` runner, `startAndWaitForResult` runs the method with the blocking `execute`, and a run that fails there answers a non-2xx problem document: the call throws an `ApiResponseError`, not a `RunFailedError`, and the same classification rides its members (`errorDomain`, `type`, `retryable`, `userAction`, `errorType`, `model`, …) as described [below](#a-refused-request--apiresponseerror). A caller that must work against both catches both, as the example does.
 
