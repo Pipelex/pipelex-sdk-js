@@ -36,7 +36,7 @@ import {
   RunStillRunningError,
   ScopeUnavailableError,
 } from "./errors.js";
-import type { RunResults, RunResultState } from "./runs.js";
+import type { GetRunResultOptions, RunResults, RunResultState } from "./runs.js";
 import { isNodeRuntime } from "./upload.js";
 import { MAX_TIMER_DELAY_MS, isTimerDelay } from "./timers.js";
 
@@ -291,7 +291,7 @@ export interface ArtifactCapableClient {
     input: BulkResolveStorageUrlsInput,
     options?: { signal?: AbortSignal },
   ): Promise<BulkResolvedStorageUrls>;
-  getRunResult(runId: string, options?: { signal?: AbortSignal }): Promise<RunResultState>;
+  getRunResult(runId: string, options?: GetRunResultOptions): Promise<RunResultState>;
 }
 
 // ── locateArtifacts / collectArtifacts ───────────────────────────────
@@ -1127,13 +1127,18 @@ function isCredentialRefusal(err: unknown): err is ApiResponseError {
   return err instanceof ApiResponseError && (err.status === 401 || err.status === 403);
 }
 
-/** Read a run's results by id, turning a run that has not completed into its typed error. */
+/**
+ * Read a run's results by id, turning a run that has not completed into its typed error. Only the
+ * walked scope's artifact is asked for — the scope names are result artifact names — so the
+ * platform reads and re-signs nothing the download does not walk.
+ */
 async function readCompletedResults(
   client: Pick<ArtifactCapableClient, "getRunResult">,
   runId: string,
+  scope: ArtifactScope,
   signal: AbortSignal | undefined,
 ): Promise<RunResults> {
-  const state = await client.getRunResult(runId, { signal });
+  const state = await client.getRunResult(runId, { signal, artifacts: [scope] });
   if (state.state === "running") {
     throw new RunStillRunningError(
       `Run ${runId} is still running, so it has no artifacts to download yet` +
@@ -1202,7 +1207,7 @@ export async function downloadArtifacts(
   }
   const results = hasResults
     ? request.results!
-    : await readCompletedResults(client, request.run_id!, request.signal);
+    : await readCompletedResults(client, request.run_id!, scope, request.signal);
   const runId = results.pipeline_run_id;
 
   // `working_memory` is read off the parsed body: the platform relays it whether

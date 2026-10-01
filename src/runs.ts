@@ -21,7 +21,7 @@ import type { DictPipeOutput, DictWorkingMemory } from "./models.js";
  * Wire contract mirrors the Pipelex Hosted API:
  *   POST /v1/start                           → RunResultStart   (start, 202)
  *   GET  /v1/runs/{pipeline_run_id}/status   → RunRead          (status, self-healing)
- *   GET  /v1/runs/{pipeline_run_id}/results  → 202 / 200 / 409  (results)
+ *   GET  /v1/runs/{pipeline_run_id}/results  → 202 / 200 / 409  (results; `?artifacts=` narrows it)
  */
 
 // ── Status ──────────────────────────────────────────────────────────
@@ -157,8 +157,76 @@ export interface TokensUsageRecord {
   [extension: string]: unknown;
 }
 
+// ── Results artifact selection ───────────────────────────────────
+
+/**
+ * The result artifacts a results read can be narrowed to, in the platform's order. Passing some
+ * of them as `artifacts` to `getRunResult` (or `waitForResult` / `startAndWaitForResult`) sends
+ * `?artifacts=` and the platform reads, re-signs and returns only those. `tokens_usages` brings
+ * `usage_assembly_error` with it.
+ */
+export const RUN_RESULT_ARTIFACTS = [
+  "graph_spec",
+  "pipe_io_contracts",
+  "input_form",
+  "output_form",
+  "main_stuff",
+  "working_memory",
+  "tokens_usages",
+] as const;
+
+/** One result artifact a results read can be narrowed to — see `RUN_RESULT_ARTIFACTS`. */
+export type RunResultArtifact = (typeof RUN_RESULT_ARTIFACTS)[number];
+
+/**
+ * Refuse an artifact selection the platform would answer with a 400: an empty one, or one naming
+ * an artifact it does not know. `undefined` is no selection, which reads every artifact.
+ */
+export function assertArtifactSelection(artifacts: readonly string[] | undefined): void {
+  if (artifacts === undefined) return;
+  if (!Array.isArray(artifacts) || artifacts.length === 0) {
+    throw new RangeError(
+      `"artifacts" must name one or more of ${RUN_RESULT_ARTIFACTS.join(", ")}; omit it to read ` +
+        "every artifact.",
+    );
+  }
+  const known: readonly string[] = RUN_RESULT_ARTIFACTS;
+  const unknown = artifacts.filter((name) => !known.includes(name));
+  if (unknown.length > 0) {
+    throw new RangeError(
+      `Unknown result artifact(s) ${unknown.join(", ")}; valid artifacts are: ` +
+        `${RUN_RESULT_ARTIFACTS.join(", ")}.`,
+    );
+  }
+}
+
+/** Whether a results read with this selection carries `main_stuff` — no selection reads all. */
+export function selectionIncludesMainStuff(
+  artifacts: readonly RunResultArtifact[] | undefined,
+): boolean {
+  return artifacts === undefined || artifacts.includes("main_stuff");
+}
+
+/** `getRunResult` options. */
+export interface GetRunResultOptions {
+  /** Abort the read. */
+  signal?: AbortSignal;
+  /**
+   * Read only these artifacts, sent as one comma-separated `?artifacts=` parameter. Omitted, the
+   * read returns every artifact. With a selection, an unselected artifact is ABSENT from the
+   * result (`undefined`), while a selected one the run never wrote is `null`. An empty selection
+   * or an unknown name is a `RangeError` before any request.
+   */
+  artifacts?: readonly RunResultArtifact[];
+}
+
 /**
  * Result artifacts for a completed run — `GET /v1/runs/{pipeline_run_id}/results`.
+ *
+ * **Absent versus null.** A read narrowed with `artifacts` carries only the artifacts it named: an
+ * unselected artifact is absent (`undefined`), a selected one the run did not write is `null`.
+ * Without a selection every artifact field is present on the hosted path. So `undefined` means
+ * "not asked for" and `null` means "asked for, not there".
  *
  * `main_stuff` is the resolved main output content and is ALWAYS present for a
  * completed run (the pipelex >= 0.37 main-stuff invariant): on the hosted path it
@@ -166,7 +234,8 @@ export interface TokensUsageRecord {
  * path the SDK resolves it from the returned working memory via the run's
  * `main_stuff_name`, so both paths deliver the same content shape. Consumers read
  * `main_stuff` directly — no shape-guessing. A completed run that cannot deliver a
- * main stuff throws `MissingMainStuffError`.
+ * main stuff throws `MissingMainStuffError` — when the read asked for it, which a read with no
+ * selection does.
  */
 export interface RunResults {
   pipeline_run_id: string;
@@ -175,9 +244,10 @@ export interface RunResults {
    * because the content is polymorphic: a structured output is an object of the concept's fields,
    * a multiple output the envelope `{ items: [...] }` the runtime's `ListContent` serialises to,
    * and a native is wrapped too (`{ text }`, `{ number }`). It may be a valid empty value — an
-   * empty `items`, an empty `text` — but it is never absent. See `docs/run-results.md`.
+   * empty `items`, an empty `text` — but it is never null. It is absent only from a read whose
+   * `artifacts` selection left it out. See `docs/run-results.md`.
    */
-  main_stuff: unknown;
+  main_stuff?: unknown;
   /**
    * The run's working memory — every named stuff of the run (`{ root, aliases }`), the inputs it
    * was given and the intermediates it produced as well as the main output, each stuff carried as
@@ -314,6 +384,13 @@ export interface WaitForResultOptions {
   signal?: AbortSignal;
   /** Invoked before each sleep so callers can drive a spinner / progress line. */
   onPoll?: (info: { attempt: number; elapsedMs: number }) => void;
+  /**
+   * Read only these result artifacts on each poll — `getRunResult`'s `artifacts`. The 202 a
+   * running run answers carries nothing, so the selection only shapes the completed result.
+   * `startAndWaitForResult`'s blocking fallback on a bare runner ignores it and returns every
+   * artifact the runner sent.
+   */
+  artifacts?: readonly RunResultArtifact[];
 }
 
 // ── Poll loop ───────────────────────────────────────────────────────
@@ -324,7 +401,7 @@ export const DEFAULT_WAIT_TIMEOUT_MS = 1_200_000; // 20 min — matches the runn
 /** A single result lookup — the primitive the poll loop drives. */
 export type FetchResultOnce = (
   runId: string,
-  options?: { signal?: AbortSignal },
+  options?: GetRunResultOptions,
 ) => Promise<RunResultState>;
 
 /**
@@ -340,6 +417,7 @@ export function assertWaitOptions(options: WaitForResultOptions = {}): void {
         `${String(timeoutMs)}.`,
     );
   }
+  assertArtifactSelection(options.artifacts);
 }
 
 /**
@@ -378,7 +456,12 @@ export async function pollUntilResult(
       );
     }
 
-    const state = await fetchOnce(runId, { signal: options.signal });
+    const state = await fetchOnce(
+      runId,
+      options.artifacts === undefined
+        ? { signal: options.signal }
+        : { signal: options.signal, artifacts: options.artifacts },
+    );
 
     if (state.state === "completed") {
       return state.result;

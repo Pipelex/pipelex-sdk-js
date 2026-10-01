@@ -3,12 +3,14 @@ import type { InputForm, OutputForm, PipeIOContracts } from "mthds/protocol";
 import { PipelexApiClient } from "../src/client.js";
 import {
   ApiResponseError,
+  MissingMainStuffError,
   RunFailedError,
   RunLifecycleUnavailableError,
   RunTimeoutError,
 } from "../src/errors.js";
-import { isTerminalRunStatus, isSuccessRunStatus } from "../src/runs.js";
-import type { RunResults, TokensUsageRecord } from "../src/runs.js";
+import { isTerminalRunStatus, isSuccessRunStatus, RUN_RESULT_ARTIFACTS } from "../src/runs.js";
+import type { RunResultArtifact, RunResults, TokensUsageRecord } from "../src/runs.js";
+import * as sdk from "../src/index.js";
 
 const BASE_URL = "http://localhost:8081";
 
@@ -320,6 +322,160 @@ describe("PipelexApiClient.getRunResult", () => {
       jsonResponse(404, { detail: "Run not found", code: "run_not_found" }),
     );
     await expect(client.getRunResult("run-1")).rejects.toBeInstanceOf(ApiResponseError);
+  });
+});
+
+describe("PipelexApiClient.getRunResult artifact selection", () => {
+  const RESULTS_URL = `${BASE_URL}/v1/runs/run-1/results`;
+
+  it("names the seven selectable artifacts, exported from the entry point", () => {
+    expect(RUN_RESULT_ARTIFACTS).toEqual([
+      "graph_spec",
+      "pipe_io_contracts",
+      "input_form",
+      "output_form",
+      "main_stuff",
+      "working_memory",
+      "tokens_usages",
+    ]);
+    expect(sdk.RUN_RESULT_ARTIFACTS).toBe(RUN_RESULT_ARTIFACTS);
+    expectTypeOf<RunResultArtifact>().toEqualTypeOf<(typeof RUN_RESULT_ARTIFACTS)[number]>();
+  });
+
+  it("sends no artifacts parameter when there is no selection", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: {} }));
+    await client.getRunResult("run-1");
+    expect(fetchSpy.mock.calls[0]![0]).toBe(RESULTS_URL);
+  });
+
+  it("sends the selection as one comma-separated parameter, deduplicated, in the caller's order", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: {} }));
+    await client.getRunResult("run-1", {
+      artifacts: ["working_memory", "main_stuff", "working_memory"],
+    });
+    expect(fetchSpy.mock.calls[0]![0]).toBe(`${RESULTS_URL}?artifacts=working_memory,main_stuff`);
+  });
+
+  it("keeps an unselected artifact absent and a selected unwritten one null", async () => {
+    const client = makeClient();
+    // The platform's body for `?artifacts=main_stuff,graph_spec` on a run with no graph.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: { ok: true }, graph_spec: null }),
+    );
+    const state = await client.getRunResult("run-1", { artifacts: ["main_stuff", "graph_spec"] });
+    expect(state.state).toBe("completed");
+    if (state.state !== "completed") return;
+    expect(state.result.main_stuff).toEqual({ ok: true });
+    expect(state.result.graph_spec).toBeNull();
+    expect("working_memory" in state.result).toBe(false);
+    expect(state.result.working_memory).toBeUndefined();
+    expect(state.result.tokens_usages).toBeUndefined();
+  });
+
+  it("owes no main stuff to a selection that left it out", async () => {
+    const client = makeClient();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, {
+        pipeline_run_id: "run-1",
+        tokens_usages: [],
+        usage_assembly_error: null,
+      }),
+    );
+    const state = await client.getRunResult("run-1", { artifacts: ["tokens_usages"] });
+    expect(state.state).toBe("completed");
+    if (state.state !== "completed") return;
+    expect(state.result.main_stuff).toBeUndefined();
+    expect(state.result.tokens_usages).toEqual([]);
+    expect(state.result.usage_assembly_error).toBeNull();
+  });
+
+  it.each([
+    ["no selection", undefined],
+    ["a selection naming main_stuff", ["graph_spec", "main_stuff"] as RunResultArtifact[]],
+  ])(
+    "throws MissingMainStuffError for %s when main_stuff comes back null",
+    async (_n, artifacts) => {
+      const client = makeClient();
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: null, graph_spec: null }),
+      );
+      await expect(
+        client.getRunResult("run-1", artifacts === undefined ? {} : { artifacts }),
+      ).rejects.toBeInstanceOf(MissingMainStuffError);
+    },
+  );
+
+  it.each([
+    ["an empty selection", []],
+    ["an unknown name", ["graphspec"]],
+  ])("refuses %s with a RangeError before any request", async (_name, artifacts) => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(
+      client.getRunResult("run-1", { artifacts: artifacts as RunResultArtifact[] }),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("waitForResult sends the selection on every poll", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(emptyResponse(202, { "Retry-After": "0" }))
+      .mockResolvedValueOnce(jsonResponse(200, { pipeline_run_id: "run-1", working_memory: null }));
+
+    const result = await client.waitForResult("run-1", {
+      intervalMs: 0,
+      artifacts: ["working_memory"],
+    });
+
+    expect(result.working_memory).toBeNull();
+    expect(result.main_stuff).toBeUndefined();
+    for (const [url] of fetchSpy.mock.calls) {
+      expect(url).toBe(`${RESULTS_URL}?artifacts=working_memory`);
+    }
+  });
+
+  it("startAndWaitForResult refuses an empty selection before starting the run", async () => {
+    const client = makeClient();
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(
+      client.startAndWaitForResult({ pipe_code: "p" }, { artifacts: [] }),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("startAndWaitForResult polls the hosted results with the selection", async () => {
+    const client = makeClient();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          protocol_version: "0.6.0",
+          implementation: "pipelex-hosted",
+          implementation_version: "0.9.0",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(202, { pipeline_run_id: "run-1", state: "STARTED", created_at: "t0" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { pipeline_run_id: "run-1", main_stuff: { ok: true } }),
+      );
+
+    const result = await client.startAndWaitForResult(
+      { pipe_code: "p" },
+      { artifacts: ["main_stuff"] },
+    );
+
+    expect(result.main_stuff).toEqual({ ok: true });
+    expect(fetchSpy.mock.calls[2]![0]).toBe(`${RESULTS_URL}?artifacts=main_stuff`);
   });
 });
 
