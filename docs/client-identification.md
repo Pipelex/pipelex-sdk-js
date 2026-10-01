@@ -68,7 +68,7 @@ await fetch(url, { headers: userAgent ? { "User-Agent": userAgent } : {} });
 
 | Export | Signature | Behaviour |
 | --- | --- | --- |
-| `buildUserAgent` | `(appInfo?: AppInfo, runtime?: RuntimeInfo) => string \| undefined` | Returns exactly the value a `PipelexApiClient` constructed with the same `appInfo` sends. Returns `undefined` in a browser, where no header may be set. Throws a `TypeError` for an invalid `appInfo` and a `RangeError` when the value would exceed `MAX_USER_AGENT_LENGTH`, in a browser as on a server. `runtime` defaults to the detected runtime and exists for tests; callers leave it out. |
+| `buildUserAgent` | `(appInfo?: AppInfo, runtime?: RuntimeInfo) => string \| undefined` | Returns exactly the value a `PipelexApiClient` constructed with the same `appInfo` sends. Returns `undefined` in a browser, where no header may be set. Throws a `TypeError` for an invalid `appInfo` and a `RangeError` when the value would exceed `MAX_USER_AGENT_LENGTH`, in a browser as on a server. `runtime` defaults to the detected runtime and exists for tests; callers leave it out. A runtime whose name or version falls outside the token grammar is left out of the value, and so is an `os` or `arch` that does, rather than refused. |
 | `validateAppInfo` | `(appInfo: AppInfo) => void` | Throws the same `TypeError` the constructor throws when a field falls outside the grammar. It does not check the length, which depends on the rest of the header: call `buildUserAgent` to check both. |
 | `MAX_USER_AGENT_LENGTH` | `512` | The spec's ceiling on the whole header value. |
 
