@@ -1,5 +1,7 @@
 # @pipelex/sdk
 
+> **This code is moving to `Pipelex/pipelex-sdk`**, one repository for both Pipelex SDKs, the starter templates and the method-app templates, where `@pipelex/sdk` will live under `js/`. Version 0.28.1 is the last release made from this repository, and new work waits for the move rather than starting here.
+
 TypeScript SDK for the **Pipelex hosted API** — execute MTHDS methods, manage runs, and call the product surface (methods catalog, organizations, billing, API keys, storage) from Node.
 
 > Pipelex is the runtime/product. [MTHDS](https://mthds.ai) is the open standard it implements. This SDK speaks to the hosted Pipelex API; the pure protocol wire types it builds on come from the [`mthds`](https://www.npmjs.com/package/mthds) package via its `mthds/protocol` subpath.

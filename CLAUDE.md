@@ -1,5 +1,7 @@
 # pipelex-sdk-js (`@pipelex/sdk`)
 
+> **This repository is frozen for its move into `Pipelex/pipelex-sdk`** (epic L-261001-a2fd94, plan in the workspace root's `wip/sdk-monorepo/plan.md`). Open no new branch here and claim no ledger item this repository owns: those items are re-owned to the new repository when the import lands, and the work happens there.
+
 TypeScript SDK for the **Pipelex hosted API**. It owns the Pipelex-branded product client: the request pipeline (auth, base URL, retries/timeouts/abort, problem-details), the protocol-execution routes (`execute` / `start` / `validate` / `models` / `version`), the run lifecycle, and the product surface (methods catalog, organizations, billing, API keys, storage, onboarding).
 
 ## Tech stack
