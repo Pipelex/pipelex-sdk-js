@@ -6,9 +6,53 @@
 
 - **The `User-Agent` builder is public**: the package entry now exports `buildUserAgent(appInfo?)`, which returns exactly the value a `PipelexApiClient` constructed with that `appInfo` sends (or `undefined` in a browser), together with `validateAppInfo` and `MAX_USER_AGENT_LENGTH` (512) and the `RuntimeInfo` type. A program that makes some of its API requests with its own `fetch`, such as a web app's hand-rolled routes, now sends the same header and checks an `appInfo` against the grammar and the ceiling without re-implementing the format. Documented on `docs/client-identification.md`.
 
+## [v0.28.0] - 2026-10-01
+
+### Added
+
+- **`getRunResult`'s `artifacts` option, with `RUN_RESULT_ARTIFACTS` and `RunResultArtifact`**: `getRunResult(runId, { artifacts })` reads only the named result artifacts (`graph_spec`, `pipe_io_contracts`, `input_form`, `output_form`, `main_stuff`, `working_memory`, `tokens_usages`, the last bringing `usage_assembly_error`), sent as one comma-separated `?artifacts=` parameter; an unselected artifact is absent from the result and a selected one the run never wrote is `null`. `waitForResult` and `startAndWaitForResult` take the same option in their poll options, `downloadArtifacts` given a `run_id` now asks for its scope's artifact alone, and an empty selection or an unknown name is a `RangeError` before any request. It needs a platform serving `?artifacts=`, and `GetRunResultOptions` is exported.
+
 ### Changed
 
-- **The `mthds` range moves to `^0.27.0`**: the SDK now rests on `mthds` 0.27. Its one breaking change is in the `mthds-agent share` command, which this SDK does not use, so the protocol surface it re-exports is unchanged.
+- **`listRuns` and `iterateRuns` return `RunHistoryItem` rows (Breaking)**: a run-history row is now exactly `pipeline_run_id`, `status`, `created_at`, `finished_at`, `pipe_code` and `error`, matching the platform's slimmed `GET /v1/runs`, and `RunPage.items` is `RunHistoryItem[]` instead of `PipelineRun[]`. Code that read `org_id`, `created_by_user_id`, `method_id`, `workflow_id` or `result_url` off a history row now reads them from `getRunDetail(runId)`, which still returns the whole `PipelineRun` record.
+- **`RunResults.main_stuff` is optional, and `MissingMainStuffError` fires only when it was asked for (Breaking)**: a results read whose `artifacts` selection leaves `main_stuff` out returns no main stuff and throws nothing, while a read with no selection, or one naming `main_stuff`, still throws `MissingMainStuffError` when the main stuff comes back null.
+
+## [v0.27.0] - 2026-09-30
+
+### Added
+
+- **`pipeIo()` and its types**: `client.pipeIo(request)` calls `POST /v1/pipe-io`, which returns a method's pipe I/O contracts, input form and output form with no dry run, beside the resolved `pipe_ref`, the method's own `default_pipe_ref`, `pending_signatures` and `is_runnable`, and the closure's `.mthds` files when `include_files: true` is passed. It takes the crate routes' `files`, `method_ref` or hosted `method_id` selector with an optional qualified `pipe_ref` and `all_pipes`, and `PipeIORequest`, `PipeIOValidReport` and `PipeIOResponse` are exported, the three artifacts typed from `mthds/protocol`. It needs a server serving `POST /v1/pipe-io`, which `pipelex-api` does from v0.33.1; at this release the hosted dev API serves it and the production API does not yet.
+
+### Changed
+
+- **`prepareInputs` reads `POST /v1/pipe-io`, and the route selects the pipe (Breaking)**: preparation calls `pipeIo` instead of `validate`, so it runs no dry run and needs a server serving `POST /v1/pipe-io` with its selection refusals typed, as `pipelex-api` does from v0.33.1 (at this release the hosted dev API serves it and the production API does not yet); against one that does not serve it, the route's `404` or `403` propagates as an `ApiResponseError`. The route's entry pipe replaces the helper's own default chain and its blueprint and single-pipe fallbacks, so a method whose domains declare several `main_pipe`s now needs `pipe_ref` where the first declaration used to be taken, and a selection the route refuses (a `422` typed `EntryPipeNotFoundError` or `EntryPipeAmbiguousError`) is an `InputPreparationError` carrying the server's detail instead of a list of candidates the client built.
+
+## [v0.26.0] - 2026-09-27
+
+### Added
+
+- **`ApiResponseError` carries every member of the problem document**: `type`, `title`, `instance`, `requestId` (the body's `request_id`, else the `X-Request-ID` header), `errorDomain`, `errorCategory`, `retryable`, `userAction`, `model`, `provider`, `providerMetadata`, `migration`, the platform's field-level `errors[]`, and the decoded document whole as `problemDocument`, beside the fields it kept. A member of the wrong type reads as absent. The members `mthds`'s `ApiResponseError` carries have the same names and types here, and the types `ProblemDetails`, `FieldError`, `UserAction` and `ApiResponseErrorOptions` are exported.
+- **`docs/errors.md`**: a reference page for a failed run's report and a refused request's `ApiResponseError`, with the fields to branch on, and for the validation items either can carry.
+- **An unknown model's validation item keeps the model and its close matches**: `ValidationErrorItem` declares `model_reference` (the reference as the author wrote it), `model_type` (the kind of model the field takes) and `suggestions` (the close matches), the members `mthds`'s item carries, so a refusal for a model the deck does not know reaches a TypeScript caller with the model it named and what to write instead, beside its `rename-model` suggested fix. `FixValue` is exported as the standard's name for `TomlValue`, and a type-level test pins the item and the fix vocabulary to `mthds`'s declarations.
+
+### Changed
+
+- **A failed run carries its report (Breaking)**: the `failed` arm of `getRunResult` gains `error`, the run's stored report or `null`, and `RunFailedError`, thrown by `waitForResult`, `startAndWaitForResult` and `downloadArtifacts`, gains the same `error`, so the reason, the next step and the retry advice reach the caller. Its `status` is now typed `RunStatus` and is read from the results read's `run_status` member, the `detail` sentence serving only for a platform that does not send it yet. Code that builds a `failed` state by hand now sets `error`.
+- **A failed run's stored error report, typed whole (Breaking)**: `RunErrorReport` now declares every field of the runner's report (`error_type`, `message`, `title`, `type_uri`, `error_domain`, `error_category`, `retryable`, `user_action`, `model`, `provider`, `provider_metadata`, `caller_facing_message`, `validation_errors`, `migration`), all optional and each admitting `null`, and `RunRead` declares it as `error`. `message` and `error_type`, typed `string` until now, are `string | null`, so code reading them under `strictNullChecks`, as on `PipelineRun.error` from `listRuns`, `iterateRuns` and `getRunDetail`, now handles `null`. `ProviderErrorMetadata` and `MigrationErrorBlock` are exported with it.
+- **Branch on `errorDomain` and `type`**: the README and `docs/architecture.md` now point consumers at `errorDomain` and `type`, the hosted envelope's branch fields, rather than at the platform's native `code`, which stays on the error and is one-to-one with `type`.
+- **The `mthds` floor moves from `^0.25.0` to `^0.28.0`**: `mthds` 0.28.0 is the release whose `ApiResponseError` carries the problem members and whose `ValidationErrorItem` carries `model_reference`, `model_type` and `suggestions`, the declarations this SDK's error and validation-item types are pinned to.
+
+## [v0.25.1] - 2026-09-25
+
+### Fixed
+
+- **The README and `docs/architecture.md` no longer list a gateway key**: their account of the Pipelex product routes still named the gateway key surface that v0.25.0 removed, so the package page and the shipped architecture doc now describe the client as it is.
+
+## [v0.25.0] - 2026-09-25
+
+### Fixed
+
+- **The `.mthds` check hook finds the file a Codex shell patch wrote**: for a patch Codex runs through the shell, the hook built by `npm run build:hook` follows the script's `cd`s, branches and scopes before resolving the patch's relative paths, where it used to read them against the session directory. It checks and formats such a file only when it holds the lines the patch added, as the shell passed them, so it no longer rewrites a same-named file the patch never touched, nor a file named by an absolute path in a patch the script only stored or never reached, and it names the files it could not check in a non-blocking note asking for an absolute path or the `apply_patch` tool. Relative paths now resolve against the payload's `cwd` rather than the hook's working directory.
 
 ### Removed
 

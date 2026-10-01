@@ -12,6 +12,7 @@
 
 import type { MethodFile } from "mthds/protocol";
 
+import type { RunErrorReport } from "./error-models.js";
 import type { RunStatus } from "./runs.js";
 
 // ── User profile (`/v1/me`) ─────────────────────────────────────────────
@@ -323,18 +324,9 @@ export interface UploadGrant {
 export type PipeStatus = "scheduled" | "running" | "succeeded" | "failed" | "skipped";
 
 /**
- * The runner's structured failure report, as stored on a terminal-failed run.
- *
- * The wire payload carries the full VERBOSE `ErrorReport`; these are the two
- * fields a consumer can rely on. Optional throughout: the shape is owned by the
- * runner, and a failure whose callback carried no report has none of it.
+ * A run's record — the base of `RunDetail`, which `getRunDetail` returns. The run-history list
+ * does not return it: its rows are the slimmer `RunHistoryItem`.
  */
-export interface RunErrorReport {
-  message?: string;
-  error_type?: string;
-  [key: string]: unknown;
-}
-
 export interface PipelineRun {
   pipeline_run_id: string;
   /** `null` on an ad-hoc run — one started from an inline bundle belongs to no
@@ -353,9 +345,32 @@ export interface PipelineRun {
   pipe_statuses?: Record<string, PipeStatus> | null;
   created_at: string;
   finished_at?: string | null;
-  /** Present only on a failed run whose completion callback carried a report.
-   *  This is how a consumer tells the user WHY a run failed rather than showing
-   *  a generic message. */
+  /** The runner's stored error report, typed whole — present only on a failed run
+   *  whose completion callback carried one. This is how a consumer tells the user
+   *  WHY a run failed rather than showing a generic message. */
+  error?: RunErrorReport | null;
+}
+
+/**
+ * One row of a method's run history — an item of `listRuns`' page and of `iterateRuns`.
+ *
+ * Exactly what a history row shows, and nothing more: the run's id, when it started and
+ * finished, whether it succeeded, which pipe it ran and, for a failed run, why. The rest of the
+ * run's record — its organization, its creator, its method (the caller just named it), its
+ * workflow id — is not sent on the list; read it with `getRunDetail` (or `getRunStatus`) once a
+ * run is opened.
+ */
+export interface RunHistoryItem {
+  pipeline_run_id: string;
+  status: RunStatus;
+  /** ISO-8601 instant the run was created. */
+  created_at: string;
+  /** ISO-8601 instant the run reached a terminal status; `null` or absent while it runs. */
+  finished_at?: string | null;
+  /** `null` when the runner resolved the pipe from the bundle's `main_pipe`. */
+  pipe_code?: string | null;
+  /** The runner's stored error report — present only on a failed run that recorded one,
+   *  so opening it from history shows why without another read. */
   error?: RunErrorReport | null;
 }
 
@@ -405,7 +420,7 @@ export interface ListRunsQuery {
  * avoid.
  */
 export interface RunPage {
-  items: PipelineRun[];
+  items: RunHistoryItem[];
   nextCursor: string | null;
 }
 

@@ -104,7 +104,7 @@ if (!verdict.all_saved) {
 
 **Node-only**, like the path-string arm of `uploadFile`: it writes to a filesystem, and says so with an `ArtifactOperationError` anywhere else.
 
-**Where it reads from.** Exactly one of `run_id` and `results`. A `run_id` re-reads the results through `getRunResult`, so a completed run is downloadable days later from its id alone; a `RunResults` already in hand is read as it is, with no request. `scope` picks the artifact walked for references: `main_stuff` (the default) is the run's output, and `working_memory` is the opt-in that also brings down the echoed inputs and every intermediate stuff — it is read off the parsed results body, whether or not `RunResults` declares the field.
+**Where it reads from.** Exactly one of `run_id` and `results`. A `run_id` re-reads the results through `getRunResult`, asking only for the scope's artifact, so a completed run is downloadable days later from its id alone; a `RunResults` already in hand is read as it is, with no request. `scope` picks the artifact walked for references: `main_stuff` (the default) is the run's output, and `working_memory` is the opt-in that also brings down the echoed inputs and every intermediate stuff — it is read off the parsed results body, whether or not `RunResults` declares the field.
 
 **How it downloads.** The whole set is resolved through the bulk route ahead of the workers, then a bounded number of workers (`concurrency`, default 4) each take the next reference and fetch it → open its file with `wx` → stream the body in. Resolution is just-in-time where it matters: a link that has expired by the time its worker reaches it — a large set downloaded a few at a time can outlive the fifteen-minute link — is resolved again for that reference alone, so no fetch ever runs on a stale signature.
 
@@ -160,7 +160,7 @@ Per-item `error.code` is the fetch vocabulary above plus the download's own: `re
 
 **What it throws.** Only conditions with no verdict, all typed:
 
-- `RunStillRunningError` (with the retry hint) or `RunFailedError` — a `run_id` naming a run that has not completed;
+- `RunStillRunningError` (with the retry hint) or `RunFailedError` (with the run's status and its stored error report as `error`) — a `run_id` naming a run that has not completed;
 - `ScopeUnavailableError` — the requested scope's artifact is `null` or missing from the body (`scope` and `runId` on the error). Reading by `run_id`, a null `main_stuff` is already `MissingMainStuffError` from `getRunResult`;
 - `ArtifactAuthenticationError` — the resolve route refused the credential (`401` / `403`), on the first resolve or on a re-resolve part-way through. It carries `verdict`, the result as it stood: the refusal stops the workers taking new items but lets the fetches already running finish, since they are on presigned links that do not carry the credential, so every file saved is real and listed and the rest are marked `aborted` with a detail naming the credential failure;
 - `ArtifactOperationError` — outside Node, an unusable `dir`, both selectors or neither, an unknown `scope`, or nonsense bounds;

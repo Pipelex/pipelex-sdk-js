@@ -110,6 +110,7 @@ export type {
   FixOpKind,
   TomlScalar,
   TomlValue,
+  FixValue,
   SetKeyOp,
   EnsureTableOp,
   DeleteKeyOp,
@@ -148,6 +149,9 @@ export type {
   CodegenRequest,
   CodegenValidReport,
   CodegenResponse,
+  PipeIORequest,
+  PipeIOValidReport,
+  PipeIOResponse,
 } from "./models.js";
 
 // ── Offline codegen drift check (pure — no filesystem, no network, no key) ──
@@ -203,14 +207,16 @@ export type {
   ListRunsQuery,
   PipelineRun,
   RunDetail,
-  RunErrorReport,
+  RunHistoryItem,
   RunPage,
   UpdateRunInput,
 } from "./product-models.js";
 
 // ── Run lifecycle (hosted extension — NOT part of the protocol) ──────
-export { isTerminalRunStatus, isSuccessRunStatus } from "./runs.js";
+export { isTerminalRunStatus, isSuccessRunStatus, RUN_RESULT_ARTIFACTS } from "./runs.js";
 export type {
+  GetRunResultOptions,
+  RunResultArtifact,
   RunStatus,
   RunPublic,
   RunRead,
@@ -253,4 +259,14 @@ export {
   ArtifactFetchError,
   ScopeUnavailableError,
 } from "./errors.js";
-export type { RejectedAssetCode, UploadTransportCode } from "./errors.js";
+export type { ApiResponseErrorOptions, RejectedAssetCode, UploadTransportCode } from "./errors.js";
+
+// ── Error reports (a failed run's stored report, a problem document's typed members) ──
+export type {
+  FieldError,
+  MigrationErrorBlock,
+  ProblemDetails,
+  ProviderErrorMetadata,
+  RunErrorReport,
+  UserAction,
+} from "./error-models.js";

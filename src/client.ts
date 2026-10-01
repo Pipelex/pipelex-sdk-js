@@ -35,6 +35,8 @@ import type {
   FormatResponse,
   LintResponse,
   MthdsFileItem,
+  PipeIORequest,
+  PipeIOResponse,
   PipeSpecRequest,
   PipeSpecResponse,
   PipelexRunResultStart,
@@ -45,8 +47,11 @@ import type {
   ValidationErrorItem,
 } from "./models.js";
 import {
+  assertArtifactSelection,
   assertWaitOptions,
   pollUntilResult,
+  selectionIncludesMainStuff,
+  type GetRunResultOptions,
   type RunRead,
   type RunResults,
   type RunResultState,
@@ -70,7 +75,7 @@ import type {
   PipelexApiKeyCreated,
   PipelexApiKeyList,
   ListRunsQuery,
-  PipelineRun,
+  RunHistoryItem,
   RunDetail,
   RunPage,
   PlanView,
@@ -93,6 +98,14 @@ import {
   RunLifecycleUnavailableError,
   RunStillRunningError,
 } from "./errors.js";
+import type {
+  FieldError,
+  MigrationErrorBlock,
+  ProblemDetails,
+  ProviderErrorMetadata,
+  RunErrorReport,
+  UserAction,
+} from "./error-models.js";
 import { methodSourceToContents } from "./method-source.js";
 import { buildUserAgent } from "./user-agent.js";
 import type { AppInfo } from "./user-agent.js";
@@ -304,8 +317,9 @@ const BARE_RUNNER_IMPLEMENTATION = "pipelex-api";
  * - **protocol** (`execute` / `start` / `validate` / `models` / `version`) — works
  *   against any MTHDS-compliant runner, hosted or bare.
  * - **build extensions** (`/v1/build/*`) — the Pipelex API's authoring helpers.
- * - **crate extensions** (`/v1/resolve`, `/v1/codegen`) — the normalized library crate
- *   and the stamped typed artifacts projected from it.
+ * - **crate extensions** (`/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`) — the normalized
+ *   library crate, the stamped typed artifacts projected from it, and a method's three
+ *   I/O artifacts derived with no dry run.
  * - **tools extensions** (`lint` / `format`) — single-file static diagnostics and
  *   canonical formatting, served by any pipelex-api runner.
  * - **run lifecycle** (`getRunStatus` / `getRunResult` / `waitForResult`) — the
@@ -521,8 +535,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   /**
    * Issue a Pipelex-product request (`/v1/me`, `/v1/methods`, `/v1/billing/*`,
    * …) and parse its JSON body, mapping a non-2xx response to the typed
-   * `ApiResponseError` so callers branch on the structured `code` discriminant,
-   * not the HTTP status. Empty-body tolerant — DELETE / onboarding / updateRun
+   * `ApiResponseError` so callers branch on its `errorDomain` and `type`, not the
+   * HTTP status. Empty-body tolerant — DELETE / onboarding / updateRun
    * answer 2xx with no body, returned as `undefined`. Uses the management-call
    * timeout, not the blocking-execute ceiling.
    */
@@ -544,7 +558,12 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   }
 
   private throwApiResponseError(method: HttpMethod, endpoint: string, res: RawResponse): never {
-    const { errorType, serverMessage, validationErrors, code } = parseErrorBody(res.body);
+    const { errorType, serverMessage, validationErrors, code, problem, document } = parseErrorBody(
+      res.body,
+    );
+    // The body's `request_id` wins; the header is the fallback for a response whose body
+    // carries none (a gateway error page, a non-problem body).
+    const requestId = problem.requestId ?? nonEmptyHeader(res.headers, REQUEST_ID_HEADER);
     throw new ApiResponseError(
       `API ${method} /${API_PREFIX}/${endpoint} failed (${res.status}): ${serverMessage ?? (res.body || res.statusText)}`,
       this.baseUrl,
@@ -555,6 +574,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       serverMessage,
       validationErrors,
       code,
+      { problem: { ...problem, requestId }, problemDocument: document },
     );
   }
 
@@ -931,7 +951,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // published package's documented fallback against a runner. The crate
   // routes (`resolve`/`codegen`) shared this gap and are now exposed everywhere;
   // these two were not included, a known non-critical item on the platform's list.
-  // Tracked in `wip/hosted-exposure-crate-and-tools-routes.md`.
+  // Tracked in L-260929-b58f26.
 
   /**
    * Lint one `.mthds` file against the embedded MTHDS schema — `POST /v1/lint`.
@@ -977,13 +997,13 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
 
   /**
    * POST one of the Pipelex-API extension routes — the tools (`lint`, `format`), the
-   * crate routes (`resolve`, `codegen`), and the build projections (`build/*`). Their
+   * crate routes (`resolve`, `codegen`, `pipe-io`), and the build projections (`build/*`). Their
    * non-2xx bodies are RFC 7807 problems, mapped to the typed `ApiResponseError` like
    * the product routes.
    *
    * The mapping is what makes their no-verdict arms usable: a crate-family route
    * answers `422` for a request it cannot act on (an unresolvable pipe selector on the
-   * build routes; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
+   * build routes and `pipe-io`; an unknown `kind`/`target`, or a `pipe_ref` on the concept-set-wide
    * `types` kind, on `codegen`) and `501` for the reserved registry-form `method_ref`
    * (the address form is resolved server-side as of pipelex-api 0.21.0). A caller
    * branches on `ApiResponseError.status`, never on a message.
@@ -1053,7 +1073,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     return JSON.parse(res.body) as VersionInfo;
   }
 
-  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`) ─────
+  // ── Crate extensions (Pipelex API — `/v1/resolve`, `/v1/codegen`, `/v1/pipe-io`) ──
   //
   // Served by any `pipelex-api` runner AND on every hosted origin. On the hosted
   // plane a route is reachable only when the gateway's API-key allowlist and the
@@ -1065,11 +1085,16 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // Measured 2026-08-23 with a real key: api.pipelex.com (pipelex-hosted@0.10.1)
   // serves both, verdict discipline intact (200 `is_valid:false`, 501, 422);
   // api-dev.pipelex.com has since 2026-08-13. `lint`/`format` are the two still
-  // unexposed — see their section above for why that blocks nothing.
+  // unexposed — see their section above for why that blocks nothing. `pipe-io` is
+  // newer: a runner serves it from `pipelex-api` v0.33.0, and types its selection
+  // refusals `EntryPipeNotFoundError` / `EntryPipeAmbiguousError` from v0.33.1
+  // (v0.33.0 typed them `ValidationError`), and a hosted origin
+  // serves it once the platform's proxy and the gateway list it (see
+  // `docs/crate-routes.md`).
   //
-  // Both are STATIC routes (no dry-run sweep), so like every static sibling they take
-  // no `timeoutMs`/`signal` — see the policy note on `requestExtension` before adding
-  // one here.
+  // All three are STATIC routes (no dry-run sweep), so like every static sibling they
+  // take no `timeoutMs`/`signal` — see the policy note on `requestExtension` before
+  // adding one here.
 
   /**
    * Resolve a closure into its normalized library crate — `POST /v1/resolve`.
@@ -1121,6 +1146,42 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     });
   }
 
+  /**
+   * Read a method's three I/O artifacts — `POST /v1/pipe-io`.
+   *
+   * Resolves the closure exactly like {@link resolve}, selects a pipe, and returns its
+   * pipe I/O contracts, input form and output form — the MTHDS standard's artifacts,
+   * typed from `mthds/protocol` — beside the resolved `pipe_ref`, the method's own
+   * `default_pipe_ref`, and the runnability facts (`pending_signatures`, `is_runnable`).
+   * It runs NO dry-run sweep, so it costs one load and one derivation where `validate`
+   * dry-runs every pipe; a caller that shows a method, prepares its inputs or generates
+   * types for it reads this, and one that needs the dry-run verdict stays on `validate`.
+   *
+   * Selection: the request's qualified `pipe_ref`, else a fetched package's manifest
+   * `main_pipe`, else the closure's single `main_pipe` declaration. `all_pipes: true`
+   * describes every pipe instead, and never refuses for want of an entry pipe.
+   * `include_files: true` echoes the resolved closure's `.mthds` files as `files`.
+   *
+   * Same 200-verdict discipline and same three-form closure selector as {@link resolve}
+   * (the request is posted verbatim, and the selector XOR is the server's to enforce).
+   * Only a no-verdict condition throws `ApiResponseError`: a malformed selector and an
+   * over-limit file are `ValidationError` `422`s; a selection the route refuses is a
+   * `422` whose `errorType` is `EntryPipeNotFoundError` (an unknown `pipe_ref`, no entry
+   * pipe) or `EntryPipeAmbiguousError` (an ambiguous code, several entry pipes), the
+   * candidates in its `serverMessage`; a registry-form `method_ref` is a `501`; a pipe
+   * whose artifacts cannot be derived is a `500`.
+   *
+   * A `method_ref` gets the fetch-sized budget, as on the other crate routes. On the
+   * hosted API the gateway caps a request at about 30 seconds whatever the client
+   * allows, so a cold `method_ref` clone can answer a `502` that a retry clears once the
+   * runner has cached the clone.
+   */
+  async pipeIo(request: PipeIORequest): Promise<PipeIOResponse> {
+    return this.requestExtension("pipe-io", request, {
+      timeoutMs: crateRequestTimeoutMs(request),
+    });
+  }
+
   // ── Build extensions (Pipelex API layer 2 — `/v1/build/*`) ────────
 
   /**
@@ -1139,14 +1200,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * model {@link BuildInputsRequest}; the address form is server-resolved, the
    * registry form `501`s) — exactly one of the two, like `buildOutput` /
    * `buildRunner`. There is NO by-id form: the build routes take no `method_id`
-   * (the hosted tooling selector covers `validate`/`resolve`/`codegen` only), so a
+   * (the hosted tooling selector covers `validate`/`resolve`/`codegen`/`pipe-io` only), so a
    * stored method is expanded first — `buildInputs({ files: await
    * client.getMethodClosure(methodId) })`. That expansion stays the answer here
    * because a `buildInputs` caller wants this route's template; it is not what
    * `prepareInputs` does any more.
    *
    * Nothing inside this SDK calls this route: `prepareInputs` reads its signature
-   * from the input-form descriptor on the validate report. It survives for the
+   * from the input-form descriptor `pipeIo` returns. It survives for the
    * consumers that still render a template over HTTP, and is retired with the rest
    * of `/v1/build/*` once they project it client-side.
    */
@@ -1246,17 +1307,32 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * Maps the server's poll semantics to a discriminated union:
    * - HTTP 202 → `running` (with the `Retry-After` hint)
    * - HTTP 200 → `completed` (with the result artifacts)
-   * - HTTP 409 → `failed` (terminal non-`COMPLETED`)
+   * - HTTP 409 → `failed` (terminal non-`COMPLETED`), carrying the problem's `detail` as
+   *   `message`, its `run_status` member as `status` (recovered from `detail` on a platform
+   *   that predates the member) and its `error` member, the run's stored error report, typed
+   *   as `error`
    * - HTTP 503 → `running` (Temporal degraded — retry, never fail a poller)
+   *
+   * `options.artifacts` narrows the read to the named artifacts, sent as one
+   * comma-separated `?artifacts=` parameter: only those are read, and an
+   * unselected artifact is absent from the result (`undefined`) while a
+   * selected one the run never wrote is `null`. Omitted, every artifact is
+   * read. An empty selection or an unknown name throws a `RangeError` before
+   * any request. `MissingMainStuffError` is thrown only for a read that asked
+   * for `main_stuff` — no selection, or one naming it.
    *
    * Throws `RunLifecycleUnavailableError` when the lifecycle routes are absent
    * (a bare runner).
    */
-  async getRunResult(
-    runId: string,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<RunResultState> {
-    const endpoint = `${RUNS}/${encodeURIComponent(runId)}/results`;
+  async getRunResult(runId: string, options: GetRunResultOptions = {}): Promise<RunResultState> {
+    assertArtifactSelection(options.artifacts);
+    const base = `${RUNS}/${encodeURIComponent(runId)}/results`;
+    // Deduplicated, in the caller's order; the platform reads `a,b` as the set {a, b}. The names
+    // are the validated vocabulary above, so they need no escaping and the comma stays literal.
+    const endpoint =
+      options.artifacts === undefined
+        ? base
+        : `${base}?artifacts=${[...new Set(options.artifacts)].join(",")}`;
     const url = this.url(endpoint);
     const res = await this.requestRaw("GET", url, {
       timeoutMs: POLL_REQUEST_TIMEOUT_MS,
@@ -1271,21 +1347,14 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
       };
     }
     if (res.status === 409) {
-      const { serverMessage } = parseErrorBody(res.body);
-      const message = serverMessage ?? "Run finished without a result.";
-      return {
-        state: "failed",
-        pipeline_run_id: runId,
-        status: extractRunStatusFromMessage(message),
-        message,
-      };
+      return runResultFailed(runId, res.body);
     }
     this.throwIfLifecycleUnavailable(res, url);
     if (res.status < 200 || res.status >= 300) {
       this.throwApiResponseError("GET", endpoint, res);
     }
     const result = JSON.parse(res.body) as RunResults;
-    if (result.main_stuff == null) {
+    if (selectionIncludesMainStuff(options.artifacts) && result.main_stuff == null) {
       throw new MissingMainStuffError(
         `Completed run '${runId}' returned no main stuff — a completed run always delivers a main stuff.`,
         runId,
@@ -1361,7 +1430,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   // The hosted catalog/account routes the webapp drives. Every one rides the
   // same `{base}/v1/*` surface, `Authorization: Bearer`, org-from-JWT contract
   // as the protocol routes, and maps a non-2xx `problem+json` to a typed
-  // `ApiResponseError` (branch on `.code`, not the status).
+  // `ApiResponseError` (branch on `.errorDomain` and `.type`, not the status).
 
   /** The authenticated user's profile — `GET /v1/me`. */
   async getMe(): Promise<UserProfile> {
@@ -1482,8 +1551,8 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * This is the LOCAL expansion utility — for callers that want the files in
    * hand (to edit, to diff, to feed a route with no by-id form, the `/v1/build/*`
    * family being the last of those). The operations that accept `method_id`
-   * natively (`execute`/`start`, `validate`/`resolve`/`codegen`, and
-   * `prepareInputs`, which composes a `validate` of its own) take the id as a
+   * natively (`execute`/`start`, `validate`/`resolve`/`codegen`/`pipeIo`, and
+   * `prepareInputs`, which composes a `pipeIo` of its own) take the id as a
    * pass-through instead; nothing in this client expands an id behind your back.
    *
    * Requires an API key: the methods catalog is org-scoped to the key's org, so
@@ -1731,17 +1800,18 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * through unchanged; all failures are raised before any run is created.
    *
    * Name the method exactly one of three ways, all server-resolved through the
-   * one `validate` call this composes:
+   * one `pipeIo` call this composes:
    *
    * - `files` — the inline MTHDS closure;
    * - `method_ref` — a published method's address, fetched by the runner;
    * - `method_id` — a stored method's catalog id, resolved by the platform
    *   (hosted only; requires an API key).
    *
-   * The signature itself is the input-form descriptor on the validate report
-   * (`views: ["input_form", "output_form"]`), which states the kind of every input at every
-   * depth — so a file position is a fact of the method, never a guess from the
-   * value's shape. See `docs/input-preparation.md`.
+   * The route also selects the pipe — the caller's qualified `pipe_ref`, else the
+   * method's own entry pipe — and the signature is the input-form descriptor it
+   * answers with, which states the kind of every input at every depth, so a file
+   * position is a fact of the method, never a guess from the value's shape. It
+   * needs an API serving `POST /v1/pipe-io`. See `docs/input-preparation.md`.
    */
   async prepareInputs(request: PrepareInputsRequest): Promise<PreparedInputs> {
     return prepareInputsImpl(this, request);
@@ -1761,6 +1831,10 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * either read `page.items` (accepting the first page) or follow the cursor.
    * `iterateRuns` does the latter for you.
    *
+   * Each item is a `RunHistoryItem` — the id, status, timestamps, pipe and,
+   * for a failed run, its error report. The run's organization, creator,
+   * method and workflow id are not on the list; `getRunDetail` returns them.
+   *
    * `createdFrom` / `createdTo` are applied server-side as index key
    * conditions, so a bounded page genuinely reads less. They are INSTANTS,
    * not days — see `ListRunsQuery`.
@@ -1776,7 +1850,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
     if (query.createdTo !== undefined) params.set("created_to", query.createdTo);
     if (query.limit !== undefined) params.set("limit", String(query.limit));
     if (query.cursor !== undefined) params.set("cursor", query.cursor);
-    const page = await this.requestProduct<{ items: PipelineRun[]; next_cursor: string | null }>(
+    const page = await this.requestProduct<{ items: RunHistoryItem[]; next_cursor: string | null }>(
       "GET",
       `runs?${params.toString()}`,
     );
@@ -1795,7 +1869,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
    * **Prefer `listRuns`** for anything user-facing: this is O(history) by
    * construction and makes as many round trips as the data demands.
    *
-   * An iterator rather than a `listAllRuns(): Promise<PipelineRun[]>`, and that
+   * An iterator rather than a `listAllRuns(): Promise<RunHistoryItem[]>`, and that
    * is not stylistic. An all-at-once helper needs a page cap so a misbehaving
    * server cannot spin it forever — and a cap means it returns a TRUNCATED list
    * with no error and no flag, a method with 6,000 runs quietly yielding 5,000.
@@ -1808,7 +1882,7 @@ export class PipelexApiClient implements MTHDSProtocol<DictPipeOutput> {
   async *iterateRuns(
     methodId: string,
     query: Omit<ListRunsQuery, "cursor"> = {},
-  ): AsyncGenerator<PipelineRun, void, undefined> {
+  ): AsyncGenerator<RunHistoryItem, void, undefined> {
     let cursor: string | undefined;
     for (;;) {
       const page: RunPage = await this.listRuns(methodId, { ...query, cursor });
@@ -2154,38 +2228,78 @@ const KNOWN_RUN_STATUSES: readonly RunStatus[] = [
   "TIMED_OUT",
 ];
 
+/** The response header the platform and the runner stamp the request's correlation id on. */
+const REQUEST_ID_HEADER = "x-request-id";
+
 /**
- * The 409 detail reads "Run finished with status FAILED; no result available".
- * Pull the status word out; default to FAILED if the shape ever changes.
+ * Build the failed arm from the results read's `409` problem document.
+ *
+ * The platform's document carries `detail` (`Run finished with status <STATUS>: <message>`,
+ * or `...; no result available` when the run has no report) and two extension members:
+ * `run_status`, the run's terminal status — named so because a problem's own `status` is the
+ * HTTP status — and `error`, the run's stored error report or `null`. The status is read from
+ * `run_status`. A platform that predates the member sends only `detail`, whose leading
+ * `Run finished with status <STATUS>` the platform keeps for exactly this reader, so the status
+ * word is recovered from it then; a `409` that yields no known status either way (the one this
+ * route answers for a stored result it refuses to read) reads as `FAILED`, and its `detail`
+ * still says what happened. The report is relayed whole, as the runner wrote it: an object is
+ * taken as the report, anything else reads as no report.
  */
-function extractRunStatusFromMessage(message: string): RunStatus {
-  const match = message.match(/status\s+([A-Z_]+)/);
-  const candidate = match?.[1];
-  if (candidate && (KNOWN_RUN_STATUSES as readonly string[]).includes(candidate)) {
-    return candidate as RunStatus;
-  }
-  return "FAILED";
+function runResultFailed(runId: string, body: string): RunResultState {
+  const { serverMessage, document } = parseErrorBody(body);
+  const message = serverMessage ?? "Run finished without a result.";
+  const rawReport = document?.error;
+  return {
+    state: "failed",
+    pipeline_run_id: runId,
+    status: knownRunStatus(document?.run_status) ?? statusFromDetail(message) ?? "FAILED",
+    message,
+    error: isPlainObject(rawReport) ? (rawReport as RunErrorReport) : null,
+  };
+}
+
+function knownRunStatus(value: unknown): RunStatus | undefined {
+  return typeof value === "string" && (KNOWN_RUN_STATUSES as readonly string[]).includes(value)
+    ? (value as RunStatus)
+    : undefined;
+}
+
+/** The status word of a `detail` reading `Run finished with status <STATUS>…`, for a platform without `run_status`. */
+function statusFromDetail(detail: string): RunStatus | undefined {
+  return knownRunStatus(/status\s+([A-Z_]+)/.exec(detail)?.[1]);
 }
 
 /**
- * The API serializes errors as `{"detail": {"error_type": ..., "message": ...}}`
- * (HTTPException with dict detail) or `{"detail": "..."}` (auth 401s and RFC
- * 7807 problems). Both shapes are extracted here. An invalid-bundle 422 problem
- * additionally carries a top-level `validation_errors[]` list (the
- * `ValidateBundleError` extension projected onto the envelope). Falls through
- * silently on non-JSON bodies.
+ * Extract the members of an error body.
+ *
+ * The API serializes errors as RFC 9457 problem documents — the platform's (`type`, `title`,
+ * `status`, `code`, `detail`, `instance`, `request_id`, `errors[]`, plus an extension member
+ * such as a failed run's `run_status` and `error`) and the runner's (the same standard slots
+ * plus `error_type`, `error_domain`, `error_category`, `retryable`, `user_action`, `model`,
+ * `provider`, `provider_metadata`, `validation_errors`, `migration`) — and, on older routes, as
+ * `{"detail": {"error_type": ..., "message": ...}}` (HTTPException with dict detail). Both
+ * shapes are handled, with top-level `error_type` / `message` fallbacks. Falls through to empty
+ * on a non-JSON or non-object body.
+ *
+ * Each typed member is kept only when it has the type the problem document gives it, so a
+ * malformed member reads as absent rather than as a wrong value; `document` keeps the decoded
+ * object whole, members named or not.
  */
 function parseErrorBody(body: string): {
   errorType: string | undefined;
   serverMessage: string | undefined;
   validationErrors: ValidationErrorItem[] | undefined;
   code: string | undefined;
+  problem: ProblemDetails;
+  document: Record<string, unknown> | undefined;
 } {
   const empty = {
     errorType: undefined,
     serverMessage: undefined,
     validationErrors: undefined,
     code: undefined,
+    problem: {},
+    document: undefined,
   };
   if (!body) return empty;
   let parsed: unknown;
@@ -2194,10 +2308,10 @@ function parseErrorBody(body: string): {
   } catch {
     return empty;
   }
-  if (!parsed || typeof parsed !== "object") {
+  if (!isPlainObject(parsed)) {
     return empty;
   }
-  const root = parsed as Record<string, unknown>;
+  const root = parsed;
   const detail = root.detail;
   let errorType: string | undefined;
   let serverMessage: string | undefined;
@@ -2217,9 +2331,50 @@ function parseErrorBody(body: string): {
   const validationErrors = Array.isArray(root.validation_errors)
     ? (root.validation_errors as ValidationErrorItem[])
     : undefined;
-  // The product routes' RFC 9457 `problem+json` carries a stable top-level
-  // `code` discriminant (`conflict`, `not_found`, …) — the field consumers
-  // branch on, decoupled from the HTTP status.
+  // The platform's closed native code (`conflict`, `not_found`, …), one-to-one with `type`.
   const code = typeof root.code === "string" ? root.code : undefined;
-  return { errorType, serverMessage, validationErrors, code };
+  const problem: ProblemDetails = {
+    type: stringMember(root.type),
+    title: stringMember(root.title),
+    instance: stringMember(root.instance),
+    requestId: stringMember(root.request_id),
+    errorDomain: stringMember(root.error_domain),
+    errorCategory: stringMember(root.error_category),
+    retryable: typeof root.retryable === "boolean" ? root.retryable : undefined,
+    userAction: parseUserAction(root.user_action),
+    model: stringMember(root.model),
+    provider: stringMember(root.provider),
+    providerMetadata: isPlainObject(root.provider_metadata)
+      ? (root.provider_metadata as ProviderErrorMetadata)
+      : undefined,
+    migration: isPlainObject(root.migration) ? (root.migration as MigrationErrorBlock) : undefined,
+    errors: Array.isArray(root.errors)
+      ? ((root.errors as unknown[]).filter(isPlainObject) as FieldError[])
+      : undefined,
+  };
+  return { errorType, serverMessage, validationErrors, code, problem, document: root };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** A problem member kept only when it is a non-empty string. */
+function stringMember(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/** A `user_action` member is kept only whole: an object with a string `kind` and a non-empty `detail`. */
+function parseUserAction(value: unknown): UserAction | undefined {
+  if (!isPlainObject(value)) return undefined;
+  const { kind, detail } = value;
+  if (typeof kind !== "string" || typeof detail !== "string" || detail.length === 0) {
+    return undefined;
+  }
+  return { kind, detail };
+}
+
+function nonEmptyHeader(headers: Headers, name: string): string | undefined {
+  const value = headers.get(name)?.trim();
+  return value ? value : undefined;
 }

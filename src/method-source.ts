@@ -3,9 +3,9 @@
  * file contents. The string is either raw `.mthds` source or a JSON-serialized
  * `[{ name, content }, …]` file array (the webapp editor format).
  *
- * Mirrors the platform's canonical implementation — `_method_source_to_contents`
- * plus its caller's blank-source guard in `_resolve_method_contents`, both in
- * pipelex-platform's `routers/v1/execution.py` — keep the two in sync. A JSON
+ * Mirrors the platform's canonical implementation — `method_source_to_contents`
+ * plus its caller's blank-source guard in `resolve_method_run_source`, both in
+ * the platform's `services/method_resolution.py` — keep the two in sync. A JSON
  * `[]` is "no source", not a bundle; a JSON array of `{ name, content }`
  * objects yields the non-blank contents; anything else (raw source, non-array
  * JSON, unparseable) is one plain bundle string, itself dropped when blank.

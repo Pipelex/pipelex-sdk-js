@@ -1,15 +1,17 @@
 /**
  * `prepareInputs` — signature-driven input preparation. Cases derive from the
- * shared behavior matrix (`wip/upload/behavior-matrix.md`), re-expressed on the
- * artifact that now classifies: the **input-form descriptor** on the validate
- * report. A `document` / `image` node marks a file position at any depth, assets
- * are uploaded and rewritten to `pipelex-storage://` in `url`, http(s)/storage
- * references pass through, dedup keys on source identity, and the call is
- * copy-on-write.
+ * behavior both SDKs share (`docs/input-preparation.md`), expressed on the
+ * artifact that classifies: the **input-form descriptor** `POST /v1/pipe-io`
+ * answers with. A `document` / `image` node marks a file position at any depth,
+ * assets are uploaded and rewritten to `pipelex-storage://` in `url`,
+ * http(s)/storage references pass through, dedup keys on source identity, and
+ * the call is copy-on-write.
  *
- * The fake client records the `validate` call and returns a canned valid report
- * carrying the descriptor, plus a counting `upload`, so no server or filesystem
- * is involved (except the one path case, which uses a real temp file).
+ * The fake client records each `pipeIo` request and answers the way the route
+ * selects — the requested ref, else the method's entry pipe, else a typed
+ * selection `422` — with the selected pipe's descriptor, plus a counting
+ * `upload`, so no server or filesystem is involved (except the one path case,
+ * which uses a real temp file).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -25,11 +27,7 @@ import type {
 import { prepareInputs } from "../src/prepare-inputs.js";
 import type { PrepareCapableClient, PrepareInputsRequest } from "../src/prepare-inputs.js";
 import { InputPreparationError, RejectedAssetError, ApiResponseError } from "../src/errors.js";
-import type {
-  PipelexValidationReport,
-  PipelexValidationResult,
-  ValidateMethodSelector,
-} from "../src/models.js";
+import type { PipeIORequest, PipeIOResponse, PipeIOValidReport } from "../src/models.js";
 
 // ── Descriptor fixtures ──────────────────────────────────────────────
 // One constructor per kind, so a fixture reads as the signature it stands for.
@@ -72,60 +70,97 @@ function form(pipeRef: string, fields: InputFormTopLevelField[]): InputForm {
 
 // ── The fake client ──────────────────────────────────────────────────
 
-/** One recorded `validate` call — the wire the helper composes. */
-interface ValidateCall {
-  source: string[] | ValidateMethodSelector;
-  allowSignatures?: boolean;
-  mthdsSources?: string[];
-  render?: string[];
-  views?: string[];
+/** A problem-shaped `ApiResponseError`, as the client raises for a route's non-2xx. */
+function apiError(status: number, errorType: string | undefined, detail: string): ApiResponseError {
+  return new ApiResponseError(
+    `API POST /v1/pipe-io failed (${status}): ${detail}`,
+    "http://localhost:8081/v1/pipe-io",
+    status,
+    "Error",
+    JSON.stringify({ status, detail, error_type: errorType }),
+    errorType,
+    detail,
+    undefined,
+    undefined,
+  );
 }
 
 interface FakeClient extends PrepareCapableClient {
   uploadCalls: { filename: string; data: string; content_type: string }[];
-  validateCalls: ValidateCall[];
+  pipeIoCalls: PipeIORequest[];
 }
 
-/** Every field a `PipelexValidationReport` declares beyond the ones a case sets. */
-function validReport(overrides: Partial<PipelexValidationReport> = {}): PipelexValidationReport {
+/** Every field a `PipeIOValidReport` declares beyond the ones a case sets. */
+function validReport(overrides: Partial<PipeIOValidReport> = {}): PipeIOValidReport {
   return {
     is_valid: true,
-    bundle_blueprint: {},
+    pipe_ref: "demo.main",
     pipe_io_contracts: {},
-    liftable_pipes: [],
-    graph_spec: null,
-    validated_pipes: [],
-    warnings: [],
+    input_form: {},
+    output_form: {},
+    default_pipe_ref: "demo.main",
     pending_signatures: [],
     is_runnable: true,
-    message: "ok",
     ...overrides,
   };
 }
 
 /**
- * A client whose `validate` records its arguments and answers with the given
- * descriptor (under `demo.main` unless the case supplies a whole `InputForm`),
- * and whose `upload` counts calls and hands back a deterministic URI.
+ * A client whose `pipeIo` records its request and selects the way the route does:
+ * the requested ref when it names a described pipe, else the method's entry pipe
+ * (`defaultPipeRef`, which defaults to the only pipe of a one-pipe method), and a
+ * `422` typed `EntryPipeNotFoundError` when neither selects anything. It answers
+ * with the selected pipe's descriptor alone, keyed by the ref it resolved. Its
+ * `upload` counts calls and hands back a deterministic URI.
  */
 function makeClient(
   fields: InputFormTopLevelField[] | InputForm,
   overrides: {
-    result?: PipelexValidationResult;
-    report?: Partial<PipelexValidationReport>;
+    result?: PipeIOResponse;
+    error?: unknown;
+    defaultPipeRef?: string | null;
     uploadError?: unknown;
   } = {},
 ): FakeClient {
   const uploadCalls: { filename: string; data: string; content_type: string }[] = [];
-  const validateCalls: ValidateCall[] = [];
+  const pipeIoCalls: PipeIORequest[] = [];
   const inputForm = Array.isArray(fields) ? form("demo.main", fields) : fields;
+  const refs = Object.keys(inputForm);
+  const defaultPipeRef =
+    overrides.defaultPipeRef !== undefined
+      ? overrides.defaultPipeRef
+      : refs.length === 1
+        ? refs[0]!
+        : null;
   let counter = 0;
   return {
     uploadCalls,
-    validateCalls,
-    async validate(source, allowSignatures, mthdsSources, render, views) {
-      validateCalls.push({ source, allowSignatures, mthdsSources, render, views });
-      return overrides.result ?? validReport({ input_form: inputForm, ...overrides.report });
+    pipeIoCalls,
+    async pipeIo(request) {
+      pipeIoCalls.push(request);
+      if (overrides.error !== undefined) throw overrides.error;
+      if (overrides.result !== undefined) return overrides.result;
+      const selected = request.pipe_ref ?? defaultPipeRef;
+      if (selected === null) {
+        throw apiError(
+          422,
+          "EntryPipeNotFoundError",
+          "No `pipe_ref` was given and the closure declares no `main_pipe` — name the pipe explicitly.",
+        );
+      }
+      const descriptor = inputForm[selected];
+      if (descriptor === undefined) {
+        throw apiError(
+          422,
+          "EntryPipeNotFoundError",
+          `Pipe '${selected}' not found in the submitted closure.`,
+        );
+      }
+      return validReport({
+        pipe_ref: selected,
+        input_form: { [selected]: descriptor },
+        default_pipe_ref: defaultPipeRef,
+      });
     },
     async upload(input) {
       if (overrides.uploadError) throw overrides.uploadError;
@@ -140,36 +175,19 @@ const FILES = [{ content: 'domain = "demo"' }];
 
 // ── The signature call, per selector ─────────────────────────────────
 
-describe("prepareInputs composes one validate call, whatever the selector", () => {
-  it("sends inline files as contents, with no source labels when none is named", async () => {
+describe("prepareInputs composes one pipeIo call, whatever the selector", () => {
+  it("sends inline files verbatim, source labels and all, with no other key", async () => {
     const client = makeClient([topLevel("photo", image())]);
+    const files = [{ content: "a" }, { content: "b", source: "pipes.mthds" }];
 
-    await prepareInputs(client, {
-      files: [{ content: "a" }, { content: "b" }],
-      inputs: { photo: "https://example.com/p.png" },
-    });
+    await prepareInputs(client, { files, inputs: { photo: "https://example.com/p.png" } });
 
-    const call = client.validateCalls[0]!;
-    expect(call.source).toEqual(["a", "b"]);
-    expect(call.mthdsSources).toBeUndefined();
-    expect(call.allowSignatures).toBe(true);
-    expect(call.views).toEqual(["input_form"]);
+    // No `pipe_ref`, `all_pipes` or `include_files` key: the route selects the entry
+    // pipe itself, and one pipe's descriptor is all preparation reads.
+    expect(client.pipeIoCalls).toEqual([{ files }]);
   });
 
-  it("labels every content once any file names a source, filling in inline://file-N.mthds", async () => {
-    // `validateFiles`' rule: a partially-labelled batch must not reach the server
-    // as a length-mismatched `mthds_sources` array (a 422, not a verdict).
-    const client = makeClient([topLevel("photo", image())]);
-
-    await prepareInputs(client, {
-      files: [{ content: "a" }, { content: "b", source: "pipes.mthds" }],
-      inputs: {},
-    });
-
-    expect(client.validateCalls[0]!.mthdsSources).toEqual(["inline://file-1.mthds", "pipes.mthds"]);
-  });
-
-  it("passes a method_ref straight through as the selector object", async () => {
+  it("passes a method_ref straight through, beside the qualified pipe_ref", async () => {
     const client = makeClient([topLevel("photo", image())]);
 
     await prepareInputs(client, {
@@ -178,30 +196,25 @@ describe("prepareInputs composes one validate call, whatever the selector", () =
       inputs: {},
     });
 
-    const call = client.validateCalls[0]!;
-    expect(call.source).toEqual({ method_ref: "github.com/Pipelex/methods/documents@v0.1.0" });
-    expect(call.mthdsSources).toBeUndefined();
-    expect(call.allowSignatures).toBe(true);
-    expect(call.views).toEqual(["input_form"]);
+    expect(client.pipeIoCalls).toEqual([
+      { method_ref: "github.com/Pipelex/methods/documents@v0.1.0", pipe_ref: "demo.main" },
+    ]);
   });
 
-  it("passes a method_id straight through as the selector object — never expanded here", async () => {
+  it("passes a method_id straight through — never expanded here", async () => {
     const client = makeClient([topLevel("photo", image())]);
 
     await prepareInputs(client, { method_id: "mt_abc123", inputs: {} });
 
-    const call = client.validateCalls[0]!;
-    expect(call.source).toEqual({ method_id: "mt_abc123" });
-    expect(call.allowSignatures).toBe(true);
-    expect(call.views).toEqual(["input_form"]);
+    expect(client.pipeIoCalls).toEqual([{ method_id: "mt_abc123" }]);
   });
 
-  it("asks for signatures to be allowed — preparation needs declared inputs, not a runnable bundle", async () => {
+  it("sends the selector trimmed, and a blank pipe_ref as no pipe_ref at all", async () => {
     const client = makeClient([topLevel("photo", image())]);
 
-    await prepareInputs(client, { files: FILES, inputs: {} });
+    await prepareInputs(client, { method_id: "  mt_abc123 ", pipe_ref: "   ", inputs: {} });
 
-    expect(client.validateCalls[0]!.allowSignatures).toBe(true);
+    expect(client.pipeIoCalls).toEqual([{ method_id: "mt_abc123" }]);
   });
 });
 
@@ -747,44 +760,71 @@ describe("prepareInputs pipe selection", () => {
     ...form("demo.second", [topLevel("second_only", image())]),
   };
 
-  it("uses an explicit qualified pipe_ref", async () => {
+  it("sends an explicit qualified pipe_ref and walks the pipe the route selected", async () => {
     const client = makeClient(TWO_PIPES);
 
     const prepared = await prepareInputs(client, {
       files: FILES,
       pipe_ref: "demo.second",
-      inputs: { second_only: new Uint8Array([1]) },
+      inputs: { first_only: new Uint8Array([1]), second_only: new Uint8Array([2]) },
+    });
+
+    expect(client.pipeIoCalls[0]!.pipe_ref).toBe("demo.second");
+    // Only `second_only` is declared by `demo.second`; `first_only` passes through.
+    expect(prepared.uploads).toHaveLength(1);
+    expect(prepared.inputs.first_only).toBeInstanceOf(Uint8Array);
+  });
+
+  it("walks the method's entry pipe the route resolved when no pipe_ref is given", async () => {
+    // The route's chain — a fetched manifest's `main_pipe`, else the closure's single
+    // declaration — is the answer. Preparation derives no default of its own.
+    const client = makeClient(TWO_PIPES, { defaultPipeRef: "demo.second" });
+
+    const prepared = await prepareInputs(client, {
+      method_ref: "github.com/Pipelex/methods/documents",
+      inputs: { first_only: new Uint8Array([1]), second_only: new Uint8Array([2]) },
+    });
+
+    expect(client.pipeIoCalls[0]).not.toHaveProperty("pipe_ref");
+    expect(prepared.uploads).toHaveLength(1);
+    expect(prepared.inputs.first_only).toBeInstanceOf(Uint8Array);
+  });
+
+  it("walks the ref the route answered with, not the one the request spelled", async () => {
+    // A qualified request resolves to itself; the answer's `pipe_ref` is still what
+    // keys the descriptor, so preparation reads it rather than the request's spelling.
+    const client = makeClient([], {
+      result: validReport({
+        pipe_ref: "demo.second",
+        input_form: form("demo.second", [topLevel("second_only", image())]),
+      }),
+    });
+
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      pipe_ref: "demo.second",
+      inputs: { second_only: new Uint8Array([2]) },
     });
 
     expect(prepared.uploads).toHaveLength(1);
   });
 
-  it("refuses a bare pipe_code, naming the qualified candidates", async () => {
+  it("refuses a bare pipe_code before any request", async () => {
     const client = makeClient(TWO_PIPES);
 
     const failure = prepareInputs(client, { files: FILES, pipe_ref: "second", inputs: {} });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
     await expect(failure).rejects.toThrow(/qualified/);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
-  });
-
-  it("refuses an unknown qualified pipe_ref, listing the refs the method declares", async () => {
-    const client = makeClient(TWO_PIPES);
-
-    const failure = prepareInputs(client, { files: FILES, pipe_ref: "demo.absent", inputs: {} });
-
-    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+    await expect(failure).rejects.toThrow(/"second"/);
+    expect(client.pipeIoCalls).toHaveLength(0);
   });
 
   // Pins the decision, not a regression: an `alias->domain.pipe_code` ref names a
-  // DEPENDENCY package's pipe, and `input_form` describes the method's own pipes
-  // only — so there is no descriptor to prepare against and no alias to strip.
-  // Stripping one would yield a canonical key that misses, or collides with a
-  // different host-owned pipe and hands back the wrong signature. The run route
-  // takes such a ref; preparation refuses it, and that asymmetry is deliberate.
-  it("refuses an alias-qualified pipe_ref — the descriptor covers the method's own pipes", async () => {
+  // DEPENDENCY package's pipe, and preparation covers the method's own pipes — the
+  // crate routes do not load an address-based dependency at all. The run route takes
+  // such a ref; preparation refuses it, and that asymmetry is deliberate.
+  it("refuses an alias-qualified pipe_ref before any request", async () => {
     const client = makeClient(TWO_PIPES);
 
     const failure = prepareInputs(client, {
@@ -794,178 +834,95 @@ describe("prepareInputs pipe selection", () => {
     });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+    await expect(failure).rejects.toThrow(/dependency package/);
+    expect(client.pipeIoCalls).toHaveLength(0);
   });
 
-  it("defaults to the report's typed resolved pipe ref when the runner serves one", async () => {
-    const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: "demo.second" } });
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      inputs: { second_only: new Uint8Array([1]) },
-    });
-
-    expect(prepared.uploads).toHaveLength(1);
-  });
-
-  it("lets the typed default outrank the blueprint's main_pipe", async () => {
-    // The typed field is manifest-aware for a fetched package; the opaque blueprint
-    // knows only what the bundle declares. When both speak, the typed one wins.
-    const client = makeClient(TWO_PIPES, {
-      report: {
-        default_pipe_ref: "demo.second",
-        bundle_blueprint: { domain: "demo", main_pipe: "first" },
-      },
-    });
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      inputs: { first_only: new Uint8Array([1]), second_only: new Uint8Array([2]) },
-    });
-
-    // Only `second_only` is declared by `demo.second`; `first_only` passes through.
-    expect(prepared.uploads).toHaveLength(1);
-    expect(prepared.inputs.first_only).toBeInstanceOf(Uint8Array);
-  });
-
-  it("refuses a stated null default, whatever the blueprint's main_pipe says", async () => {
-    // The manifest arm: the server qualified a package manifest's `main_pipe` against
-    // the closure and found no pipe to run, so a selector-less run would fail on the
-    // manifest's code. The bundle still declares a `main_pipe` of its own — walking it
-    // would prepare a pipe the run never takes, which is what the stated `null` forbids.
-    const client = makeClient(TWO_PIPES, {
-      report: {
-        default_pipe_ref: null,
-        bundle_blueprint: { domain: "demo", main_pipe: "first" },
-      },
-    });
+  it("turns the route's refusal of an unknown pipe_ref into an InputPreparationError", async () => {
+    const client = makeClient(TWO_PIPES);
 
     const failure = prepareInputs(client, {
       files: FILES,
+      pipe_ref: "demo.absent",
       inputs: { first_only: new Uint8Array([1]) },
     });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/no entry pipe/);
-    await expect(failure).rejects.toThrow(/pipe_ref/);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+    await expect(failure).rejects.toThrow(/Pipe 'demo\.absent' not found/);
+    const error = await failure.catch((caught: unknown) => caught);
+    expect((error as InputPreparationError).cause).toBeInstanceOf(ApiResponseError);
     expect(client.uploadCalls).toHaveLength(0);
   });
 
-  it("refuses a stated null default even when the method declares exactly one pipe", async () => {
-    // The run route has no single-pipe fallback either: a bundle declaring one pipe and
-    // no `main_pipe` is refused a selector-less run, so preparation does not succeed
-    // where the run would fail.
-    const client = makeClient([topLevel("photo", image())], {
-      report: { default_pipe_ref: null },
-    });
+  it("turns the route's refusal for want of an entry pipe into an InputPreparationError", async () => {
+    // One pipe and no `main_pipe`: the run route has no single-pipe fallback, so a
+    // selector-less run is refused, and the route refuses the selection the same way.
+    const client = makeClient([topLevel("photo", image())], { defaultPipeRef: null });
 
     const failure = prepareInputs(client, { files: FILES, inputs: { photo: new Uint8Array([1]) } });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/no entry pipe/);
+    await expect(failure).rejects.toThrow(/declares no `main_pipe`/);
     expect(client.uploadCalls).toHaveLength(0);
   });
 
-  it("lets an explicit pipe_ref outrank a stated null default", async () => {
-    const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: null } });
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      pipe_ref: "demo.second",
-      inputs: { second_only: new Uint8Array([1]) },
+  it("turns an ambiguous selection into an InputPreparationError carrying the server's candidates", async () => {
+    const detail =
+      "No `pipe_ref` was given and the closure declares several `main_pipe`s " +
+      "(demo.first, demo.second) — name the pipe explicitly.";
+    const client = makeClient(TWO_PIPES, {
+      error: apiError(422, "EntryPipeAmbiguousError", detail),
     });
 
-    expect(prepared.uploads).toHaveLength(1);
+    const failure = prepareInputs(client, { files: FILES, inputs: {} });
+
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
   });
 
-  it("refuses a stated default ref the descriptor does not describe", async () => {
-    // One report, one pipe set: a default the `input_form` does not key is the report
-    // contradicting itself, and falling through would silently prepare another pipe.
-    const client = makeClient(TWO_PIPES, { report: { default_pipe_ref: "demo.gone" } });
+  it("refuses an answer whose input_form does not describe the pipe it selected", async () => {
+    // One answer, one pipe: a selected ref the descriptor does not key is the answer
+    // contradicting itself, and walking any other pipe would prepare the wrong signature.
+    const client = makeClient([], {
+      result: validReport({
+        pipe_ref: "demo.gone",
+        input_form: form("demo.first", [topLevel("first_only", image())]),
+      }),
+    });
 
     const failure = prepareInputs(client, { files: FILES, inputs: {} });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
     await expect(failure).rejects.toThrow(/demo\.gone/);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
+    await expect(failure).rejects.toThrow(/demo\.first/);
   });
 
-  it("falls back to the blueprint's main_pipe, qualified by its domain", async () => {
-    const client = makeClient(TWO_PIPES, {
-      report: { bundle_blueprint: { domain: "demo", main_pipe: "first" } },
-    });
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      inputs: { first_only: new Uint8Array([1]) },
-    });
-
-    expect(prepared.uploads).toHaveLength(1);
-  });
-
-  it("accepts an already-qualified main_pipe in the blueprint", async () => {
-    const client = makeClient(TWO_PIPES, {
-      report: { bundle_blueprint: { domain: "demo", main_pipe: "demo.first" } },
-    });
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      inputs: { first_only: new Uint8Array([1]) },
-    });
-
-    expect(prepared.uploads).toHaveLength(1);
-  });
-
-  it("defaults to the only pipe when the method declares exactly one", async () => {
-    const client = makeClient([topLevel("photo", image())]);
-
-    const prepared = await prepareInputs(client, {
-      files: FILES,
-      inputs: { photo: new Uint8Array([1]) },
-    });
-
-    expect(prepared.uploads).toHaveLength(1);
-  });
-
-  it("refuses when several pipes are declared and nothing names a default", async () => {
-    const client = makeClient(TWO_PIPES);
-
-    const failure = prepareInputs(client, { files: FILES, inputs: {} });
-
-    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/pipe_ref/);
-    await expect(failure).rejects.toThrow(/demo\.first, demo\.second/);
-  });
-
-  it("refuses a manifest-only main_pipe package when the runner predates the typed default", async () => {
-    // `github.com/Pipelex/methods/image_generation` names its entry pipe in
-    // METHODS.toml alone: the bundle declares `main_pipe: null` and the validate
-    // report carries no manifest. A runner older than `default_pipe_ref` sends the
-    // field not at all, so nothing names a default and the caller passes `pipe_ref`.
-    // Against a runner serving the field, the same package gets the resolved ref.
-    const client = makeClient(TWO_PIPES, {
-      report: { bundle_blueprint: { domain: "demo", main_pipe: null } },
+  it("refuses an answer that selected no pipe", async () => {
+    // Only `all_pipes` answers a null `pipe_ref`, and preparation never asks for it —
+    // so a null here is a server out of contract, not a default to invent.
+    const client = makeClient([], {
+      result: validReport({
+        pipe_ref: null,
+        input_form: form("demo.first", [topLevel("first_only", image())]),
+      }),
     });
 
     const failure = prepareInputs(client, { files: FILES, inputs: {} });
 
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/pipe_ref/);
+    await expect(failure).rejects.toThrow(/no pipe/);
   });
 });
 
 // ── Verdicts, selectors, and errors ──────────────────────────────────
 
 describe("prepareInputs verdicts and guards", () => {
-  it("throws InputPreparationError when the closure does not validate", async () => {
+  it("throws InputPreparationError when the closure does not resolve", async () => {
     const client = makeClient([], {
       result: {
         is_valid: false,
-        message: "closure did not validate",
+        message: "MTHDS library could not be resolved",
         validation_errors: [{ category: "blueprint_validation", message: "unknown pipe type" }],
-        pending_signatures: [],
-        is_runnable: false,
       },
     });
 
@@ -977,41 +934,56 @@ describe("prepareInputs verdicts and guards", () => {
     await expect(failure).rejects.toThrow(/unknown pipe type/);
   });
 
-  it("throws InputPreparationError when a valid report carries no input_form", async () => {
-    // Never a silent degrade to "no uploads": without the descriptor there is no
-    // signature to prepare against.
-    const client = makeClient([], { result: validReport() });
+  it("prepares a pipe whose method still has a pending signature elsewhere", async () => {
+    // Preparation needs the pipe's DECLARED inputs; whether the method runs is the
+    // run's verdict. The route reports runnability beside the form and refuses nothing.
+    const client = makeClient([], {
+      result: validReport({
+        input_form: form("demo.main", [topLevel("photo", image())]),
+        pending_signatures: ["demo.later"],
+        is_runnable: false,
+      }),
+    });
 
-    const failure = prepareInputs(client, { files: FILES, inputs: {} });
-    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/input_form/);
-    await expect(failure).rejects.toThrow(/0\.18\.0/);
+    const prepared = await prepareInputs(client, {
+      files: FILES,
+      inputs: { photo: new Uint8Array([1]) },
+    });
+
+    expect(prepared.uploads).toHaveLength(1);
   });
 
-  it("propagates a no-verdict ApiResponseError from validate unchanged", async () => {
-    const apiError = new ApiResponseError(
-      "HTTP 404",
-      "https://api.pipelex.com/v1/validate",
-      404,
-      "Not Found",
-      "",
-      undefined,
-      "no such method",
-      undefined,
-      undefined,
+  it("propagates a request-shape 422 unchanged — only a selection refusal is reclassified", async () => {
+    // A package with no `.mthds` file, an over-limit file, a stored method with no
+    // source: every such 422 carries the generic `ValidationError` type and stays an
+    // `ApiResponseError`, since nothing about the pipe selection failed.
+    const shapeError = apiError(
+      422,
+      "ValidationError",
+      "Method package 'github.com/o/r' contains no .mthds file.",
     );
-    const client: PrepareCapableClient = {
-      async validate() {
-        throw apiError;
-      },
-      async upload() {
-        throw new Error("upload must not be reached");
-      },
-    };
+    const client = makeClient([topLevel("photo", image())], { error: shapeError });
+
+    await expect(prepareInputs(client, { method_ref: "github.com/o/r", inputs: {} })).rejects.toBe(
+      shapeError,
+    );
+  });
+
+  it("propagates a selection-typed error on another status unchanged", async () => {
+    const odd = apiError(500, "EntryPipeNotFoundError", "unexpected");
+    const client = makeClient([topLevel("photo", image())], { error: odd });
+
+    await expect(prepareInputs(client, { files: FILES, inputs: {} })).rejects.toBe(odd);
+  });
+
+  it("propagates a no-verdict ApiResponseError from the route unchanged", async () => {
+    const notFound = apiError(404, undefined, "no such method");
+    const client = makeClient([topLevel("photo", image())], { error: notFound });
 
     await expect(prepareInputs(client, { method_id: "mt_missing", inputs: {} })).rejects.toBe(
-      apiError,
+      notFound,
     );
+    expect(client.uploadCalls).toHaveLength(0);
   });
 
   it("rejects a call with no method selector", async () => {
@@ -1022,7 +994,7 @@ describe("prepareInputs verdicts and guards", () => {
     } as unknown as PrepareInputsRequest);
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
     await expect(failure).rejects.toThrow(/method_ref/);
-    expect(client.validateCalls).toHaveLength(0);
+    expect(client.pipeIoCalls).toHaveLength(0);
   });
 
   it("rejects a call carrying two selectors", async () => {
@@ -1034,21 +1006,21 @@ describe("prepareInputs verdicts and guards", () => {
       inputs: {},
     } as unknown as PrepareInputsRequest);
     await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
-    await expect(failure).rejects.toThrow(/exactly one/);
-    expect(client.validateCalls).toHaveLength(0);
+    await expect(failure).rejects.toThrow(/were both given/);
+    expect(client.pipeIoCalls).toHaveLength(0);
   });
 
   it("rejects a call carrying all three selectors", async () => {
     const client = makeClient([topLevel("photo", image())]);
 
-    await expect(
-      prepareInputs(client, {
-        files: FILES,
-        method_ref: "github.com/Pipelex/methods/documents",
-        method_id: "mt_1",
-        inputs: {},
-      } as unknown as PrepareInputsRequest),
-    ).rejects.toBeInstanceOf(InputPreparationError);
+    const failure = prepareInputs(client, {
+      files: FILES,
+      method_ref: "github.com/Pipelex/methods/documents",
+      method_id: "mt_1",
+      inputs: {},
+    } as unknown as PrepareInputsRequest);
+    await expect(failure).rejects.toBeInstanceOf(InputPreparationError);
+    await expect(failure).rejects.toThrow(/were all given/);
   });
 
   it("treats empty selectors as absent — an empty files array is no selector", async () => {
@@ -1079,7 +1051,7 @@ describe("prepareInputs verdicts and guards", () => {
       inputs: {},
     } as unknown as PrepareInputsRequest);
 
-    expect(client.validateCalls[0]!.source).toEqual([FILES[0]!.content]);
+    expect(client.pipeIoCalls[0]).toEqual({ files: FILES });
   });
 });
 

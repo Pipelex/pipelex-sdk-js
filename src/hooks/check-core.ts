@@ -15,7 +15,10 @@
  * - any stage unavailable       → fail-open (the other stages' verdicts stand)
  */
 
+import { isAbsolute as isAbsolutePath, resolve as resolvePath } from "node:path";
 import type { Diagnostic, ValidationErrorItem } from "../models.js";
+import { patchTargets, readPatchSections, type PatchSection } from "./patch-envelope.js";
+import { linesAsRead, readShellScript } from "./shell-script.js";
 
 /** Verdict of the local lint stage. `unavailable` = engine failed to load. */
 export type LintStage =
@@ -68,28 +71,235 @@ export function extractMthdsFilePath(stdinJson: string): string | null {
   return filePath;
 }
 
+/** A `.mthds` file a Codex patch leaves on disk. */
+export interface CodexMthdsTarget {
+  /** The file's absolute path. */
+  path: string;
+  /** The path as the patch wrote it. */
+  writtenAs: string;
+  /**
+   * The lines each envelope's last section writing the file adds, as the
+   * patch command read them through the shell's quoting, less any line an
+   * expansion makes unknown. A shell script may hold several envelopes, in
+   * branches, so any one may be the one that ran.
+   */
+  addedLines: string[][];
+  /** Some section of the patch deletes the file or moves it away. */
+  removedByPatch: boolean;
+  /**
+   * What the file's content must show before it is checked (see
+   * `selectCodexTargets`). `carried`: it carries the patch's added lines,
+   * because a shell patch named it by a relative path, which the hook resolved
+   * through its reading of the script, or by an absolute path that no patch
+   * command in the script reads. `unrefuted`: it does not lack lines the patch
+   * added, because a shell patch command reads its absolute path, but the
+   * script may not have reached that command. `null` for the `apply_patch`
+   * tool, whose patch was applied where its paths say.
+   */
+  confirm: "carried" | "unrefuted" | null;
+}
+
+/** What a Codex PostToolUse payload says about the `.mthds` files it wrote. */
+export interface CodexMthdsTargets {
+  /** Whether the patch ran through the shell (`tool_name: "Bash"`). */
+  fromShell: boolean;
+  /** The files the patch leaves on disk, in the order the patch names them. */
+  targets: CodexMthdsTarget[];
+  /** Relative paths from a shell patch whose directory the script does not tell. */
+  unplaced: string[];
+}
+
+/** Prefix of the key of a path whose directory is unknown; no resolved path starts with it. */
+const UNPLACED_KEY = "\0";
+
 /**
- * Extract every distinct `.mthds` path from a Codex PostToolUse(apply_patch)
- * payload. `apply_patch` is Codex's freeform multi-file write tool: the patch
- * envelope rides verbatim in `tool_input.command`, and the touched files are
- * its `*** Update File: / *** Add File: / *** Move to:` headers (`Delete
- * File:` and `Move from:` are skipped — the file no longer exists post-patch).
- * Mirrors `mthds-agent codex hook`'s parser. Paths come back as written in
- * the envelope (usually cwd-relative); the caller resolves and existence-checks.
+ * The `.mthds` files a Codex PostToolUse payload's patch leaves on disk.
+ *
+ * The patch envelope rides in `tool_input.command`, and its sections are
+ * applied in order, so a file the patch moves or deletes is not a target,
+ * unless another envelope of a shell script leaves it (see `patchTargets`). Relative paths resolve against the session directory, the
+ * payload's `cwd` when it is absolute and `processCwd` otherwise, since Codex
+ * starts the hook in that same directory.
+ *
+ * With `tool_name: "Bash"`, the command is a shell script that runs the patch,
+ * and a relative path is relative to wherever the script had moved when the
+ * patch ran. Each section is placed by the patch command reading its header
+ * (see `readShellScript`): a relative path under a known directory resolves
+ * against it, one under an unknown directory, in text no patch command reads,
+ * or anywhere in a script that could not be read, is listed as unplaced
+ * rather than guessed, and a header no command holds is dropped. An absolute
+ * path resolves wherever it sits, and is confirmed: like a relative one in
+ * text no patch command reads, and against the patch's added lines otherwise,
+ * since the reading follows every branch and function body whether or not
+ * the script ran it. Any other `tool_name` is the `apply_patch` tool's, whose
+ * paths are relative to the session directory.
  */
-export function extractCodexMthdsFiles(stdinJson: string): string[] {
-  const parsed = parseJsonOrNull(stdinJson);
-  const command = (parsed as { tool_input?: { command?: unknown } } | null)?.tool_input?.command;
+export function extractCodexMthdsTargets(stdinJson: string, processCwd: string): CodexMthdsTargets {
+  const parsed = parseJsonOrNull(stdinJson) as {
+    cwd?: unknown;
+    tool_name?: unknown;
+    tool_input?: { command?: unknown };
+  } | null;
+  const fromShell = parsed?.tool_name === "Bash";
+  const command = parsed?.tool_input?.command;
   if (typeof command !== "string") {
-    return [];
+    return { fromShell, targets: [], unplaced: [] };
   }
-  const headerRe = /^\*\*\* (?:Update File|Add File|Move to):\s*(.+\.mthds)\s*$/gm;
-  const seen = new Set<string>();
-  let match: RegExpExecArray | null;
-  while ((match = headerRe.exec(command)) !== null) {
-    seen.add(match[1]!.trim());
+  const sessionDir =
+    typeof parsed?.cwd === "string" && isAbsolutePath(parsed.cwd) ? parsed.cwd : processCwd;
+
+  let sections = readPatchSections(command);
+  let directoryOf: (section: PatchSection) => string | null = () => sessionDir;
+  let readByPatch: (section: PatchSection) => boolean = () => true;
+  let addedLinesOf = (section: PatchSection): string[] => section.addedLines;
+  if (fromShell) {
+    const reading = readShellScript(command, sessionDir);
+    if (reading === "unparsed") {
+      directoryOf = () => null;
+      readByPatch = () => false;
+    } else {
+      const placements = new Map(
+        sections.map((section) => [section, reading.directoryAt(section.offset)] as const),
+      );
+      sections = sections.filter((section) => placements.get(section)!.kind !== "outside");
+      directoryOf = (section) => {
+        const placement = placements.get(section)!;
+        return placement.kind === "directory" ? placement.path : null;
+      };
+      readByPatch = (section) => placements.get(section)!.kind !== "unread";
+      addedLinesOf = (section) =>
+        linesAsRead(section.addedLines, reading.quotingAt(section.offset));
+    }
   }
-  return Array.from(seen);
+
+  const keyOf = (path: string, section: PatchSection): string => {
+    if (isAbsolutePath(path)) {
+      return resolvePath(path);
+    }
+    const directory = directoryOf(section);
+    return directory === null ? UNPLACED_KEY + path : resolvePath(directory, path);
+  };
+  const targets: CodexMthdsTarget[] = [];
+  const unplaced: string[] = [];
+  for (const file of patchTargets(sections, keyOf)) {
+    if (!file.key.startsWith(UNPLACED_KEY)) {
+      targets.push({
+        path: file.key,
+        writtenAs: file.path,
+        addedLines: file.sections.map(addedLinesOf),
+        removedByPatch: file.removedByPatch,
+        confirm: !fromShell
+          ? null
+          : !isAbsolutePath(file.path) || !file.sections.some(readByPatch)
+            ? "carried"
+            : "unrefuted",
+      });
+    } else if (!unplaced.includes(file.path)) {
+      unplaced.push(file.path);
+    }
+  }
+  return { fromShell, targets, unplaced };
+}
+
+/**
+ * Which of a Codex patch's targets the hook checks, and which relative paths
+ * of a shell patch it could not check. `readFile` returns a file's content,
+ * or null when there is no file to read.
+ *
+ * A `carried` target is checked only when its file carries the added lines
+ * of some section that wrote it (see `carriesAddedLines`), since a file in
+ * another directory than the one the script wrote to almost never does, and
+ * neither does a file the script never patched. An `unrefuted` one is checked
+ * unless every section that wrote it added lines its file lacks, which is
+ * the evidence that the script did not run the patch; a section that adds no
+ * line refutes nothing. When a relative path's file fails, or when no file
+ * exists where it resolves, the path joins the unplaced ones as unchecked,
+ * unless the patch itself removed the missing file. An absolute path that
+ * fails was not patched by this script, so it is dropped without a note. Any
+ * other target is checked when its file exists.
+ *
+ * The files are returned as paths: each stage reads its file again when its
+ * turn comes, so a file changed while an earlier one was checked is never
+ * overwritten with the content read here.
+ */
+export function selectCodexTargets(
+  extracted: CodexMthdsTargets,
+  readFile: (path: string) => string | null,
+): { targets: string[]; unchecked: string[] } {
+  const targets: string[] = [];
+  const unchecked = [...extracted.unplaced];
+  for (const target of extracted.targets) {
+    const content = readFile(target.path);
+    const confirmed =
+      content !== null &&
+      (target.confirm === null ||
+        target.addedLines.some(
+          (addedLines) =>
+            carriesAddedLines(content, addedLines) ||
+            (target.confirm === "unrefuted" && comparedLines(addedLines).length === 0),
+        ));
+    if (confirmed) {
+      targets.push(target.path);
+    } else if (
+      target.confirm === "carried" &&
+      !isAbsolutePath(target.writtenAs) &&
+      (content !== null || !target.removedByPatch) &&
+      !unchecked.includes(target.writtenAs)
+    ) {
+      unchecked.push(target.writtenAs);
+    }
+  }
+  return { targets, unchecked };
+}
+
+/**
+ * Whether `content` carries `addedLines` in order, the evidence that a patch
+ * adding them wrote it. Each line is compared with its trailing whitespace
+ * trimmed, and blank lines are skipped on both sides. Only added lines count,
+ * because they are the only ones the patch program writes verbatim: it
+ * matches context lines loosely. A section that adds no line, a pure
+ * deletion or a bare rename, leaves no evidence, so it is never carried.
+ */
+export function carriesAddedLines(content: string, addedLines: readonly string[]): boolean {
+  const wanted = comparedLines(addedLines);
+  if (wanted.length === 0) {
+    return false;
+  }
+  let next = 0;
+  for (const line of content.split("\n")) {
+    if (line.trimEnd() === wanted[next]) {
+      next++;
+      if (next === wanted.length) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** The added lines a file is compared on: trailing whitespace trimmed, blank lines skipped. */
+function comparedLines(addedLines: readonly string[]): string[] {
+  return addedLines.map((line) => line.trimEnd()).filter((line) => line !== "");
+}
+
+/**
+ * The non-blocking note naming the relative paths of a shell patch that the
+ * hook could not check. Without it, the agent would read the hook's silence
+ * as a clean check.
+ */
+export function uncheckedShellPatchNote(paths: readonly string[]): HookOutcome {
+  const named = paths.map((path) => `\`${path}\``);
+  const list =
+    named.length === 1 ? named[0]! : `${named.slice(0, -1).join(", ")} and ${named.at(-1)!}`;
+  const context =
+    named.length === 1
+      ? `The .mthds hook did not check ${list}: it could not confirm which file this shell ` +
+        "command patched. Name the file by its absolute path, or edit it with the apply_patch " +
+        "tool, and the hook will check it."
+      : `The .mthds hook did not check ${list}: it could not confirm which files this shell ` +
+        "command patched. Name the files by their absolute paths, or edit them with the " +
+        "apply_patch tool, and the hook will check them.";
+  return { kind: "context", context: truncate(context) };
 }
 
 /**

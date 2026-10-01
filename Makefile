@@ -82,6 +82,8 @@ t: test
 DOTENV = set -a; [ -f .env ] && . ./.env; set +a;
 test-e2e: export PIPELEX_E2E_BASE_URL ?= $(shell $(DOTENV) printf '%s' "$${PIPELEX_E2E_BASE_URL:-http://localhost:8081}")
 test-e2e: export PIPELEX_API_KEY ?= $(shell $(DOTENV) printf '%s' "$$PIPELEX_API_KEY")
+# The stored method the hosted `method_id` cases run against; they skip when it is unset or empty.
+test-e2e: export PIPELEX_E2E_METHOD_ID ?= $(shell $(DOTENV) printf '%s' "$$PIPELEX_E2E_METHOD_ID")
 
 # Trailing slashes are stripped the way the client normalizes `baseUrl` (`src/client.ts`),
 # so a value ending in `/` cannot make the probe `//v1/version` — which a runner does not

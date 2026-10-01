@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PipelexApiClient } from "../src/client.js";
 import { ApiResponseError } from "../src/errors.js";
-import type { PipelineRun } from "../src/product-models.js";
+import type { RunErrorReport } from "../src/error-models.js";
+import type { PipelineRun, RunHistoryItem, RunPage } from "../src/product-models.js";
+import type { RunStatus } from "../src/runs.js";
 
 const BASE_URL = "http://localhost:8081";
 
@@ -719,7 +721,50 @@ describe("storage", () => {
 });
 
 describe("runs list / update", () => {
-  const RUN_ROW = { pipeline_run_id: "r1", method_id: "m/1", pipe_code: "p", status: "RUNNING" };
+  // The slim history row the platform sends: no org, creator, method, workflow or result url.
+  const RUN_ROW: RunHistoryItem = {
+    pipeline_run_id: "r1",
+    status: "RUNNING",
+    created_at: "2026-10-01T09:00:00Z",
+    finished_at: null,
+    pipe_code: "p",
+    error: null,
+  };
+
+  it("types a page item as the slim history row, not the whole run record", () => {
+    expectTypeOf<RunHistoryItem>().toEqualTypeOf<{
+      pipeline_run_id: string;
+      status: RunStatus;
+      created_at: string;
+      finished_at?: string | null;
+      pipe_code?: string | null;
+      error?: RunErrorReport | null;
+    }>();
+    expectTypeOf<RunPage["items"]>().toEqualTypeOf<RunHistoryItem[]>();
+    // The record the detail read returns keeps the fields the list no longer sends.
+    expectTypeOf<PipelineRun>().toHaveProperty("org_id");
+    expectTypeOf<PipelineRun>().toHaveProperty("method_id");
+  });
+
+  it("hands back a failed row's error report as it arrives", async () => {
+    const client = makeClient();
+    const failed: RunHistoryItem = {
+      pipeline_run_id: "r9",
+      status: "FAILED",
+      created_at: "2026-10-01T09:00:00Z",
+      finished_at: "2026-10-01T09:01:00Z",
+      pipe_code: null,
+      error: { error_type: "PipeRunError", message: "the model refused" },
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(200, { items: [failed], next_cursor: null }),
+    );
+
+    const page = await client.listRuns("m1");
+
+    expect(page.items).toEqual([failed]);
+    expect(page.items[0]!.error?.message).toBe("the model refused");
+  });
 
   it("GETs /v1/runs?method_id={id} with an encoded query value and unwraps the page", async () => {
     const client = makeClient();
@@ -861,7 +906,7 @@ describe("runs list / update", () => {
         Promise.resolve(jsonResponse(200, { items: [], next_cursor: "always" })),
       );
 
-    const seen: PipelineRun[] = [];
+    const seen: RunHistoryItem[] = [];
     for await (const run of client.iterateRuns("m1")) seen.push(run);
 
     expect(seen).toEqual([]);
